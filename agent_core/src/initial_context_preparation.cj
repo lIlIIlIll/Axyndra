@@ -3,6 +3,7 @@ package agent_core
 import agent_domain.*
 import agent_runtime.*
 import tool_runtime.*
+import yjson.*
 import yjson_support.*
 
 // Host composition port only. Plugin JSON cannot construct the preparation or
@@ -24,7 +25,9 @@ public interface InitialContextPreparationPort {
 // Diagnostic data, deliberately not a RunningModel/WaitingApproval encoding.
 // A crash here cannot turn a host closure into a replayable model Attempt.
 func initialContextRequestValue(request: AgentRunRequest, epoch: Int64): AgentValue {
-    objectValue([
+    contextBoundaryRequestRequire(request.planContextFacts.unifiedKind == ValueKind.Object,
+        "plan context facts must be an object")
+    let snapshot = objectValue([
         ValueField("schema", textValue("axyndra.accepted-context-request/v1")),
         ValueField("run_id", textValue(request.runId.value)),
         ValueField("session_id", textValue(request.sessionId.value)),
@@ -39,4 +42,8 @@ func initialContextRequestValue(request: AgentRunRequest, epoch: Int64): AgentVa
         ValueField("capabilities", listValue(request.capabilities.values.map { value => objectValue([
             ValueField("kind", textValue(capabilityDisplayName(value.kind))), ValueField("resource", textValue(value.resource))]) }))
     ])
+    if (!request.planContextFacts.fields.isEmpty()) {
+        snapshot.put("plan_context_facts", contextBoundaryRequestFreeze(request.planContextFacts))
+    }
+    snapshot
 }

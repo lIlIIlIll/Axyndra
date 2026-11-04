@@ -10,10 +10,10 @@ foreign func process4cj_namespace_close_checked(handle: Int64): Int32
 foreign func process4cj_namespace_payload(handle: Int64, rootPid: Int64,
     rootStart: Int64, executable: CString, hostPid: CPointer<Int64>,
     namespacePid: CPointer<Int64>, payloadStart: CPointer<Int64>): Int32
-foreign func process4cj_spawn_in_namespace(handle: Int64, executable: CString,
+foreign func process4cj_spawn_in_namespace_with_fds(handle: Int64, executable: CString,
     arguments: CPointer<CString>, environment: CPointer<CString>,
     workingDirectory: CString, pid: CPointer<Int64>, stdinFd: CPointer<Int32>,
-    stdoutFd: CPointer<Int32>, stderrFd: CPointer<Int32>, statusFd: CPointer<Int32>): Int32
+    stdoutFd: CPointer<Int32>, stderrFd: CPointer<Int32>, statusFd: CPointer<Int32>, passed: CPointer<Int32>, passedCount: Int32): Int32
 
 // Descriptive kernel identity of the actual requested executable in an owned
 // process tree. Neither PID is a Run, approval, source or process launch grant.

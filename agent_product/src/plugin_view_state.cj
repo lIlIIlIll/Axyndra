@@ -198,7 +198,13 @@ class ProductPluginViewState {
 class ProductPluginViewPending {
     private var value: ?AgentValue = None
     private var payment: ?LogicalJsonOwnerReservation
-    init(payment: LogicalJsonOwnerReservation) { this.payment = Some(payment) }
+    // Host canonicalization is independently paid by the existing Raw review
+    // custody. It never replaces or enlarges the frozen user-fields payload.
+    private var reviewedPlan: ?String
+    init(payment: LogicalJsonOwnerReservation, reviewedPlan: String) {
+        this.payment = Some(payment); this.reviewedPlan = Some(reviewedPlan)
+    }
+    func reviewedPlan204(): String { reviewedPlan.getOrThrow() }
     func initialize(control: ProductPluginViewControl, fields: AgentValue): Unit {
         let paid = payment.getOrThrow(); paid.ensureRetainedPeak(1048576)
         let data = objectValue([ValueField("action", textValue(control.action)),
@@ -211,7 +217,7 @@ class ProductPluginViewPending {
     }
     func data(): AgentValue { value.getOrThrow() }
     func close(): Unit {
-        value = None
+        value = None; reviewedPlan = None<String>
         match (payment) { case Some(paid) => paid.close(); payment = None; case None => () }
     }
 }
@@ -253,7 +259,7 @@ func freezeProductPluginViewState(runtime: ProductRuntime, binding: HostPluginVi
 }
 
 func freezeProductPluginViewPending(runtime: ProductRuntime, control: ProductPluginViewControl,
-    fields: AgentValue): Result<ProductPluginViewPending> {
+    fields: AgentValue, reviewedPlan: String): Result<ProductPluginViewPending> {
     let source = match (productPluginViewPayment(runtime, control.binding.namespace,
         control.binding.generation, control.binding.digest)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -264,7 +270,7 @@ func freezeProductPluginViewPending(runtime: ProductRuntime, control: ProductPlu
         catch (_: LogicalJsonPayloadError) {
             return pluginViewObservationError("view.fields_limit", "user confirmation cannot acquire its source bank's DATA frame") }
         finally { source.close() }
-    let pending = ProductPluginViewPending(paid)
+    let pending = ProductPluginViewPending(paid, reviewedPlan)
     var retained = false
     try {
         pending.initialize(control, fields)

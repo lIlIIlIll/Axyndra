@@ -2,10 +2,13 @@ package agent_host_runtime
 
 import agent_domain.*
 import agent_ports.*
+import process4cj.*
+import sandbox4cj.*
 import std.collection.*
 import std.convert.*
 import std.env.*
 import std.fs.*
+import std.io.*
 import std.process.*
 import std.sync.*
 import std.time.*
@@ -56,74 +59,82 @@ public class HostLocalNetworkGatewayPort <: NetworkGatewayPort {
                 fallbackAllowed: false
             ))
         }
-        if (executable == "" || !Path(executable).isAbsolute() || !exists(Path(executable))) {
-            return Result.Err(networkGatewayUnavailableError())
+        if (executable == "") {
+            return Result.Err(networkGatewayUnavailableError(stage: "helper_missing"))
         }
-        let directory = hostGatewayDirectory(resourceOwner)
-        let socketPath = Path(directory).join("gateway.sock").toString()
-        let proxyPortPath = Path(directory).join("proxy.port").toString()
+        if (!Path(executable).isAbsolute()) {
+            return Result.Err(networkGatewayUnavailableError(stage: "helper_invalid"))
+        }
+        var directory = ""
+        var owned: ?HostLocalGatewayProcess = None
         try {
-            Directory.create(directory, recursive: true)
-            let arguments = gatewayArguments(socketPath, proxyPortPath, policy)
-            let process = launch(
-                executable,
-                arguments,
-                workingDirectory: Some(Path(directory)),
-                stdIn: ProcessRedirect.Discard,
-                stdOut: ProcessRedirect.Pipe,
-                stdErr: ProcessRedirect.Discard
-            )
-            if (!waitForGateway(socketPath, proxyPortPath, process)) {
-                try { process.terminate(force: true) } catch (_: Exception) {}
-                try { process.wait() } catch (_: Exception) {}
+            if (!exists(Path(executable))) {
+                return Result.Err(networkGatewayUnavailableError(stage: "helper_missing"))
+            }
+            if (!FileInfo(Path(executable)).isRegular()) {
+                return Result.Err(networkGatewayUnavailableError(stage: "helper_invalid"))
+            }
+            directory = hostGatewayDirectory(resourceOwner)
+            let socketPath = Path(directory).join("gateway.sock").toString()
+            let proxyPortPath = Path(directory).join("proxy.port").toString()
+            // The directory carries the bridge's Unix socket. Restrict it
+            // before spawning; the gateway never inherits ambient secrets.
+            let (permission, _, _) = executeWithOutput("/usr/bin/chmod", ["700", "--", directory])
+            if (permission != 0) {
                 removeIfExists(Path(directory), recursive: true)
-                return Result.Err(networkGatewayUnavailableError())
+                return Result.Err(networkGatewayUnavailableError(stage: "launch_failed"))
+            }
+            let process = startProcess(ProcessCommand(
+                executable, arguments: gatewayArguments(socketPath, proxyPortPath, policy),
+                workingDirectory: directory, maxOutputBytes: 8192))
+            let budget = BoundedOutputBudget(8192)
+            // Drain both pipes while the child starts and throughout its
+            // lease. A verbose failure cannot fill a pipe before readiness.
+            let credentialState = HostGatewayCredentialState()
+            let output = spawn {
+                credentialState.set(hostReadGatewayCredential(process.stdout))
+                readBounded(process.stdout, budget)
+            }
+            let errors = spawn { readBounded(process.stderr, budget) }
+            let gateway = HostLocalGatewayProcess(resourceOwner, directory, socketPath,
+                process, { => let _ = output.get(); errors.get() })
+            owned = Some(gateway)
+            let stage = waitForGateway(socketPath, proxyPortPath, credentialState, process)
+            if (stage != "") {
+                let diagnostics = closeGatewayDiagnostic(gateway)
+                owned = None
+                return Result.Err(networkGatewayUnavailableError(stage: stage, diagnostics: diagnostics))
             }
             let proxyPort = match (gatewayProxyPort(proxyPortPath)) {
                 case Some(value) => value
                 case None =>
-                    try { process.terminate(force: true) } catch (_: Exception) {}
-                    try { process.wait() } catch (_: Exception) {}
-                    removeIfExists(Path(directory), recursive: true)
-                    return Result.Err(networkGatewayUnavailableError())
+                    let diagnostics = closeGatewayDiagnostic(gateway); owned = None
+                    return Result.Err(networkGatewayUnavailableError(stage: "port_invalid", diagnostics: diagnostics))
             }
-            let proxyCredential = match (gatewayProxyCredential(process)) {
+            let credential = match (credentialState.credential()) {
                 case Some(value) => value
                 case None =>
-                    try { process.terminate(force: true) } catch (_: Exception) {}
-                    try { process.wait() } catch (_: Exception) {}
-                    removeIfExists(Path(directory), recursive: true)
-                    return Result.Err(networkGatewayUnavailableError())
+                    let diagnostics = closeGatewayDiagnostic(gateway); owned = None
+                    return Result.Err(networkGatewayUnavailableError(stage: "credential_invalid", diagnostics: diagnostics))
             }
-            let lease = NetworkGatewayLease(
-                resourceOwner,
-                "127.0.0.1",
-                proxyPort,
-                proxyCredential,
-                bridgeSocket: socketPath,
-                bridgeExecutable: executable
-            )
+            let lease = NetworkGatewayLease(resourceOwner, "127.0.0.1", proxyPort, credential,
+                bridgeSocket: socketPath, bridgeExecutable: executable)
             lock.lock()
-            try {
-                gateways.add(HostLocalGatewayProcess(
-                    resourceOwner,
-                    directory,
-                    socketPath,
-                    process
-                ))
-            } finally {
-                lock.unlock()
-            }
+            try { gateways.add(gateway) } finally { lock.unlock() }
             Result.Ok(lease)
-        } catch (error: Exception) {
-            removeIfExists(Path(directory), recursive: true)
-            Result.Err(AgentError(
-                AgentErrorKind.Transport,
-                "network.gateway_start_failed",
-                error.message,
-                retryable: false,
-                fallbackAllowed: false
-            ))
+        } catch (_: Exception) {
+            match (owned) {
+                case Some(gateway) => let _ = closeGatewayDiagnostic(gateway)
+                case None => if (directory != "") { removeIfExists(Path(directory), recursive: true) }
+            }
+            // Exception messages can contain paths and environment values.
+            // Stable stages plus sanitized helper diagnostics are the public
+            // protocol, rather than copying raw launch exceptions.
+            Result.Err(AgentError(AgentErrorKind.Transport,
+                "network.gateway_start_failed", "the network gateway could not be launched",
+                retryable: false, fallbackAllowed: false,
+                fields: [ErrorField("failure_class", "infrastructure_unavailable"),
+                    ErrorField("stage", "launch_failed"), ErrorField("started", "false")]))
         }
     }
 
@@ -137,11 +148,7 @@ public class HostLocalNetworkGatewayPort <: NetworkGatewayPort {
                     continue
                 }
                 gateways.remove(at: index)
-                try {
-                    gateway.process.terminate(force: true)
-                } catch (_: Exception) {}
-                try { gateway.process.wait() } catch (_: Exception) {}
-                removeIfExists(Path(gateway.directory), recursive: true)
+                let _ = closeGatewayDiagnostic(gateway)
                 return Result.Ok(())
             }
             // Release is idempotent: a process that failed before ownership
@@ -172,19 +179,16 @@ public class HostLocalNetworkGatewayPort <: NetworkGatewayPort {
         arguments.toArray()
     }
 
-    private func waitForGateway(
-        socketPath: String,
-        proxyPortPath: String,
-        process: SubProcess
-    ): Bool {
-        var attempts = 0
-        while (attempts < 100) {
-            if (exists(Path(socketPath)) && exists(Path(proxyPortPath))) { return true }
-            if (!process.isAlive()) { return false }
+    private func waitForGateway(socketPath: String, proxyPortPath: String, credential: HostGatewayCredentialState, process: ManagedProcess): String {
+        let deadline = MonoTime.now() + Duration.second
+        while (MonoTime.now() < deadline) {
+            if (!process.isAlive()) { return "exited_before_ready" }
+            if (exists(Path(socketPath)) && exists(Path(proxyPortPath)) && credential.finished()) { return "" }
             sleep(Duration.millisecond * 10)
-            attempts += 1
         }
-        exists(Path(socketPath)) && exists(Path(proxyPortPath))
+        if (!process.isAlive()) { "exited_before_ready" }
+        else if (exists(Path(socketPath)) && exists(Path(proxyPortPath)) && credential.finished()) { "" }
+        else { "ready_timeout" }
     }
 
     private func gatewayProxyPort(path: String): ?UInt16 {
@@ -197,57 +201,59 @@ public class HostLocalNetworkGatewayPort <: NetworkGatewayPort {
         }
     }
 
-    private func gatewayProxyCredential(process: SubProcess): ?String {
-        try {
-            let value = ArrayList<Byte>()
-            let buffer = Array<Byte>(64, repeat: 0)
-            while (value.size <= 64) {
-                let count = process.stdOutPipe.read(buffer)
-                if (count <= 0) { return None }
-                for (index in 0..count) {
-                    let byte = buffer[index]
-                    if (byte == b'\n') {
-                        let credential = String.fromUtf8(value.toArray())
-                        return if (validGatewayProxyCredential(credential)) {
-                            Some(credential)
-                        } else { None }
-                    }
-                    if (byte == b'\r' || value.size >= 64) { return None }
-                    value.add(byte)
-                }
-            }
-        } catch (_: Exception) {}
-        None
-    }
 
-    private func validGatewayProxyCredential(value: String): Bool {
-        if (value.size != 64) { return false }
-        for (byte in value.toArray()) {
-            if (!((byte >= b'0' && byte <= b'9') ||
-                (byte >= b'a' && byte <= b'f'))) {
-                return false
-            }
-        }
-        true
-    }
 }
+
 class HostLocalGatewayProcess {
     let resourceOwner: ProcessResourceOwner
     let directory: String
     let socketPath: String
-    let process: SubProcess
-
-    init(
-        resourceOwner: ProcessResourceOwner,
-        directory: String,
-        socketPath: String,
-        process: SubProcess
-    ) {
+    let process: ManagedProcess
+    let collectStderr: () -> Array<Byte>
+    init(resourceOwner: ProcessResourceOwner, directory: String, socketPath: String,
+        process: ManagedProcess, collectStderr: () -> Array<Byte>) {
         this.resourceOwner = resourceOwner
         this.directory = directory
         this.socketPath = socketPath
         this.process = process
+        this.collectStderr = collectStderr
     }
+}
+
+func closeGatewayDiagnostic(gateway: HostLocalGatewayProcess): Array<ErrorField> {
+    // Closing the owned process group also closes pipes retained by children;
+    // only then join readers. No live reader is left behind on failure.
+    try { let _ = gateway.process.close() } catch (_: Exception) {}
+    let diagnostics = ArrayList<ErrorField>()
+    match (gateway.process.tryExit()) {
+        case Some(status) => diagnostics.add(ErrorField("helper_exit_code", status.code.toString()))
+        case None => ()
+    }
+    try {
+        let bytes = gateway.collectStderr()
+        diagnostics.add(ErrorField("stderr_excerpt", hostSanitizedGatewayStderr(decodeProcessOutput(bytes))))
+    } catch (_: Exception) {}
+    removeIfExists(Path(gateway.directory), recursive: true)
+    diagnostics.toArray()
+}
+
+// Only product-authored diagnostic phrases cross the boundary. Unknown text
+// may contain secrets, host names or private paths and is deliberately omitted.
+public func hostSanitizedGatewayStderr(text: String): String {
+    let safe = ["cannot create gateway socket", "cannot bind gateway socket",
+        "gateway socket path is too long", "cannot create bridge listener",
+        "cannot bind bridge listener", "cannot read bridge listener port",
+        "cannot launch bridged command"]
+    for (message in safe where text.contains("sandbox-net-bridge: " + message)) {
+        let reasons = ["Permission denied", "Address already in use", "No such file or directory",
+            "Operation not permitted", "File name too long", "No space left on device",
+            "Read-only file system", "Too many open files"]
+        for (reason in reasons where text.contains(": " + reason)) {
+            return "sandbox-net-bridge: " + message + ": " + reason
+        }
+        return "sandbox-net-bridge: " + message
+    }
+    if (text == "") { "" } else { "[unrecognized gateway diagnostic redacted]" }
 }
 
 func hostPrivateAddressText(addresses: Array<String>): String {
@@ -272,8 +278,14 @@ func hostNetworkGatewayPolicyWithinNativeLimits(policy: NetworkPolicy): Bool {
 }
 
 func hostGatewayDirectory(resourceOwner: ProcessResourceOwner): String {
-    let suffix = resourceOwner.key.hashCode().toString() + "-" + MonoTime.now().hashCode().toString()
-    "/tmp/axyndra-network-gateway-" + suffix
+    let _ = resourceOwner
+    let parent = match (getVariable("TMPDIR")) {
+        case Some(value) => if (Path(value).isAbsolute()) { value } else { "/tmp" }
+        case None => "/tmp"
+    }
+    // A short, atomically created private directory keeps Unix socket names
+    // below their platform limit when TMPDIR itself has a long task prefix.
+    Directory.createTemp(parent).toString()
 }
 
 public func hostDefaultNetworkGatewayExecutable(): String {
@@ -292,4 +304,31 @@ public func hostDefaultNetworkGatewayExecutable(): String {
             }
             "/usr/libexec/axyndra/sandbox-net-bridge"
     }
+}
+
+class HostGatewayCredentialState {
+    private let lock = Mutex()
+    private var done = false
+    private var value: ?String = None
+    func set(credential: ?String): Unit { lock.lock(); try { value = credential; done = true } finally { lock.unlock() } }
+    func finished(): Bool { lock.lock(); try { done } finally { lock.unlock() } }
+    func credential(): ?String { lock.lock(); try { value } finally { lock.unlock() } }
+}
+
+func hostReadGatewayCredential(stream: InputStream): ?String {
+    try {
+        let bytes = ArrayList<Byte>()
+        let buffer = Array<Byte>(1, repeat: 0)
+        while (bytes.size <= 64) {
+            if (stream.read(buffer) != 1) { return None }
+            let byte = buffer[0]
+            if (byte == b'\n') {
+                if (bytes.size != 64) { return None }
+                return Some(String.fromUtf8(bytes.toArray()))
+            }
+            if (!((byte >= b'0' && byte <= b'9') || (byte >= b'a' && byte <= b'f'))) { return None }
+            bytes.add(byte)
+        }
+    } catch (_: Exception) {}
+    None
 }

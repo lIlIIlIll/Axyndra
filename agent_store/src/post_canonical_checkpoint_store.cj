@@ -511,6 +511,7 @@ func postCanonicalCheckpointToolSetMatches(lane: AgentValue, expected: ToolSetSn
             postCanonicalCheckpointOptionalText(actual, "implementation_fingerprint").trimAscii() != wanted.implementationFingerprint ||
             postCanonicalCheckpointOptionalText(actual, "schema_digest") != wanted.schemaDigest ||
             postCanonicalCheckpointOptionalBool(actual, "available_at_snapshot") != wanted.availableAtSnapshot ||
+            postCanonicalCheckpointOptionalBool(actual, "plan_review_safe", defaultValue: false) != wanted.planReviewSafe ||
             !canonicalAgentValuesEqual(actual.field("input_schema").getOrThrow(), wanted.inputSchema)) { return false }
         let caps = actual.field("capabilities").getOrThrow()
         if (caps.unifiedKind != ValueKind.List || caps.items.size != wanted.requiredCapabilities.size) { return false }
@@ -551,9 +552,9 @@ private func postCanonicalCheckpointInteger(value: AgentValue, name: String): In
     if (item.unifiedKind != ValueKind.Number) { throw IllegalStateException("frozen snapshot integer field changed kind") }
     Int64.parse(item.asNumberText())
 }
-private func postCanonicalCheckpointOptionalBool(value: AgentValue, name: String): Bool {
+private func postCanonicalCheckpointOptionalBool(value: AgentValue, name: String, defaultValue!: Bool = true): Bool {
     match (value.field(name)) {
-        case None => true
+        case None => defaultValue
         case Some(item) => if (item.unifiedKind == ValueKind.Boolean) { item.asBool() }
             else { throw IllegalStateException("frozen tool bool field changed kind") } }
 }

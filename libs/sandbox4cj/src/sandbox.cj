@@ -270,6 +270,7 @@ public class WorkspaceSandboxPolicy {
     public let environment: EnvironmentFilter
     public let resources: SandboxResourceLimits
     public let readOnlyMounts: Array<SandboxReadOnlyMount>
+    public let writableRoots: Array<String>
     public let pathEntries: Array<String>
     public let bubblewrapExecutable: String
     public let timeoutExecutable: String
@@ -283,6 +284,7 @@ public class WorkspaceSandboxPolicy {
         resources!: SandboxResourceLimits = SandboxResourceLimits(),
         readOnlyMounts!: Array<SandboxReadOnlyMount> = [],
         pathEntries!: Array<String> = [],
+        writableRoots!: Array<String> = [],
         bubblewrapExecutable!: String = "/usr/bin/bwrap",
         timeoutExecutable!: String = "/usr/bin/timeout"
     ) {
@@ -292,6 +294,10 @@ public class WorkspaceSandboxPolicy {
         this.process = process
         this.network = network
         this.environment = environment
+        if (filesystem == FilesystemIsolationMode.Host && !writableRoots.isEmpty()) {
+            throw IllegalArgumentException("scoped write roots require workspace filesystem isolation")
+        }
+        this.writableRoots = validatedWritableRoots(writableRoots, root)
         this.resources = resources
         this.readOnlyMounts = validatedReadOnlyMounts(readOnlyMounts, root)
         this.pathEntries = validatedPathEntries(pathEntries, root, this.readOnlyMounts)
@@ -358,6 +364,7 @@ public class SandboxLaunchPlan {
     public let resolvedExecutable: String
     public let workingDirectory: String
     public let environment: Array<SandboxEnvironmentEntry>
+    public let pinnedRoots: Array<PinnedProcessDirectory>
 
     init(
         launcherExecutable: String,
@@ -366,7 +373,8 @@ public class SandboxLaunchPlan {
         sandboxArguments: Array<String>,
         resolvedExecutable: String,
         workingDirectory: String,
-        environment: Array<SandboxEnvironmentEntry>
+        environment: Array<SandboxEnvironmentEntry>,
+        pinnedRoots!: Array<PinnedProcessDirectory> = []
     ) {
         this.launcherExecutable = launcherExecutable
         this.launcherArguments = launcherArguments
@@ -375,6 +383,14 @@ public class SandboxLaunchPlan {
         this.resolvedExecutable = resolvedExecutable
         this.workingDirectory = workingDirectory
         this.environment = environment
+        this.pinnedRoots = pinnedRoots
+    }
+    public func passedFileDescriptors(): Array<Int32> {
+        pinnedRoots.map({root => root.descriptorForLaunch()})
+    }
+
+    public func releasePinnedRoots(): Unit {
+        for (root in pinnedRoots) { root.close() }
     }
 }
 
@@ -425,6 +441,16 @@ public class WorkspaceSandbox {
             case SandboxResult.Ok(value) => value
             case SandboxResult.Err(error) => return SandboxResult.Err(error)
         }
+        try {
+            let _ = validatedWritableRoots(policy.writableRoots, policy.workspaceRoot)
+            if (!policy.writableRoots.isEmpty() && !withinAnyWriteRoot(cwd, policy.writableRoots)) {
+                return sandboxError<SandboxLaunchPlan>(SandboxErrorKind.PermissionDenied,
+                    "sandbox.cwd_outside_write_scope", "the process working directory is outside the approved roots")
+            }
+        } catch (_: Exception) {
+            return sandboxError<SandboxLaunchPlan>(SandboxErrorKind.PermissionDenied,
+                "sandbox.write_scope_changed", "the approved process roots are invalid or changed")
+        }
         let executable = match (resolveCommandExecutable(policy, cwd, command.executable)) {
             case SandboxResult.Ok(value) => value
             case SandboxResult.Err(error) => return SandboxResult.Err(error)
@@ -436,30 +462,35 @@ public class WorkspaceSandbox {
         let ambient = policy.environment.filterCurrent()
         let requested = policy.environment.filter(command.environment)
         let sanitized = mergeEnvironment(ambient.entries, requested.entries, policy)
-        let arguments = buildSandboxArguments(
-            policy,
-            cwd,
-            executable,
-            command.arguments,
-            sanitized,
-            bridgeExecutable: command.networkBridgeExecutable,
-            bridgeSocket: command.networkBridgeSocket
-        )
-        let launcherArguments = ArrayList<String>()
-        launcherArguments.add("--signal=TERM")
-        launcherArguments.add("--kill-after=1s")
-        launcherArguments.add(timeoutDuration(command.timeoutMillis))
-        launcherArguments.add(policy.bubblewrapExecutable)
-        launcherArguments.add(all: arguments)
-        SandboxResult.Ok(SandboxLaunchPlan(
-            policy.timeoutExecutable,
-            launcherArguments.toArray(),
-            policy.bubblewrapExecutable,
-            arguments,
-            executable,
-            cwd,
-            sanitized
-        ))
+        let pinned = ArrayList<PinnedProcessDirectory>()
+        try {
+            if (!policy.writableRoots.isEmpty()) {
+                let workspace = PinnedProcessDirectory(policy.workspaceRoot)
+                pinned.add(workspace)
+                if (policy.filesystem == FilesystemIsolationMode.WorkspaceReadWrite) {
+                    for (root in policy.writableRoots where root != policy.workspaceRoot) {
+                        pinned.add(PinnedProcessDirectory(root, parent: workspace))
+                    }
+                }
+            }
+            let arguments = buildSandboxArguments(policy, cwd, executable,
+                command.arguments, sanitized,
+                bridgeExecutable: command.networkBridgeExecutable,
+                bridgeSocket: command.networkBridgeSocket, pinnedRoots: pinned.toArray())
+            let launcherArguments = ArrayList<String>()
+            launcherArguments.add("--signal=TERM")
+            launcherArguments.add("--kill-after=1s")
+            launcherArguments.add(timeoutDuration(command.timeoutMillis))
+            launcherArguments.add(policy.bubblewrapExecutable)
+            launcherArguments.add(all: arguments)
+            SandboxResult.Ok(SandboxLaunchPlan(policy.timeoutExecutable,
+                launcherArguments.toArray(), policy.bubblewrapExecutable, arguments,
+                executable, cwd, sanitized, pinnedRoots: pinned.toArray()))
+        } catch (_: Exception) {
+            for (root in pinned) { root.close() }
+            sandboxError<SandboxLaunchPlan>(SandboxErrorKind.PermissionDenied,
+                "sandbox.write_scope_changed", "the approved process roots could not be pinned safely")
+        }
     }
 
     // A present bwrap binary is not enough: namespace creation can be disabled
@@ -471,12 +502,29 @@ public class WorkspaceSandbox {
             case SandboxResult.Ok(_) => ()
         }
         let environment = safeBaseEnvironment(policy)
+        let pinned = ArrayList<PinnedProcessDirectory>()
+        try {
+            if (!policy.writableRoots.isEmpty()) {
+                let workspace = PinnedProcessDirectory(policy.workspaceRoot)
+                pinned.add(workspace)
+                if (policy.filesystem == FilesystemIsolationMode.WorkspaceReadWrite) {
+                    for (root in policy.writableRoots where root != policy.workspaceRoot) {
+                        pinned.add(PinnedProcessDirectory(root, parent: workspace))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            for (root in pinned) { root.close() }
+            return sandboxError<Unit>(SandboxErrorKind.PermissionDenied,
+                "sandbox.write_scope_changed", "the approved process roots could not be pinned safely")
+        }
         let arguments = buildSandboxArguments(
             policy,
             policy.workspaceRoot,
             "/usr/bin/true",
             [],
-            environment
+            environment,
+            pinnedRoots: pinned.toArray()
         )
         let launchArguments = ArrayList<String>()
         launchArguments.add("--signal=KILL")
@@ -487,7 +535,8 @@ public class WorkspaceSandbox {
             let process = startSandboxProcess(
                 policy.timeoutExecutable,
                 launchArguments.toArray(),
-                65536
+                65536,
+                passedFileDescriptors: pinned.toArray().map({root => root.descriptorForLaunch()})
             )
             try {
                 let probeBudget = BoundedOutputBudget(65536)
@@ -519,7 +568,7 @@ public class WorkspaceSandbox {
                 "sandbox.isolation_unsupported",
                 "bubblewrap isolation probe failed: " + error.message
             )
-        }
+        } finally { for (root in pinned) { root.close() } }
     }
 
     public func execute(
@@ -548,7 +597,8 @@ public class WorkspaceSandbox {
             let process = try { startSandboxProcess(
                 planValue.launcherExecutable,
                 planValue.launcherArguments,
-                policy.resources.maxOutputBytes
+                policy.resources.maxOutputBytes,
+                passedFileDescriptors: planValue.passedFileDescriptors()
             ) } finally { match (launchLease) { case Some(lease) => lease.close(); case None => () } }
             try {
                 match (onStarted) {
@@ -601,21 +651,23 @@ public class WorkspaceSandbox {
                 "sandbox.execute_failed",
                 requestedRedactor.redact(ambientRedactor.redact(error.message))
             )
-        }
+        } finally { planValue.releasePinnedRoots() }
     }
 }
 
 func startSandboxProcess(
     executable: String,
     arguments: Array<String>,
-    maxOutputBytes: Int64
+    maxOutputBytes: Int64,
+    passedFileDescriptors!: Array<Int32> = []
 ): ManagedProcess {
     startProcess(ProcessCommand(
         executable,
         arguments: arguments,
         environment: HashMap<String, String>(),
         maxOutputBytes: maxOutputBytes,
-        terminateProcessTree: true
+        terminateProcessTree: true,
+        passedFileDescriptors: passedFileDescriptors
     ))
 }
 
@@ -626,7 +678,8 @@ func buildSandboxArguments(
     commandArguments: Array<String>,
     environment: Array<SandboxEnvironmentEntry>,
     bridgeExecutable!: String = "",
-    bridgeSocket!: String = ""
+    bridgeSocket!: String = "",
+    pinnedRoots!: Array<PinnedProcessDirectory> = []
 ): Array<String> {
     let arguments = ArrayList<String>()
     arguments.add("--die-with-parent")
@@ -688,14 +741,15 @@ func buildSandboxArguments(
         }
     }
     addDestinationParents(arguments, policy.workspaceRoot)
-    arguments.add(if (policy.filesystem == FilesystemIsolationMode.Host ||
-        policy.filesystem == FilesystemIsolationMode.WorkspaceReadWrite) {
-        "--bind"
-    } else {
-        "--ro-bind"
-    })
-    arguments.add(policy.workspaceRoot)
-    arguments.add(policy.workspaceRoot)
+    addDirectoryMount(arguments, policy.workspaceRoot, pinnedRoots,
+        writable: policy.filesystem == FilesystemIsolationMode.Host ||
+            (policy.filesystem == FilesystemIsolationMode.WorkspaceReadWrite &&
+                (policy.writableRoots.isEmpty() || policy.writableRoots.contains(policy.workspaceRoot))))
+    if (policy.filesystem == FilesystemIsolationMode.WorkspaceReadWrite) {
+        for (root in policy.writableRoots where root != policy.workspaceRoot) {
+            addDirectoryMount(arguments, root, pinnedRoots, writable: true)
+        }
+    }
     arguments.add("--chdir")
     arguments.add(cwd)
     arguments.add("--clearenv")
@@ -907,6 +961,42 @@ func containsString(values: ArrayList<String>, target: String): Bool {
 
 func withinReadOnlyMount(path: String, mounts: Array<SandboxReadOnlyMount>): Bool {
     for (mount in mounts where withinPath(path, mount.resolvedPath)) { return true }
+    false
+}
+
+func addDirectoryMount(
+    arguments: ArrayList<String>, path: String, pinned: Array<PinnedProcessDirectory>, writable!: Bool
+): Unit {
+    for (root in pinned where root.path == path) {
+        arguments.add(if (writable) { "--bind-fd" } else { "--ro-bind-fd" })
+        arguments.add(root.descriptorForLaunch().toString())
+        arguments.add(path)
+        return
+    }
+    arguments.add(if (writable) { "--bind" } else { "--ro-bind" })
+    arguments.add(path)
+    arguments.add(path)
+}
+
+func validatedWritableRoots(values: Array<String>, workspaceRoot: String): Array<String> {
+    let roots = ArrayList<String>()
+    for (value in values) {
+        if (!Path(value).isAbsolute() || value.contains("\u{0000}")) {
+            throw IllegalArgumentException("approved write roots must be absolute directory paths")
+        }
+        let normalized = Path(value).normalize().toString()
+        if (value != normalized || !exists(Path(value)) ||
+            !FileInfo(Path(value)).isDirectory() || canonicalize(value).toString() != value ||
+            !withinPath(value, workspaceRoot)) {
+            throw IllegalArgumentException("approved write roots must be canonical existing workspace directories")
+        }
+        if (!containsString(roots, value)) { roots.add(value) }
+    }
+    roots.toArray()
+}
+
+func withinAnyWriteRoot(path: String, roots: Array<String>): Bool {
+    for (root in roots where withinPath(path, root)) { return true }
     false
 }
 

@@ -536,6 +536,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink & ReturningModelLaneComm
             requireReadonlyDescendantsSettled(transaction, receipt.operationId, runId, receipt.outcome)
         }
         let observedState = rows[0].required(1)
+        requireCanonicalUnstartedExecution204(transaction, transition, item, receipt, knownParentAllocation)
         if ((observedState == "prepared" || observedState == "waiting_approval") && receipt.outcome == OperationOutcome.Failed) {
             // A budget or validation error may settle before executor
             // handoff. Commit its paired ToolResult atomically, only while
@@ -625,6 +626,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink & ReturningModelLaneComm
         let runId = transition.before.activeRunId.getOrThrow()
         if (runState == "completed") {
             requireCompletedRunHasNoWorkDebt(transaction, runId)
+            sealApprovedPlanCompletion(transaction, runId, knownParentAllocation)
         }
         transaction.execute(
             "UPDATE turns SET state=" + sqliteText(turnState) + ",active_run_id=NULL WHERE id=" +
@@ -1095,4 +1097,93 @@ func parseStoreInt(value: String, field: String): Int64 {
     } catch (_: Exception) {
         throw IllegalStateException(field + " is not an integer")
     }
+}
+
+// This marker is a candidate from the Core admission boundary, never evidence
+// by itself. A commit-ambiguous admission cannot turn an Executing operation
+// into a not-started rejection: all facts are checked in this same transaction.
+func requireCanonicalUnstartedExecution204(transaction: SqliteTransaction,
+    transition: ThreadTransition, item: ThreadItem, receipt: VNextOperationReceipt,
+    allocate: ?(Int64)->LogicalJsonOwnerReservation): Unit {
+    let code = receipt.detail.field("code")
+    if (code.isNone() || code.getOrThrow().unifiedKind != ValueKind.Text ||
+        code.getOrThrow().text != "tool.execution_not_admitted") { return }
+    // The original sink bank pays only the extra cells this guard consumes.
+    // Its full raw/DOM guard frame must return before physical retirement.
+    let originalBank = match (allocate) {
+        case Some(value) => value
+        case None => throw IllegalStateException("unstarted canonical settlement requires its original sink bank") }
+    let payment = originalBank(131072)
+    try { requireCanonicalUnstartedExecutionFrame204(transaction, transition, item, receipt, payment) }
+    finally { payment.close() }
+}
+func requireCanonicalUnstartedExecutionFrame204(transaction: SqliteTransaction,
+    transition: ThreadTransition, item: ThreadItem, receipt: VNextOperationReceipt,
+    payment: LogicalJsonOwnerReservation): Unit {
+    let fields = receipt.detail.field("fields").getOrThrow()
+    var started = ""
+    var digest = ""
+    var cause = ""
+    if (fields.unifiedKind != ValueKind.List || fields.items.size != 3) {
+        throw IllegalStateException("unstarted admission rejection fields changed") }
+    for (field in fields.items) {
+        let name = field.field("name").getOrThrow().text
+        let value = field.field("value").getOrThrow().text
+        match (name) {
+            case "started" => if (started != "") { throw IllegalStateException("duplicate unstarted field") }; started = value
+            case "plan_digest" => if (digest != "") { throw IllegalStateException("duplicate digest field") }; digest = value
+            case "cause" => if (cause != "") { throw IllegalStateException("duplicate cause field") }; cause = value
+            case _ => throw IllegalStateException("unexpected unstarted rejection field") }
+    }
+    if (started != "false" || digest == "" || cause == "" || receipt.outcome != OperationOutcome.Rejected ||
+        canonicalAgentValue(receipt.verification) != canonicalAgentValue(objectValue([
+            ValueField("policy_rejected", boolValue(true))]))) {
+        throw IllegalStateException("unstarted rejection lacks exact candidate evidence") }
+    let run = item.provenance.runId.getOrThrow()
+    let lengths = transaction.query("SELECT length(CAST(o.normalized_plan AS BLOB))+length(CAST(call.payload AS BLOB))+length(CAST(call.provenance AS BLOB)) " +
+        "FROM operations o JOIN items call ON call.id=o.tool_call_item_id WHERE o.id=? AND o.run_id=?",
+        [SqlParameter.Text(receipt.operationId.value), SqlParameter.Text(run.value)])
+    if (lengths.size != 1) { throw IllegalStateException("unstarted candidate has no canonical source extent") }
+    let raw = planGuardRawPeak204(Int64.parse(lengths[0].required(0)))
+    payment.ensureRetainedPeak(raw)
+    let sources = transaction.query("SELECT o.normalized_plan,call.payload,call.provenance FROM operations o " +
+        "JOIN runs r ON r.id=o.run_id JOIN threads t ON t.id=r.thread_id AND t.active_turn_id=r.turn_id " +
+        "JOIN turns turn ON turn.id=r.turn_id AND turn.thread_id=r.thread_id AND turn.active_run_id=r.id AND turn.state='active' " +
+        "JOIN items call ON call.id=o.tool_call_item_id AND call.thread_id=r.thread_id AND call.turn_id=r.turn_id " +
+        "JOIN decision_operations source ON source.operation_id=o.id " +
+        "JOIN model_decisions d ON d.id=source.decision_id " +
+        "JOIN model_attempts attempt ON attempt.id=d.attempt_id AND attempt.run_id=r.id " +
+        "JOIN model_decision_blocks b ON b.decision_id=d.id AND b.scoped_tool_call_id=source.scoped_tool_call_id " +
+        "JOIN canonical_decision_items c ON c.decision_id=d.id AND c.decision_block_id=b.id AND c.item_id=call.id " +
+        "JOIN operation_effect_records effect ON effect.operation_id=o.id AND effect.run_id=o.run_id " +
+        "AND effect.tool_call_item_id=o.tool_call_item_id AND effect.normalized_plan=o.normalized_plan " +
+        "JOIN operation_state_registers register ON register.operation_id=o.id AND register.state=o.state " +
+        "WHERE o.id=? AND r.id=? AND r.thread_id=? AND r.turn_id=? AND r.epoch=? " +
+        "AND r.state IN ('running','waiting_external','waiting_approval') AND r.finished_at_millis IS NULL " +
+        "AND o.state IN ('prepared','waiting_approval') AND call.kind='tool_call' " +
+        "AND d.validation_status='validated' AND d.canonical_committed_at_millis IS NOT NULL " +
+        "AND NOT EXISTS (SELECT 1 FROM audit_events a WHERE a.operation_id=o.id AND a.kind='operation_execution_handoff')",
+        [SqlParameter.Text(receipt.operationId.value), SqlParameter.Text(run.value),
+            SqlParameter.Text(item.threadId.value), SqlParameter.Text(item.turnId.value),
+            SqlParameter.Int64Value(transition.before.activeEpoch)])
+    if (sources.size != 1) { throw IllegalStateException("unstarted rejection lacks its exact canonical prepared source") }
+    var decoded: Int64 = 0
+    for (index in 0..3) {
+        decoded = checkedPlanReadSum204(decoded, preparedFramedValueCopyPeak204(sources[0].required(index).toArray())) }
+    payment.ensureRetainedPeak(checkedPlanReadSum204(raw, decoded))
+    if (decodeOperationPlan(sources[0].required(0)).bindingDigest != digest) {
+        throw IllegalStateException("unstarted rejection changed its exact normalized plan") }
+    let provenance = decodeStoredProvenance(sources[0].required(2))
+    if (provenance.runId.isNone() || provenance.runId.getOrThrow().value != run.value ||
+        provenance.operationId.isSome() || provenance.directOrigin.isSome()) {
+        throw IllegalStateException("unstarted rejection source provenance changed") }
+    let callId = match (decodeStoredThreadContent(sources[0].required(1))) {
+        case ThreadItemContent.ToolCall(id, _, _) => id.value
+        case _ => throw IllegalStateException("unstarted source is not a canonical tool call") }
+    match (item.content) {
+        case ThreadItemContent.ToolResult(id, operation, resultReceipt, output, isError) =>
+            if (id.value != callId || operation.value != receipt.operationId.value || resultReceipt != receipt.receiptId ||
+                !isError || canonicalAgentValue(output) != canonicalAgentValue(receipt.detail)) {
+                throw IllegalStateException("unstarted rejection changed its canonical result binding") }
+        case _ => throw IllegalStateException("unstarted rejection requires its paired canonical result") }
 }

@@ -1646,8 +1646,9 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
         workspaceRoot: workspace,
         fixture: true,
         approvalMode: ApprovalMode.Yolo,
-        asyncEnabled: false,
-        extensionSignatureVerifier: if (native) { None } else { Some(FixedPluginSignatureVerifier(true)) }
+        // Pi does not consume the isolated Native signature verifier. Its
+        // unsigned Native service dependency uses the normal None policy.
+        asyncEnabled: false
     )).value().getOrThrow()
     try {
         let readonlyShell = NativeReadonlyShellContractBinding(product)
@@ -2033,7 +2034,6 @@ main(): Int64 {
             workspaceRoot: workspace,
             fixture: true,
             asyncEnabled: false,
-            extensionSignatureVerifier: Some(FixedPluginSignatureVerifier(true)),
             compactionOverride: Some(ProductCompactionSettings(
                 keepRecentMessages: 2
             ))
@@ -2204,14 +2204,6 @@ main(): Int64 {
             "queued follow-up is consumed inside a live Product Run")
 
         isolatedPluginHostContract(workspace, root + "/settings")
-        expect(product.vnext.validateIsolatedExtension(
-            SignedExtensionPackageManifest(
-                "product.signed", "1", "1", "1", "plugins/signed.wasm",
-                [], [], [], 1u32, "compatible", "sha256:signed", "signature"
-            ),
-            ExtensionExecutionKind.WasmComponent, 1u64, []
-        ).isOk(),
-            "Product validates extension packages only through its configured trust root")
 
         let remoteTransport = ProductRecordingRemoteTransport()
         let remoteRealm = RemoteExecutionRealm(
@@ -2638,78 +2630,8 @@ main(): Int64 {
         denialDatabase.close()
         runNativeReadCancellationContract(root, workspace)
         runProgramCancellationRecoveryContract(root, workspace)
-        let pluginRoot = workspace + "/plugin-package"
-        Directory.create(pluginRoot, recursive: true)
-        let nativeExecutable = getVariable("AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE").getOrThrow()
-        File.writeTo(pluginRoot + "/native-plugin-tool", File.readFrom(Path(nativeExecutable)))
-        let _ = pluginAcquisitionRunFixtureCommand("/bin/chmod", ["755", "native-plugin-tool"], pluginRoot)
-        File.writeTo(pluginRoot + "/axyndra.plugin.json", (
-            "{\"id\":\"fixture-plugin\",\"version\":\"1.0.0\",\"entrypoint\":\"native-plugin-tool\"," +
-            "\"entry_kind\":\"native-executable\",\"sdk_range\":\"[2.0.0,3.0.0)\"," +
-            "\"protocol_range\":\"axyndra-js-host-v2\",\"signature\":\"signature-process\"," +
-            "\"capabilities\":[],\"contributions\":[{\"kind\":\"tool\",\"name\":\"echo\"}]}"
-        ).toArray())
-        let importedPlugin = product.importLocalPlugin(pluginRoot, PluginInstallScope.Workspace)
-        expect(importedPlugin.isOk(), "Product imports an executable plugin package into the durable lock")
-        let pluginId = match (importedPlugin) {
-            case PluginRegistryResult.Ok(record) => supportRegistryDescriptor96(record,"id")
-            case PluginRegistryResult.Err(_) => ""
-        }
-        let enabledPlugin = product.setPluginEnabled(pluginId, true)
-        let enabledPluginState = match (enabledPlugin) {
-            case PluginRegistryResult.Ok(record) => if (supportRegistryData96(record).enabled) { "enabled" } else { "disabled" }
-            case PluginRegistryResult.Err(error) => error.code + ":" + supportRegistryErrorText96(error)
-        }
-        expect(enabledPlugin.isOk() && match (enabledPlugin) {
-            case PluginRegistryResult.Ok(record) => supportRegistryData96(record).enabled
-            case PluginRegistryResult.Err(_) => false
-        }, "Product enables a verified plugin and mounts its isolated generation; actual=" +
-            enabledPluginState)
-        let pluginNamespace = match (importedPlugin) {
-            case PluginRegistryResult.Ok(record) => supportRegistryDescriptor96(record,"namespace")
-            case PluginRegistryResult.Err(_) => ""
-        }
-        let pluginToolName = "plugin." + pluginNamespace + ".echo"
-        var pluginToolSeen = false
-        for (definition in product.tools()) {
-            if (definition.name == pluginToolName) { pluginToolSeen = true }
-        }
-        expect(pluginToolSeen, "enabled native plugin publishes only its declared isolated tool")
-        let nativeSessionName = "durable-product-native-plugin"
-        let nativeCallId = "fixture-native-plugin-call"
-        let nativeSession = product.applicationSession(sessionId: Some(SessionId(nativeSessionName)))
-        product.fixtureProbe.getOrThrow().enqueueToolCallReply(nativeCallId, pluginToolName, objectValue([]))
-        let nativeWaiting = nativeSession.submit("Execute the declared native plugin tool.").value().getOrThrow()
-        let nativeApproval = nativeSession.approval().getOrThrow()
-        expect(nativeWaiting.approval.isSome() && nativeApproval.toolName == pluginToolName,
-            "native plugin execution retains the normal one-time approval barrier")
-        let nativeCompleted = nativeSession.decide(nativeApproval.operationId.value, ApprovalDecision.Approve)
-            .value().getOrThrow()
-        expect(nativeCompleted.snapshot.isSome() &&
-            nativeCompleted.snapshot.getOrThrow().status == RunState.Completed,
-            "approved native plugin runs through the real Product process host")
-        let nativeDatabase = SqliteDatabase(stateRoot + "/state.db")
-        try {
-            let (nativeOutput, nativeIsError) = productThreadToolResult(nativeDatabase, nativeSessionName, nativeCallId)
-            expect(!nativeIsError && nativeOutput.field("runtime").getOrThrow().text == "native" &&
-                nativeOutput.field("calls").getOrThrow().asNumberText() == "1" &&
-                nativeDatabase.scalarInt(
-                    "SELECT COUNT(*) FROM operation_receipts receipt JOIN operations op ON op.id=receipt.operation_id " +
-                    "JOIN runs ON runs.id=op.run_id WHERE runs.thread_id='" + nativeSessionName +
-                    "' AND receipt.outcome='completed'"
-                ) == 1,
-                "standalone native executable runs once and leaves one completed canonical Receipt")
-        } finally { nativeDatabase.close() }
-        let disabledPlugin = product.setPluginEnabled(pluginId, false)
-        let disabledSnapshots = product.pluginSnapshots()
-        var foundDisabled = false
-        for (snapshotIndex in 0..disabledSnapshots.size) {
-            let snapshot = disabledSnapshots.at(snapshotIndex)
-            if (supportRegistryDescriptor96(snapshot,"id") == pluginId && !supportRegistryData96(snapshot).enabled) { foundDisabled = true }
-        }
-        expect(disabledPlugin.isOk() && foundDisabled && !product.tools().any({ definition => definition.name == pluginToolName }),
-            "Product disables the native plugin and removes its declared tool")
         product.close().value().getOrThrow()
+        runSignedPluginProductContract(root)
 
         let database = SqliteDatabase(stateRoot + "/state.db")
         try {
@@ -3123,7 +3045,6 @@ main(): Int64 {
 
             let faultProduct=openProduct(config:ProductConfig(settingsRoot:root+"/settings",stateRoot:stateRoot,
                 workspaceRoot:workspace,fixture:true,asyncEnabled:false,
-                extensionSignatureVerifier:Some(FixedPluginSignatureVerifier(true)),
                 compactionOverride:Some(ProductCompactionSettings(keepRecentMessages:2)))).value().getOrThrow()
             try{
                 let faultBinding=NativeProgramContractBinding(faultProduct)
@@ -3204,6 +3125,106 @@ main(): Int64 {
         0
     } finally {
         let _ = removeIfExists(root, recursive: true)
+    }
+}
+
+// Signature trust is a package-wide Native policy. Keep its signed-package
+// contract separate from the unsigned Workspace/Program dependency scenario.
+func runSignedPluginProductContract(root: String): Unit {
+    let stateRoot = root + "/signed-plugin-state"
+    let workspace = root + "/signed-plugin-workspace"
+    Directory.create(workspace, recursive: true)
+    let product = openProduct(config: ProductConfig(
+        settingsRoot: root + "/signed-plugin-settings",
+        stateRoot: stateRoot,
+        workspaceRoot: workspace,
+        fixture: true,
+        asyncEnabled: false,
+        extensionSignatureVerifier: Some(FixedPluginSignatureVerifier(true)),
+        compactionOverride: Some(ProductCompactionSettings(keepRecentMessages: 2))
+    )).value().getOrThrow()
+    try {
+        expect(product.vnext.validateIsolatedExtension(
+            SignedExtensionPackageManifest(
+                "product.signed", "1", "1", "1", "plugins/signed.wasm",
+                [], [], [], 1u32, "compatible", "sha256:signed", "signature"
+            ),
+            ExtensionExecutionKind.WasmComponent, 1u64, []
+        ).isOk(),
+            "Product validates extension packages only through its configured trust root")
+        let pluginRoot = workspace + "/plugin-package"
+        Directory.create(pluginRoot, recursive: true)
+        let nativeExecutable = getVariable("AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE").getOrThrow()
+        File.writeTo(pluginRoot + "/native-plugin-tool", File.readFrom(Path(nativeExecutable)))
+        let _ = pluginAcquisitionRunFixtureCommand("/bin/chmod", ["755", "native-plugin-tool"], pluginRoot)
+        File.writeTo(pluginRoot + "/axyndra.plugin.json", (
+            "{\"id\":\"fixture-plugin\",\"version\":\"1.0.0\",\"entrypoint\":\"native-plugin-tool\"," +
+            "\"entry_kind\":\"native-executable\",\"sdk_range\":\"[2.0.0,3.0.0)\"," +
+            "\"protocol_range\":\"axyndra-js-host-v2\",\"signature\":\"signature-process\"," +
+            "\"capabilities\":[],\"contributions\":[{\"kind\":\"tool\",\"name\":\"echo\"}]}"
+        ).toArray())
+        let importedPlugin = product.importLocalPlugin(pluginRoot, PluginInstallScope.Workspace)
+        expect(importedPlugin.isOk(), "Product imports an executable plugin package into the durable lock")
+        let pluginId = match (importedPlugin) {
+            case PluginRegistryResult.Ok(record) => supportRegistryDescriptor96(record,"id")
+            case PluginRegistryResult.Err(_) => ""
+        }
+        let enabledPlugin = product.setPluginEnabled(pluginId, true)
+        let enabledPluginState = match (enabledPlugin) {
+            case PluginRegistryResult.Ok(record) => if (supportRegistryData96(record).enabled) { "enabled" } else { "disabled" }
+            case PluginRegistryResult.Err(error) => error.code + ":" + supportRegistryErrorText96(error)
+        }
+        expect(enabledPlugin.isOk() && match (enabledPlugin) {
+            case PluginRegistryResult.Ok(record) => supportRegistryData96(record).enabled
+            case PluginRegistryResult.Err(_) => false
+        }, "Product enables a verified plugin and mounts its isolated generation; actual=" +
+            enabledPluginState)
+        let pluginNamespace = match (importedPlugin) {
+            case PluginRegistryResult.Ok(record) => supportRegistryDescriptor96(record,"namespace")
+            case PluginRegistryResult.Err(_) => ""
+        }
+        let pluginToolName = "plugin." + pluginNamespace + ".echo"
+        var pluginToolSeen = false
+        for (definition in product.tools()) {
+            if (definition.name == pluginToolName) { pluginToolSeen = true }
+        }
+        expect(pluginToolSeen, "enabled native plugin publishes only its declared isolated tool")
+        let nativeSessionName = "durable-product-native-plugin"
+        let nativeCallId = "fixture-native-plugin-call"
+        let nativeSession = product.applicationSession(sessionId: Some(SessionId(nativeSessionName)))
+        product.fixtureProbe.getOrThrow().enqueueToolCallReply(nativeCallId, pluginToolName, objectValue([]))
+        let nativeWaiting = nativeSession.submit("Execute the declared native plugin tool.").value().getOrThrow()
+        let nativeApproval = nativeSession.approval().getOrThrow()
+        expect(nativeWaiting.approval.isSome() && nativeApproval.toolName == pluginToolName,
+            "native plugin execution retains the normal one-time approval barrier")
+        let nativeCompleted = nativeSession.decide(nativeApproval.operationId.value, ApprovalDecision.Approve)
+            .value().getOrThrow()
+        expect(nativeCompleted.snapshot.isSome() &&
+            nativeCompleted.snapshot.getOrThrow().status == RunState.Completed,
+            "approved native plugin runs through the real Product process host")
+        let nativeDatabase = SqliteDatabase(stateRoot + "/state.db")
+        try {
+            let (nativeOutput, nativeIsError) = productThreadToolResult(nativeDatabase, nativeSessionName, nativeCallId)
+            expect(!nativeIsError && nativeOutput.field("runtime").getOrThrow().text == "native" &&
+                nativeOutput.field("calls").getOrThrow().asNumberText() == "1" &&
+                nativeDatabase.scalarInt(
+                    "SELECT COUNT(*) FROM operation_receipts receipt JOIN operations op ON op.id=receipt.operation_id " +
+                    "JOIN runs ON runs.id=op.run_id WHERE runs.thread_id='" + nativeSessionName +
+                    "' AND receipt.outcome='completed'"
+                ) == 1,
+                "standalone native executable runs once and leaves one completed canonical Receipt")
+        } finally { nativeDatabase.close() }
+        let disabledPlugin = product.setPluginEnabled(pluginId, false)
+        let disabledSnapshots = product.pluginSnapshots()
+        var foundDisabled = false
+        for (snapshotIndex in 0..disabledSnapshots.size) {
+            let snapshot = disabledSnapshots.at(snapshotIndex)
+            if (supportRegistryDescriptor96(snapshot,"id") == pluginId && !supportRegistryData96(snapshot).enabled) { foundDisabled = true }
+        }
+        expect(disabledPlugin.isOk() && foundDisabled && !product.tools().any({ definition => definition.name == pluginToolName }),
+            "Product disables the native plugin and removes its declared tool")
+    } finally {
+        product.close().value().getOrThrow()
     }
 }
 

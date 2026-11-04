@@ -1604,9 +1604,13 @@ public class AgentThreadRuntime {
                             )
                             match (decision) {
                                 case SemanticCommitDecision.Committed(_, _) => ()
-                                case _ => if(known.isSome()){
-                                    // An opt-in proof failure rolled back the same canonical TX.
-                                    // Do not write a detached receipt in a second transaction.
+                                case _ => if(known.isSome() ||
+                                    (terminal.receipt.detail.field("code").isSome() &&
+                                        terminal.receipt.detail.field("code").getOrThrow().unifiedKind == ValueKind.Text &&
+                                        terminal.receipt.detail.field("code").getOrThrow().text == "tool.execution_not_admitted")){
+                                    // These candidates are valid only with their exact
+                                    // canonical same-TX proof. A rejected proof cannot
+                                    // acquire a detached Receipt in a second transaction.
                                     ()
                                 }else{match (coordinator.recordOperationReceipt(
                                     owned.runId, terminal.receipt

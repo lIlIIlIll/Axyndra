@@ -93,7 +93,7 @@ func hostCanonicalizePluginChild111(host: HostJavaScriptPluginHost, operations: 
         Some(configuration.retainProcessProjection180())}else{Option<HostPaidValueProjection151>.None}
     let options = match (if (resultWriter) { hostResultSlotOptions150(host, configuration, context) }
         else if(processProjection180.isSome()){host.processOptions180(context,processProjection180.getOrThrow())}
-        else { host.childOptions111() }) {
+        else { host.childOptions111(context) }) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
     if(call.arguments.field(CONTEXT_READ_INPUT_FIELD).isSome()) {
         return hostCanonicalizePeerResume111(host,operations,configuration,generation,localTool,context,call,binding,options) }
@@ -170,6 +170,175 @@ func hostCanonicalizePluginChild111(host: HostJavaScriptPluginHost, operations: 
     } finally { response.close() }
 }
 
+// Exact trusted Task DATA producer. The canonical Source, lane, permissions
+// and frozen proposal checks are unchanged; this owner only carries an
+// independently paid outcome until the real Pipeline copy returns.
+func hostCanonicalizePluginTaskOwned204(host: HostJavaScriptPluginHost, operations: OperationRuntimePort,
+    namespace: String, localTool: String, generation: UInt64, implementation: String, schema: String,
+    context: ToolInvocationContext, call: ToolCall): Result<ToolCanonicalArgumentsOwner204> {
+    let configuration = match (host.primitiveConfiguration111(namespace, localTool, generation)) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(Some(value)) => value
+        case Result.Ok(None) => return hostPluginResourceError("child.profile_missing", "operator did not select this contribution's child profile") }
+    if (namespace != "axyndra:workflow" || localTool != "task" || !configuration.supervisedTaskServices191(localTool)) {
+        return hostPluginResourceError("child.profile_invalid", "owned preparation requires the exact trusted Task service selection") }
+    let payment = configuration.deriveDataPayment191(131072)
+    let owner = try { ToolCanonicalArgumentsOwner204(payment) }
+        catch (error: Exception) { payment.close(); throw error }
+    try {
+        // Preserve the real preparation worker invoice on its original bank.
+        owner.fundAdditional204(20384)
+        match (hostTaskPreparationProducerFrame204(host, operations, configuration, generation,
+            localTool, implementation, schema, context, call, owner)) {
+            case Result.Err(error) => owner.installProducerError204(error)
+            case Result.Ok(_) => ()
+        }
+        owner.producerFrameReturned204()
+        Result.Ok(owner)
+    } catch (error: Exception) {
+        // The complete concrete producer frame has unwound. Only the owner's
+        // exact recorded original-bank pre-copy refusal can retire this phase.
+        if (owner.closeUnacceptedProducer204(error)) {
+            return Result.Err(AgentError(AgentErrorKind.BudgetExceeded, "tool.canonical_data_refused",
+                "canonical Task data cannot fit the original shared payload capacity")) }
+        owner.holdUnknownConsumer204(); throw error
+    }
+}
+private func hostTaskPreparationProducerFrame204(host: HostJavaScriptPluginHost, operations: OperationRuntimePort,
+    configuration: HostPrimitiveConfiguration111, generation: UInt64, localTool: String, implementation: String,
+    schema: String, context: ToolInvocationContext, call: ToolCall, owner: ToolCanonicalArgumentsOwner204): Result<Unit> {
+    let namespace = configuration.namespace
+    if (call.name != "plugin." + namespace + "." + localTool || context.epoch < 1 ||
+        call.arguments.unifiedKind != ValueKind.Object || call.arguments.field("host_plan").isSome()) {
+        return hostPluginResourceError("child.preparation_input_invalid", "the pilot requires original business input and its actual canonical caller") }
+    let lane = match (operations.pluginDocumentLane(ThreadId(context.sessionId.value), context.runId, context.epoch)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    let binding = objectValue([ValueField("namespace", textValue(namespace)),
+        ValueField("package_digest", textValue(configuration.packageDigest)), ValueField("generation", textValue(generation.toString())),
+        ValueField("configuration_digest", textValue(configuration.digest)), ValueField("thread_id", textValue(context.sessionId.value)),
+        ValueField("lane_id", textValue(lane.value)), ValueField("run_id", textValue(context.runId.value)),
+        ValueField("epoch", integerValue(context.epoch)), ValueField("parent_call_id", textValue(call.callId)),
+        ValueField("contribution", textValue(call.name)), ValueField("implementation_fingerprint", textValue(implementation)),
+        ValueField("schema_digest", textValue(schema))])
+    match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    let provider = configuration.preparationProvider(localTool)
+    let options = match (host.childOptions111(context)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    if (call.arguments.field(CONTEXT_READ_INPUT_FIELD).isSome()) {
+        // This exact selection cannot acquire peer.send. Preserve its original
+        // refusal; no peer observation or resume producer may be introduced.
+        match (hostCanonicalizePeerResume111(host, operations, configuration, generation, localTool, context, call, binding, options)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => return hostPluginResourceError("peer.resume_profile_missing", "actual contribution cannot consume peer messaging") }
+    }
+    let response = match (hostQueryPluginPolicy(host, namespace, provider, configuration.packageDigest,
+        objectValue([ValueField("schema", textValue("axyndra.primitive-preparation-query/v1")),
+            ValueField("tool", textValue(localTool)), ValueField("input", call.arguments), ValueField("options", options)]),
+        ThreadId(context.sessionId.value), context.cancellation, call.callId)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    try {
+        // Install both success and typed business failure while the original
+        // response backing is still live. The whole helper then returns.
+        match (hostTaskPreparationProposalFrame204(host, configuration, generation, localTool, context,
+            call, binding, options, response.binding.namespace, response.binding.contribution,
+            response.binding.digest, response.binding.generation, response.value, owner)) {
+            case Result.Err(error) => owner.installProducerError204(error)
+            case Result.Ok(_) => ()
+        }
+        Result.Ok(())
+    } finally { response.close() }
+}
+private func hostTaskPreparationProposalFrame204(host: HostJavaScriptPluginHost,
+    configuration: HostPrimitiveConfiguration111, generation: UInt64, localTool: String,
+    context: ToolInvocationContext, call: ToolCall, binding: AgentValue, options: AgentValue,
+    responseNamespace: String, responseContribution: String, responseDigest: String, responseGeneration: UInt64,
+    proposal: AgentValue, owner: ToolCanonicalArgumentsOwner204): Result<Unit> {
+    let provider = configuration.preparationProvider(localTool)
+    if (responseNamespace != configuration.namespace || responseContribution != provider ||
+        responseDigest != configuration.packageDigest || responseGeneration != generation) {
+        return hostPluginResourceError("child.preparation_changed", "pure primitive proposal has another binding or shape") }
+    if (httpIntentExactFields(proposal, ["completion"])) {
+        owner.fundAdditional204(69632)
+        let completion = proposal.field("completion").getOrThrow()
+        if (!httpIntentExactFields(completion, ["output", "is_error"]) ||
+            completion.field("is_error").getOrThrow().unifiedKind != ValueKind.Boolean) {
+            return hostPluginResourceError("primitive.completion_invalid", "expected exact data-only completion") }
+        let permission = configuration.preparedCompletionPermission152(localTool)
+        match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding, service: permission)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let plan = objectValue([ValueField("version", textValue(PLUGIN_PREPARED_COMPLETION152)),
+            ValueField("binding", binding), ValueField("permission", textValue(permission)), ValueField("completion", completion)])
+        let invocation = configuration.invocationName(localTool, service: permission)
+        if (invocation != "extension.invoke") { plan.put("invocation_capability", textValue(invocation)) }
+        let arguments = objectValue([ValueField("input", call.arguments), ValueField("configuration", options), ValueField("host_plan", plan)])
+        if (!pluginPreparedCompletionArgumentsValid152(arguments)) {
+            return hostPluginResourceError("primitive.completion_invalid", "invalid frozen no-effect data") }
+        match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding, service: permission)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        owner.installProducerData204(arguments)
+        // Preserve the original copy-then-current ordering. Rejection keeps
+        // the full success-copy peak paid until the complete carrier returns.
+        match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding, service: permission)) {
+            case Result.Err(error) => owner.rejectCopiedProducerData204(error)
+            case Result.Ok(_) => () }
+        return Result.Ok(())
+    }
+    if (!httpIntentExactFields(proposal, ["intents"])) {
+        return hostPluginResourceError("child.preparation_changed", "pure primitive proposal has another binding or shape") }
+    let intents = proposal.field("intents").getOrThrow()
+    if (intents.unifiedKind != ValueKind.List || intents.items.isEmpty() || intents.items.size > 32) {
+        return hostPluginResourceError("child.preparation_invalid", "expected a bounded exact frozen intent sequence") }
+    let arguments = objectValue([ValueField("input", call.arguments), ValueField("configuration", options),
+        ValueField("host_plan", objectValue([ValueField("version", textValue(PLUGIN_PRIMITIVE_PARENT111)),
+            ValueField("binding", binding), ValueField("intents", intents)]))])
+    let service = httpIntentText(intents.items[0], "service")
+    if (!configuration.permitsService(localTool, service)) {
+        return hostPluginResourceError("child.preparation_invalid", "pure proposal has no selected service") }
+    let invocation = configuration.invocationName(localTool, service: service)
+    if (invocation != "extension.invoke") { arguments.field("host_plan").getOrThrow().put("invocation_capability", textValue(invocation)) }
+    match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding, service: service)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    for (intent in intents.items) {
+        if (pluginChildStartArguments111(arguments, httpIntentText(intent, "id")).isError() ||
+            !configuration.permitsService(localTool, httpIntentText(intent, "service")) ||
+            configuration.invocationName(localTool, service: httpIntentText(intent, "service")) != invocation) {
+            return hostPluginResourceError("child.preparation_invalid", "intent exceeds the exact operator-selected contribution") }
+        if (httpIntentText(intent, "service") == "child.start" &&
+            httpIntentText(intent.field("input").getOrThrow().field("completion").getOrThrow(), "provider") != provider) {
+            return hostPluginResourceError("child.completion_provider_changed", "completion must use the same selected pure Provider") }
+    }
+    owner.installProducerData204(arguments)
+    match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding, service: service)) {
+        case Result.Err(error) => owner.rejectCopiedProducerData204(error)
+        case Result.Ok(_) => () }
+    Result.Ok(())
+}
+
+// The trusted Task executor already owns this complete immutable plan loan.
+// Preserve every original completion/Source/current predicate without a Raw
+// Prepared getter that would escape that DATA consumer frame.
+func hostVerifyTaskPreparedCompletionFrame204(host: HostJavaScriptPluginHost, namespace: String,
+    localTool: String, generation: UInt64, context: ToolInvocationContext,
+    prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, output: AgentValue, isError: Bool): Result<Unit> {
+    if (!isFrozenPluginPreparedCompletion152(plan)) {
+        return hostPluginResourceError("primitive.completion_plan_changed", "data-only completion lost its frozen parent") }
+    match (hostChildInvocationPlanFrame204(host, context, prepared, namespace, localTool, generation, plan)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    let configuration = match (host.primitiveConfiguration111(namespace, localTool, generation)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(Some(value)) => value
+        case Result.Ok(None) => return hostPluginResourceError("primitive.completion_selection_missing", "original selection is absent") }
+    let expected = plan.canonicalArguments.field("host_plan").getOrThrow().field("completion").getOrThrow()
+    let planned = expected.field("output").getOrThrow()
+    let loan = configuration.inputTemporaryPayment111(1048576)
+    try {
+        if (expected.field("is_error").getOrThrow().asBool() != isError || !hostPreparedCompletionEqual153(loan, planned, output)) {
+            return hostPluginResourceError("primitive.completion_output_changed", "Native terminal differs from the complete frozen result") }
+        match (hostChildInvocationPlanFrame204(host, context, prepared, namespace, localTool, generation, plan)) {
+            case Result.Err(error) => Result.Err(error); case Result.Ok(_) => Result.Ok(()) }
+    } finally { loan.close() }
+}
+
 func hostChildInvocationInput111(host: HostJavaScriptPluginHost, context: ToolInvocationContext,
     prepared: PreparedToolInvocation, namespace: String, localTool: String, generation: UInt64): Result<AgentValue> {
     if (prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
@@ -192,6 +361,37 @@ func hostChildInvocationInput111(host: HostJavaScriptPluginHost, context: ToolIn
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         case OperationRootSource.Committed(_) => () }
     Result.Ok(prepared.operationPlan.canonicalArguments)
+}
+
+func hostChildInvocationPlanFrame204(host: HostJavaScriptPluginHost, context: ToolInvocationContext,
+    prepared: PreparedToolInvocation, namespace: String, localTool: String, generation: UInt64,
+    plan: NormalizedOperationPlan): Result<Unit> {
+    prepared.withCall204({ call => hostChildInvocationCallPlanFrame204(host, context, prepared,
+        call, namespace, localTool, generation, plan) })
+}
+private func hostChildInvocationCallPlanFrame204(host: HostJavaScriptPluginHost, context: ToolInvocationContext,
+    prepared: PreparedToolInvocation, call: ToolCall, namespace: String, localTool: String, generation: UInt64,
+    plan: NormalizedOperationPlan): Result<Unit> {
+    if (prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
+        (!isFrozenPluginChildParent111(plan) && !isFrozenPluginPreparedCompletion152(plan)) ||
+        call.name != plan.toolName ||
+        call.name != "plugin." + namespace + "." + localTool) {
+        return hostPluginResourceError("child.parent_invalid", "child-start requires its own actual frozen canonical parent") }
+    let binding = plan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow()
+    if (httpIntentText(binding, "parent_call_id") != call.callId) {
+        return hostPluginResourceError("child.parent_changed", "child-start binding names another canonical call") }
+    let configuration = match (host.primitiveConfiguration111(namespace, localTool, generation)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(Some(value)) => value
+        case Result.Ok(None) => return hostPluginResourceError("child.profile_missing", "operator primitive selection is absent") }
+    if(pluginPrimitiveInvocationName111(plan.canonicalArguments)!=configuration.invocationName(localTool,service:pluginPrimitivePlanService111(plan))) {
+        return hostPluginResourceError("child.invocation_capability_changed","frozen invocation capability differs from its exact operator selection") }
+    match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding,service:pluginPrimitivePlanService111(plan))) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    match (prepared.source.operationRoot.getOrThrow()) {
+        case OperationRootSource.Direct(value) => match (value.validateLiveSource()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        case OperationRootSource.Committed(_) => () }
+    Result.Ok(())
 }
 
 func hostFreezeProcessIntents180(host:HostJavaScriptPluginHost,configuration:HostPrimitiveConfiguration111,

@@ -17,3 +17,5 @@ public type LocalNetworkGatewayPort = agent_host_runtime.HostLocalNetworkGateway
 
 public func defaultNetworkGatewayExecutable(): String { agent_host_runtime.hostDefaultNetworkGatewayExecutable() }
 
+
+func sanitizedGatewayStderr(text: String): String { hostSanitizedGatewayStderr(text) }

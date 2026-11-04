@@ -136,7 +136,9 @@ public enum OperationResolution {
 
 public class NormalizedOperationPlan {
     public let toolName: String
+    public let policyVersion: String
     public let canonicalArguments: AgentValue
+    public let approvedWriteRoots: Array<String>
     public let resolvedPaths: Array<String>
     public let resolvedHosts: Array<String>
     public let networkPolicy: NetworkPolicy
@@ -191,8 +193,11 @@ public class NormalizedOperationPlan {
         schemaDigest!: String = "",
         effectiveArgumentsDigest!: String = "",
         replayContractVersion!: UInt32 = 1u32,
-        contextReadFacts!: Array<ContextReadFactLink> = []
+        contextReadFacts!: Array<ContextReadFactLink> = [],
+        policyVersion!: String = "tool-policy-v1",
+        approvedWriteRoots!: Array<String> = []
     ) {
+        if (policyVersion.trimAscii() == "") { throw IllegalArgumentException("operation policy version is required") }
         if (toolName.trimAscii() == "" || bindingDigest.trimAscii() == "" ||
             canonicalArguments.unifiedKind != ValueKind.Object ||
             (requiredCapabilities.isEmpty() &&
@@ -207,6 +212,8 @@ public class NormalizedOperationPlan {
             )
         }
         this.readFacts = validatedContextReadFactLinks(contextReadFacts)
+        this.approvedWriteRoots = approvedWriteRoots
+        this.policyVersion = policyVersion
         this.toolName = toolName.trimAscii()
         this.canonicalArguments = canonicalArguments
         this.resolvedPaths = resolvedPaths
@@ -478,14 +485,20 @@ func operationFailureOutcome(
     if (error.kind == AgentErrorKind.RecoveryRequired) {
         return OperationOutcome.Unknown
     }
-    // Address/mode denials are authorization results, never transport
-    // failures. They are produced only after the frozen policy has been
-    // checked and must not trigger a model retry or a permission escalation.
+    // Rejected also covers the legacy gateway preflight outcome. Its
+    // independent failure_class preserves infrastructure vs authorization
+    // semantics; neither can trigger a permission escalation.
     if (error.code == "network.address_denied" ||
         error.code == "network.mode_denied" ||
         error.code == "network.policy_invalid" ||
         error.code == "network.gateway_unavailable") {
         return OperationOutcome.Rejected
+    }
+    if (error.code == "network.gateway_start_failed" || error.code == "probe.launch_failed" ||
+        error.code == "probe.private_storage_unavailable") {
+        // These concrete adapters certify failure before the target command
+        // starts. Record failure without inventing an unknown side effect.
+        return OperationOutcome.Failed
     }
     if (stage == OperationAttemptStage.Executing && effect != OperationEffectClass.ReadOnly) {
         return OperationOutcome.Unknown
@@ -498,12 +511,30 @@ func operationFailureOutcome(
     }
 }
 
-func operationErrorValue(error: AgentError): AgentValue {
-    let fields = ArrayList<ValueField>([
-        ValueField("code", textValue(error.code)),
-        ValueField("message", textValue(error.message)),
-        ValueField("retryable", boolValue(error.retryable))
-    ])
+public func operationFailureClass(error: AgentError): String {
+    // A diagnostic hint can never turn a policy refusal or cancellation
+    // into a recoverable infrastructure failure.
+    if (error.kind == AgentErrorKind.PermissionDenied) { return "policy_denied" }
+    if (error.kind == AgentErrorKind.Cancelled) { return "cancelled" }
+    match (error.field("failure_class")) {
+        case Some(value) => if (value == "infrastructure_unavailable" ||
+            value == "dependency_unavailable" || value == "policy_denied") { return value }
+        case None => ()
+    }
+    match (error.kind) {
+        case AgentErrorKind.PermissionDenied => "policy_denied"
+        case AgentErrorKind.Cancelled => "cancelled"
+        case AgentErrorKind.Timeout => "timeout"
+        case _ => "tool_failed"
+    }
+}
+
+public func operationErrorValue(error: AgentError): AgentValue {
+    let fields = ArrayList<ValueField>()
+    // Use the same complete error shape as persisted diagnostic events.
+    // Numeric command status is a ToolResult field, never inferred here.
+    fields.add(all: eventErrorValue(error).fields)
+    fields.add(ValueField("failure_class", textValue(operationFailureClass(error))))
     match (error.observation) {
         case Some(value) => fields.add(ValueField("observation", value.toValue()))
         case None => ()

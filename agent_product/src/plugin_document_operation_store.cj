@@ -11,6 +11,8 @@ import agent_extension_runtime.*
 // in Store. The generic historical inspector remains read-only and needs no
 // allocation authority for loading compact plans.
 func productOperationStore(database: SqliteDatabase,
-    derivedSettlementFailureObserver!: ?(String, String, String, String) -> Unit = None): DurableOperationStore {
-    hostOperationStore(database, derivedSettlementFailureObserver: derivedSettlementFailureObserver)
+    derivedSettlementFailureObserver!: ?(String, String, String, String) -> Unit = None,
+    planExecutionAllocation!: ?(Int64) -> LogicalJsonOwnerReservation = None): DurableOperationStore {
+    hostOperationStore(database, derivedSettlementFailureObserver: derivedSettlementFailureObserver,
+        planExecutionAllocation: planExecutionAllocation)
 }

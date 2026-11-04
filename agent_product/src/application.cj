@@ -143,6 +143,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     private var pendingCheckpointSlot113: ?ApplicationOwnedCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
     private let pendingOwnedEvents = ArrayList<OwnedAgentEvent>()
     private var legacyEventSubscribers: Int64 = 0
+    private var planApplicationFrames204: Int64 = 0
+    private var returnedPlanRequests204: ?ApplicationPlanRequestReturn204 = None
+
     private let queuedInteractions = ArrayList<QueuedInteraction>()
     private var sessionId: SessionId
     private var currentModel: String
@@ -398,6 +401,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     // The method is idempotent: after one successful resume there is no pending
     // model checkpoint left to dispatch again.
     public func resumeStartup(): Result<?ApplicationResponse> {
+        beginPlanApplicationFrame204()
+        try { resumeStartupFrame204() } finally { returnPlanApplicationFrame204() }
+    }
+    private func resumeStartupFrame204(): Result<?ApplicationResponse> {
         match (pendingRecovery) {
             case Some(error) => return Result.Err(error)
             case None => ()
@@ -455,11 +462,58 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     private func setCurrentRequest(value: ?AgentRunRequest): Unit {
         lock.lock()
         try {
+            match (currentRequest) {
+                case Some(previous) => match (previous.planRequestCustody204) {
+                    case Some(custody) =>
+                        let retained = match (value) {
+                            case Some(next) => match (next.planRequestCustody204) {
+                                case Some(other) => refEq(custody, other)
+                                case None => false
+                            }
+                            case None => false
+                        }
+                        if (!retained) { returnedPlanRequests204 = Some(ApplicationPlanRequestReturn204(custody, returnedPlanRequests204)) }
+                    case None => ()
+                }
+                case None => ()
+            }
             currentRequest = value
             currentRequestCancelling = false
         } finally {
             lock.unlock()
         }
+    }
+
+    private func beginPlanApplicationFrame204(): Unit {
+        lock.lock()
+        try {
+            if (planApplicationFrames204 == Int64.Max) { throw IllegalStateException("application request frame count overflow") }
+            planApplicationFrames204++
+        } finally { lock.unlock() }
+    }
+    private func returnPlanApplicationFrame204(): Unit {
+        var returned: ?ApplicationPlanRequestReturn204 = None
+        var wholeFrameReturned = false
+        lock.lock()
+        try {
+            if (planApplicationFrames204 < 1) { throw IllegalStateException("application request frame was not entered") }
+            planApplicationFrames204--
+            if (planApplicationFrames204 == 0) {
+                wholeFrameReturned = true
+                returned = returnedPlanRequests204
+                returnedPlanRequests204 = None<ApplicationPlanRequestReturn204>
+            }
+        } finally { lock.unlock() }
+        while (returned.isSome()) {
+            let node = returned.getOrThrow()
+            returned = node.next
+            node.next = None<ApplicationPlanRequestReturn204>
+            node.custody.returnApplicationFrame204()
+        }
+        // Query existing return/ACK/task witnesses after the complete outer
+        // request helper and its real Application custody queue have returned.
+        // Collection creates no witness and cannot acknowledge a consumer.
+        if (wholeFrameReturned) { product.collectReturnedApplicationRequestData204() }
     }
 
     public func activeRunId(): String {
@@ -753,9 +807,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 if (!current || workMode() != mode) {
                     return pluginViewObservationError("view.session_changed", "actual View session changed before presentation") }
                 if (planBound) {
-                    let currentPlan = match (latestPlanReview(true)) {
+                    let currentPlan = match (latestPlanReview(true, hashOnly: true)) {
                         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-                    let hash = match (currentPlan) { case Some(value) => planReviewHash(value); case None => "" }
+                    let hash = match (currentPlan) { case Some(value) => value; case None => "" }
                     if (hash != primaryHash) {
                         return pluginViewObservationError("view.source_changed", "canonical plan changed during View observation") }
                 }
@@ -868,9 +922,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let primary = state.metadata().field("primary").getOrThrow()
         if (httpIntentText(primary, "kind") == "plan" && httpIntentText(primary, "sha256") != "") {
-            let current = match (latestPlanReview(true)) {
+            let current = match (latestPlanReview(true, hashOnly: true)) {
                 case Result.Err(error) => return Result.Err(error)
-                case Result.Ok(Some(value)) => planReviewHash(value)
+                case Result.Ok(Some(value)) => value
                 case Result.Ok(None) => "" }
             if (current != httpIntentText(primary, "sha256")) {
                 return pluginViewObservationError("view.source_changed", "canonical source changed after the View was displayed") }
@@ -940,10 +994,32 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (state.validateControl(control, fields)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        let pending = match (freezeProductPluginViewPending(product, control, fields)) {
+        let currentHash = match (latestPlanReview(true, hashOnly: true)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(Some(value)) => value
+            case Result.Ok(None) => return pluginViewObservationError("view.source_changed", "View no longer has its reviewed plan")
+        }
+        if (currentHash != control.contentHash) {
+            return pluginViewObservationError("view.source_changed", "canonical source changed before the user request was frozen") }
+        let proposedPlan = httpIntentText(fields, control.planField)
+        let currentDocument = if (proposedPlan.contains(PLAN_CONTRACT_OPEN)) { "" } else {
+            match (latestPlanReview(true)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(Some(value)) => value
+                case Result.Ok(None) => return pluginViewObservationError("view.source_changed", "View no longer has its reviewed plan")
+            }
+        }
+        let reviewedPlan = match (normalizeReviewedPlanEdit204(currentDocument, proposedPlan)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let pending = match (freezeProductPluginViewPending(product, control, fields, reviewedPlan)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         var retained = false
         try {
+            // Normalization used this immutable input String. Check the real
+            // independent field copy before publishing its confirmation, so a
+            // caller mutating its DTO cannot bind different prose to that plan.
+            if (httpIntentText(pending.data().field("fields").getOrThrow(), control.planField) != proposedPlan) {
+                return pluginViewObservationError("view.fields_invalid", "View input changed while its business request was frozen") }
             match (state.stage(pending)) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             retained = true
@@ -984,9 +1060,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             return pluginViewObservationError("view.confirmation_mismatch", "confirmation does not identify the actual frozen business request") }
         if (!confirmed) { return Result.Ok(Option<ProductPluginViewTransition>.None) }
         let fields = request.field("fields").getOrThrow()
-        let plan = httpIntentText(fields, httpIntentText(request, "plan_field"))
         let previousHash = httpIntentText(request, "content_hash")
-        let hash = planReviewHash(plan.trimAscii())
+        let reviewedPlan = state.confirmation().reviewedPlan204()
+        let hash = planReviewHash(reviewedPlan)
         let transition = match (freezeProductPluginViewTransition(product, state.metadata(), httpIntentText(request, "action"),
             hash, httpIntentText(fields, httpIntentText(request, "feedback_field")))) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -994,7 +1070,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         try {
             // Acquire all follow-on DATA before committing an actual user edit.
             if (httpIntentText(request, "action") == "save" || hash != previousHash) {
-                let edited = match (updateLatestPlan(previousHash, plan)) {
+                let edited = match (commitFrozenPlanReviewEdit204(previousHash, reviewedPlan, hash)) {
                     case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
                 if (planReviewHash(edited) != hash) {
                     return pluginViewObservationError("view.source_changed", "committed plan does not match the confirmed edit") }
@@ -2802,7 +2878,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         // call cannot enter the real client or replace this invocation's data.
         let value = try { invoke() }
             catch (error: OwnedCanonicalPaidFailure113) { OwnedAgentRunResult113.Pending(error.takeConsumer()) }
-            catch (_: Exception) { OwnedAgentRunResult113.Held }
+            catch (error: Exception) {
+                OwnedAgentRunResult113.Held
+            }
         captureOwnedClientOutcome113(slot, value)
     }
     private func startOwnedCheckpointApplication113(request: AgentRunRequest, events: AgentEventSink): Result<AgentRunOutcome> {
@@ -3310,12 +3388,14 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         }
         match(approvalGuidance.validateCurrent()){
             case Result.Err(error)=>return PlanApprovalOutcome.NotConsumed(error);case Result.Ok(_)=>()}
-        let currentBinding=product.vnext.publishedToolIdentity(approvalGuidance.planTool,
-            threadId:Some(ThreadId(sessionId.value)))
-        if(currentBinding.isNone() || currentBinding.getOrThrow().implementationVersion!=approvalGuidance.planVersion ||
-            currentBinding.getOrThrow().implementationFingerprint!=approvalGuidance.planFingerprint){
+        if(!product.workflowPublishedIdentityMatches204(sessionId, approvalGuidance.planTool,
+            approvalGuidance.planVersion, approvalGuidance.planFingerprint)){
             return PlanApprovalOutcome.NotConsumed(AgentError(AgentErrorKind.Conflict,
                 "workflow.source_changed","selected plan contribution changed before approval was consumed"))}
+        let executionContract = match (planReviewContract(review)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return PlanApprovalOutcome.NotConsumed(error)
+        }
         match (setWorkMode("")) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return PlanApprovalOutcome.NotConsumed(error)
@@ -3339,6 +3419,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             }
         }
         let note = feedback.trimAscii()
+        match (product.activateExecutionPlan(actualHash, sessionId, executionContract)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return PlanApprovalOutcome.Consumed(Result.Err(error))
+        }
         PlanApprovalOutcome.Consumed(
             submit(
                 "[plan-review approved hash=" + actualHash + " source=" + source + "] " +
@@ -3374,24 +3458,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         expectedHash: String,
         content: String
     ): Result<String> {
-        if (!planModeEnabled) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "application.plan_mode_inactive",
-                    "Plan mode is not active."
-                )
-            )
-        }
-        if (currentRequestSnapshot().isSome() || pendingApproval.isSome()) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "application.session_busy",
-                    "cannot edit the plan while an operation is active"
-                )
-            )
-        }
+        match (validatePlanEditState204()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let updatedContent = content.trimAscii()
         if (updatedContent == "") {
             return Result.Err(
@@ -3429,7 +3497,12 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 )
             )
         }
-        let current = planReviewContent(values[targetIndex], values,descriptiveHistory:false,currentBinding:true)
+        let currentDocument = match (product.reviewExecutionPlan(planReviewContent(values[targetIndex], values,
+            descriptiveHistory: false, currentBinding: true), sessionId: Some(sessionId))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let current = currentDocument
         if (expectedHash != "" && planReviewHash(current) != expectedHash) {
             return Result.Err(
                 AgentError(
@@ -3439,6 +3512,67 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 )
             )
         }
+        let validatedDocument = match (normalizeReviewedPlanEdit204(currentDocument, updatedContent)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        appendReviewedPlanEdit204(validatedDocument)
+    }
+
+    private func validatePlanEditState204(): Result<Unit> {
+        if (!planModeEnabled) {
+            return Result.Err(
+                AgentError(
+                    AgentErrorKind.Conflict,
+                    "application.plan_mode_inactive",
+                    "Plan mode is not active."
+                )
+            )
+        }
+        if (currentRequestSnapshot().isSome() || pendingApproval.isSome()) {
+            return Result.Err(
+                AgentError(
+                    AgentErrorKind.Conflict,
+                    "application.session_busy",
+                    "cannot edit the plan while an operation is active"
+                )
+            )
+        }
+        Result.Ok(())
+    }
+
+    private func normalizeReviewedPlanEdit204(currentDocument: String, updatedContent: String): Result<String> {
+        if (updatedContent.trimAscii() == "") {
+            return Result.Err(AgentError(AgentErrorKind.InvalidInput, "application.plan_empty", "the reviewed plan must not be empty")) }
+        let editedDocument = if (updatedContent.contains(PLAN_CONTRACT_OPEN)) { updatedContent } else {
+            let contract = match (planReviewContract(currentDocument)) {
+                case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+            planReviewDocument(updatedContent, planContractValue(contract))
+        }
+        product.reviewExecutionPlan(editedDocument, sessionId: Some(sessionId))
+    }
+    private func commitFrozenPlanReviewEdit204(previousHash: String, reviewedPlan: String,
+        reviewedHash: String): Result<String> {
+        match (validatePlanEditState204()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        // Both original binding/receipt and the proposed tool pins are checked
+        // again before committing. Neither check publishes another large Raw.
+        let current = match (latestPlanReview(true, hashOnly: true)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(Some(value)) => value
+            case Result.Ok(None) => return pluginViewObservationError("view.source_changed", "View no longer has its reviewed plan")
+        }
+        if (current != previousHash) {
+            return pluginViewObservationError("view.source_changed", "canonical source changed after the user request was frozen") }
+        let candidate = match (product.reviewedExecutionPlanHash204(reviewedPlan, sessionId)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (candidate != reviewedHash) {
+            return pluginViewObservationError("view.source_changed", "reviewed candidate changed after the user request was frozen") }
+        appendReviewedPlanEdit204(reviewedPlan)
+    }
+    private func appendReviewedPlanEdit204(validatedDocument: String): Result<String> {
+        match (validatePlanEditState204()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         // This is a user-authorized semantic edit, not a model ToolCall. Commit
         // it through the Thread owner as external user input rather than
         // fabricating an Operation that never executed.
@@ -3448,16 +3582,22 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             receiptId,
             ModelMessage(ModelRole.User, [ModelBlock(
                 ModelBlockKind.Text,
-                text: planReviewEditText(updatedContent)
+                text: planReviewEditText(validatedDocument)
             )]),
             source: "plan_review"
         )) {
-            case Result.Ok(_) => Result.Ok(updatedContent)
+            case Result.Ok(_) => Result.Ok(validatedDocument)
             case Result.Err(error) => Result.Err(error)
         }
     }
 
     public func submit(prompt: String, queuedInitiator113!: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>,
+        queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>): Result<ApplicationResponse> {
+        beginPlanApplicationFrame204()
+        try { submitFrame204(prompt, queuedInitiator113: queuedInitiator113, queuedInputPayment113: queuedInputPayment113) }
+        finally { returnPlanApplicationFrame204() }
+    }
+    private func submitFrame204(prompt: String, queuedInitiator113!: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>,
         queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>): Result<ApplicationResponse> {
         match (pendingRecovery) {
             case Some(error) => return Result.Err(error)
@@ -3511,6 +3651,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             modeSystem: guidance.system,
             guide: guidance.guide,
             readOnly: planModeEnabled || vibeModeEnabled,
+            planReviewControl: planModeEnabled,
             queuedInitiator113: queuedInitiator113, queuedInputPayment113: queuedInputPayment113,
             operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180
         )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -3529,6 +3670,13 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func decide(
+        operationId: String,
+        decision: ApprovalDecision
+    ): Result<ApplicationResponse> {
+        beginPlanApplicationFrame204()
+        try { decideFrame204(operationId, decision) } finally { returnPlanApplicationFrame204() }
+    }
+    private func decideFrame204(
         operationId: String,
         decision: ApprovalDecision
     ): Result<ApplicationResponse> {
@@ -3620,6 +3768,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func cancel(): Result<Unit> {
+        beginPlanApplicationFrame204()
+        try { cancelFrame204() } finally { returnPlanApplicationFrame204() }
+    }
+    private func cancelFrame204(): Result<Unit> {
         cancelPluginViewQuery()
         revokePluginView()
         lock.lock();try{todoEditorCompletion=None<ProductTodoEditorCompletion>}finally{lock.unlock()}
@@ -4087,7 +4239,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         match (product.runInspection(
             ThreadId(sessionId.value), runId, beforeCursor: beforeCursor, limit: 25
         )) {
-            case Result.Ok(page) => Result.Ok(localResponse(renderRunInspection(page)))
+            case Result.Ok(page) =>
+                let rendered = renderRunInspection(page)
+                page.returnPlanProjectionAfterConsumption204()
+                Result.Ok(localResponse(rendered))
             case Result.Err(error) => Result.Err(error)
         }
     }
@@ -4106,8 +4261,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             }
             return Result.Ok(localResponse("Plan mode disabled."))
         }
-        match(queryProductWorkflowGuidance(product,sessionId,"plan",product.toolsFor(
-            CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)]),threadId:Some(ThreadId(sessionId.value))))){
+        match(queryProductWorkflowGuidanceOwned204(product,sessionId,"plan",
+            Some(CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)])))){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>
                 currentPlanTool=value.planTool;currentPlanFingerprint=value.planFingerprint}
         match (setWorkMode("plan")) {
@@ -4169,7 +4324,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
 
-    private func latestPlanReview(requireStructured: Bool): Result<?String> {
+    private func latestPlanReview(requireStructured: Bool, hashOnly!: Bool = false): Result<?String> {
         let values = match (messages()) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -4185,7 +4340,13 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             index -= 1
             let written = planReviewContent(values[index], values,descriptiveHistory:!requireStructured,currentBinding:requireStructured)
             if (written != "") {
-                return Result.Ok(Some(written))
+                if (!requireStructured && !written.contains(PLAN_CONTRACT_OPEN)) { return Result.Ok(Some(written)) }
+                let reviewed = if (hashOnly) { product.reviewedExecutionPlanHash204(written, sessionId) }
+                    else { product.reviewExecutionPlan(written, sessionId: Some(sessionId)) }
+                return match (reviewed) {
+                    case Result.Ok(document) => Result.Ok(Some(document))
+                    case Result.Err(error) => Result.Err(error)
+                }
             }
         }
         if (requireStructured) {
@@ -4218,8 +4379,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         if (goalIsPresent()) {
             return modeConflict("vibe", "goal")
         }
-        match(queryProductWorkflowGuidance(product,sessionId,"vibe",product.toolsFor(
-            CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)]),threadId:Some(ThreadId(sessionId.value))))){
+        match(queryProductWorkflowGuidanceOwned204(product,sessionId,"vibe",
+            Some(CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)])))){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         match (setWorkMode("vibe")) {
             case Result.Ok(_) => ()
@@ -5448,7 +5609,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                     interactions: Some(this),
                     modeSystem: guidance.system,
                     guide: guidance.guide,
-                    readOnly: true, operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180
+                    readOnly: true, planReviewControl: true, operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180
                 )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
                 setCurrentRequest(Some(correction))
                 match (this.startOwnedCheckpointApplication113(correction, eventSink())) {
@@ -5555,7 +5716,12 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                         match(product.vnext.completedDataToolHistoryArguments(ThreadId(sessionId.value),
                             reply.receiptId,block.callId,block.name,
                             fingerprint:if(currentBinding){currentPlanFingerprint}else{""})){
-                            case Result.Ok(args)=>found=httpIntentText(args,"content").trimAscii()
+                            case Result.Ok(args)=>
+                                let content = httpIntentText(args,"content").trimAscii()
+                                found = match(args.field("contract")) {
+                                    case Some(contract) => planReviewDocument(content, contract)
+                                    case None => content
+                                }
                             case Result.Err(_)=>()
                         }
                     }
@@ -5582,7 +5748,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     private func activeWorkflowGuidance(): Result<ProductWorkflowGuidance> {
-        let value=match(queryProductWorkflowGuidance(product,sessionId,workMode(),activeTools())){
+        let capabilities: ?CapabilitySet = if (planModeEnabled || vibeModeEnabled) {
+            Some(product.readonlyToolCapabilities(sessionId))
+        } else { None<CapabilitySet> }
+        let value=match(queryProductWorkflowGuidanceOwned204(product,sessionId,workMode(),capabilities)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         match(value.validateCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         if(planModeEnabled){currentPlanTool=value.planTool;currentPlanFingerprint=value.planFingerprint}
@@ -5590,7 +5759,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     private func refreshCurrentPlanBinding(): Result<Unit> {
-        let current = match (queryProductWorkflowPlanBinding(product, sessionId, activeTools())) {
+        let capabilities: ?CapabilitySet = if (planModeEnabled || vibeModeEnabled) {
+            Some(product.readonlyToolCapabilities(sessionId))
+        } else { None<CapabilitySet> }
+        let current = match (queryProductWorkflowPlanBindingOwned204(product, sessionId, capabilities)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         currentPlanTool = current[0]
         currentPlanFingerprint = current[2]
@@ -5931,7 +6103,10 @@ func planWriteContent(message: ModelMessage): String {
     for (block in message.blocks where block.kind == ModelBlockKind.ToolCall) {
         if (block.name == "plan_write") {
             match (block.arguments.field("content")) {
-                case Some(value) => found = value.text
+                case Some(value) => found = match (block.arguments.field("contract")) {
+                    case Some(contract) => planReviewDocument(value.text, contract)
+                    case None => value.text
+                }
                 case None => ()
             }
         }
@@ -6193,4 +6368,12 @@ private func coreOwnedWaveAppInvoice113(targets: Int64, groups: Int64, wave: Boo
     if (!wave) { return amount }
     if (groups > (Int64.Max - amount) / 512) { throw IllegalStateException("checkpoint pending group invoice overflow") }
     amount + groups * 512
+}
+
+// One bounded DATA-return reference is covered by its request custody's
+// original metadata reservation; this carries no Run or Source authority.
+private class ApplicationPlanRequestReturn204 {
+    let custody: PlanRequestCustody204
+    var next: ?ApplicationPlanRequestReturn204
+    init(custody: PlanRequestCustody204, next: ?ApplicationPlanRequestReturn204) { this.custody = custody; this.next = next }
 }

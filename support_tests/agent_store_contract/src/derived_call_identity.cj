@@ -102,12 +102,13 @@ func derivedCallIdentityUpgradeContract(): Unit {
         f.database.execute("ALTER TABLE derived_operation_admissions DROP COLUMN child_call_id")
         f.database.execute("ALTER TABLE derived_operation_admissions DROP COLUMN root_operation_id")
         f.database.execute("ALTER TABLE derived_operation_admissions DROP COLUMN depth")
+        removePlanExecutionSchema(f.database)
         dropSchema28HistoricalFixtureTable(f.database)
         f.database.execute("PRAGMA user_version=26")
         f.database.close()
         let upgraded = SqliteDatabase(path)
         try {
-            expect(upgraded.scalarInt("PRAGMA user_version") == 28, "real schema26 database upgrades")
+            expect(upgraded.scalarInt("PRAGMA user_version") == 29, "real schema26 database upgrades")
             let row = upgraded.query("SELECT child_call_id,root_operation_id,depth FROM derived_operation_admissions WHERE operation_id='channel-child'")[0]
             expect(row.required(0) == "" && row.required(1) == "" && row.required(2) == "0",
                 "migration never fabricates missing child identity or ancestry")

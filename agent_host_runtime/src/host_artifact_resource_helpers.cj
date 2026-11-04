@@ -39,8 +39,10 @@ public func hostArtifactHex(bytes: Array<Byte>): String {
 }
 
 public func hostOperationStore(database: SqliteDatabase,
-    derivedSettlementFailureObserver!: ?(String, String, String, String) -> Unit = None): DurableOperationStore {
+    derivedSettlementFailureObserver!: ?(String, String, String, String) -> Unit = None,
+    planExecutionAllocation!: ?(Int64) -> LogicalJsonOwnerReservation = None): DurableOperationStore {
     DurableOperationStore(database,
+        planExecutionAllocation: planExecutionAllocation,
         documentPayloadAllocation: Some({ bytes => reserveNativeDocumentPayload(bytes) }),
         derivedSettlementFailureObserver: derivedSettlementFailureObserver)
 }

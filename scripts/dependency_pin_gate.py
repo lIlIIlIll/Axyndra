@@ -14,7 +14,10 @@ LLM4CJ_COMMIT = "fd83641c4f39fc5c299298187028e581e7a8616c"
 YJSON = "yjson"
 YJSON_GIT = "https://github.com/lIlIIlIll/yjson.git"
 YJSON_TAG = "0.1.0"
-YJSON_COMMIT = "c91859feb77aeba392a1fad0f99d731df66be831"
+# Lock v0 accepts the reviewed annotated tag or its peeled commit. SDK 1.1.3
+# and 1.3 both build the latter; lock v1 requires the exact peeled source.
+YJSON_TAG_OBJECT = "c91859feb77aeba392a1fad0f99d731df66be831"
+YJSON_COMMIT = "54b4965dee0f0b96710cbc678ec5ec9a126b055c"
 
 
 def load_toml(path: Path) -> dict[str, object]:
@@ -47,7 +50,7 @@ def expected_manifest_pin(dependency: str) -> dict[str, str]:
 
 def expected_lock_pin(dependency: str) -> dict[str, str]:
     expected = expected_manifest_pin(dependency)
-    expected["commitId"] = LLM4CJ_COMMIT if dependency == LLM4CJ else YJSON_COMMIT
+    expected["commitId"] = LLM4CJ_COMMIT if dependency == LLM4CJ else YJSON_TAG_OBJECT
     return expected
 
 
@@ -120,14 +123,28 @@ def check_root(root: Path) -> list[str]:
         except (OSError, tomllib.TOMLDecodeError) as error:
             errors.append(f"{lock_path}: cannot parse TOML: {error}")
             continue
+        version = lock.get("version", 0)
+        if type(version) is not int or version not in (0, 1):
+            errors.append(f"{lock_path.relative_to(root)}: unsupported lock version {version!r}")
+            continue
         for dependency, raw in dependency_entries(lock.get("requires", {})):
             lock_counts[dependency] += 1
+            expected = expected_lock_pin(dependency)
+            if (version == 0 and dependency == YJSON and isinstance(raw, dict)
+                    and raw.get("commitId") in (YJSON_TAG_OBJECT, YJSON_COMMIT)):
+                expected["commitId"] = raw["commitId"]
+            if version == 1:
+                # Compare the complete canonical source. Do not accept a correct
+                # legacy field next to a different source, branch or revision.
+                commit = LLM4CJ_COMMIT if dependency == LLM4CJ else YJSON_COMMIT
+                expected = {"source":
+                    f"git+{expected['git']}?tag={expected['tag']}#{commit}"}
             compare_pin(
                 errors,
                 lock_path.relative_to(root),
                 dependency,
                 raw,
-                expected_lock_pin(dependency),
+                expected,
             )
 
     for dependency, count in manifest_counts.items():

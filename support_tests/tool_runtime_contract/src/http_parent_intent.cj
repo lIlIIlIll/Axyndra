@@ -156,14 +156,20 @@ func httpParentIntentPreparationFor(method: String): Unit {
     expect(pendingChild.authorization == PreparedAuthorization.ApprovalRequired,
         method + " a pending parent does not preauthorize a child")
     operations.prepare(pending.operationId, context.runId, committed, pending.operationPlan).value().getOrThrow()
+    let frozenArguments = canonicalAgentValue(pending.operationPlan.canonicalArguments)
+    let preparationCalls = canonicalizer.calls
+    canonicalizer.query = "changed after preparation"
     let approved = match (pipeline.authorize(context, pending, ApprovalDecision.Approve,
         decisionSource: ApprovalDecisionSource.User)) {
         case Result.Ok(ToolAuthorization.Ready(value)) => value
         case Result.Err(error) => throw IllegalStateException(error.describe())
         case _ => throw IllegalStateException("HTTP fixture root was not approved")
     }
-    expect(approved.authorization == PreparedAuthorization.Approved && canonicalizer.calls >= 2,
-        method + " root consumes real User approval after rerunning pure preparation")
+    expect(approved.authorization == PreparedAuthorization.Approved && canonicalizer.calls == preparationCalls &&
+        canonicalAgentValue(approved.operationPlan.canonicalArguments) == frozenArguments &&
+        canonicalAgentValue(approved.operationPlan.canonicalArguments) == canonicalAgentValue(httpPreparationArguments(method)),
+        method + " User approval preserves the exact persisted HTTP intent without preparing a replacement payload; calls=" +
+        canonicalizer.calls.toString())
     let beforeChildAudit = audit.events.size
     let child = sourceReady(pipeline.prepareDerived(context, childCall, approved, requestKey))
     expect(child.authorization == PreparedAuthorization.ParentIntent && child.approval.isNone() &&
@@ -232,6 +238,7 @@ class HttpApprovalRecordingOperations <: OperationRuntimePort {
     var approvedOperation = ""
     var approvedSource = ""
     var approved = false
+    var frozenPlan: ?NormalizedOperationPlan = None
     public func prepare(id: OperationId, run: RunId, source: CommittedToolCallRef,
         plan: NormalizedOperationPlan): Result<Unit> { inner.prepare(id, run, source, plan) }
     public func prepareTrustedControlOperation(id: OperationId, run: RunId, item: ItemId,
@@ -268,7 +275,12 @@ class HttpApprovalRecordingOperations <: OperationRuntimePort {
     public func markExecutionHandoff(id: OperationId, run: RunId, thread: ThreadId, now: Int64): Result<Unit> {
         inner.markExecutionHandoff(id, run, thread, now)
     }
-    public func loadPlan(id: OperationId, run: RunId): Result<NormalizedOperationPlan> { inner.loadPlan(id, run) }
+    public func loadPlan(id: OperationId, run: RunId): Result<NormalizedOperationPlan> {
+        match (inner.loadPlan(id, run)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(value) => Result.Ok(match (frozenPlan) { case Some(saved) => saved; case None => value })
+        }
+    }
     public func loadCall(id: OperationId, run: RunId): Result<ToolCall> { inner.loadCall(id, run) }
     public func loadCommittedToolResult(id: OperationId, run: RunId): Result<?ToolResult> {
         inner.loadCommittedToolResult(id, run)

@@ -33,10 +33,10 @@ private class ChildStoreFixture111 {
     let epoch: Int64
     let parentPlan: NormalizedOperationPlan
     let childPlan: NormalizedOperationPlan
-    init(waiting!: Bool = false) {
+    init(waiting!: Bool = false, allocation!: ?(Int64)->LogicalJsonOwnerReservation = None) {
         directory = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         database = SqliteDatabase(directory + "/child.sqlite")
-        let sink = SqliteThreadCommitSink(database)
+        let sink = SqliteThreadCommitSink(database, knownParentAllocation: allocation)
         let coordinator = ThreadCoordinator(sink.createThread(thread, "/workspace"), sink)
         runtime = AgentThreadRuntime(coordinator, ContextProjector("child", ChildEstimator111()), { => 10 })
         let lane = ModelLane(ModelLaneRole.Main, "provider", "model", "responses", ModelLaneCapabilitiesSnapshot(),
@@ -54,7 +54,7 @@ private class ChildStoreFixture111 {
             case _ => throw IllegalStateException("child fixture canonical ToolCall did not commit")
         }
         source = OperationRootSource.Direct(childRequire111(runtime.attestDirectToolCall(item, parent, run, epoch)))
-        store = DurableOperationStore(database)
+        store = DurableOperationStore(database, documentPayloadAllocation: allocation)
         let actualLane = childRequire111(store.pluginDocumentLane(thread, run, epoch))
         let digest = modelPolicySha256Text("exact primitive fixture")
         let binding = objectValue([ValueField("namespace", textValue("axyndra:workflow")),
@@ -138,6 +138,64 @@ private class ChildStoreFixture111 {
 // required Host/Product pilot tests before this service can be enabled.
 @Test
 class PluginChildScopeTests111 {
+    @TestCase
+    func SupervisedNativeTaskChildrenReuseOnlyTheirCanonicalAdmittedRoot(): Unit {
+        let bank = LogicalJsonOwnerBudget()
+        let original = bank.acquire(131072)
+        let allocate = { bytes: Int64 =>
+            let child = original.deriveRetainedLease()
+            try { child.ensureRetainedPeak(bytes); child }
+            catch (error: Exception) { child.close(); throw error }
+        }
+        let f = ChildStoreFixture111(allocation: Some(allocate))
+        try {
+            let direct = match (f.source) { case OperationRootSource.Direct(value) => value
+                case _ => throw IllegalStateException("actual fixture Direct source is missing") }
+            childRequire111(f.store.prepareDirectOperation(direct, f.parentPlan))
+            let pin = objectValue([ValueField(f.parentPlan.toolName, objectValue([
+                ValueField("version", textValue(f.parentPlan.implementation.toolVersion)),
+                ValueField("fingerprint", textValue(f.parentPlan.implementation.implementationFingerprint)),
+                ValueField("schema_digest", textValue(f.parentPlan.implementation.schemaDigest))]))])
+            let action = PlanAction("delegate", [f.parentPlan.toolName], ["denied"], OperationEffectClass.ExternalMutation,
+                objectValue([]), 1, exactArguments: true, toolIdentities: pin, delegatedActionIds: ["leaf"])
+            let leaf = PlanAction("leaf", ["read"], ["denied"], OperationEffectClass.ReadOnly, objectValue([]), 1,
+                toolIdentities: objectValue([ValueField("read", objectValue([ValueField("version", textValue("1")),
+                    ValueField("fingerprint", textValue("leaf")), ValueField("schema_digest", textValue("leaf"))]))]))
+            let plans = DurablePlanExecutionStore(f.database, knownParentAllocation: Some(allocate))
+            childRequire111(plans.bind("native-task-plan", f.thread.value, f.run, PlanContract(["/workspace"], [
+                PlanExecutionStep(PlanStepId("delegate"), [], true, [action]),
+                PlanExecutionStep(PlanStepId("leaf"), [], true, [leaf])])) )
+            childRequire111(plans.admit(f.run, f.parent, "delegate", "delegate", f.parentPlan))
+            f.parentHandoff()
+            childRequire111(f.prepareChild())
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM derived_operation_admissions WHERE root_operation_id='' AND child_call_id='' AND depth=0"), 1)
+            @Expect(exactServiceChildAllowed(f.parentPlan, f.childPlan), true)
+            // Fault-inject only the canonical row's tree shape. An empty-root
+            // legacy Host child must never borrow a malformed readonly tree.
+            f.database.execute("UPDATE derived_operation_admissions SET depth=1 WHERE operation_id='primitive-child'")
+            @Expect(plans.admit(f.run, f.child, "", "", f.childPlan).isError(), true)
+            @Expect(f.store.markExecutingWithSource(Some(f.source), f.child, f.run, f.childPlan, 13, false).isError(), true)
+            f.database.execute("UPDATE derived_operation_admissions SET depth=0,child_call_id='forged-tree-call' WHERE operation_id='primitive-child'")
+            @Expect(plans.admit(f.run, f.child, "", "", f.childPlan).isError(), true)
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE operation_id='primitive-child' AND kind='operation_execution_handoff'"), 0)
+            f.database.execute("UPDATE derived_operation_admissions SET child_call_id='' WHERE operation_id='primitive-child'")
+            @Expect(plans.admit(f.run, f.child, "", "", f.childPlan).isOk(), true)
+            childRequire111(f.store.markExecutingWithSource(Some(f.source), f.child, f.run, f.childPlan, 13, false))
+            childRequire111(f.store.markExecutionHandoffWithSource(Some(f.source), f.child, f.run, f.thread, 14))
+            @Expect(f.verify().isOk(), true)
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM plan_action_admissions"), 1)
+            @Expect(f.database.scalarInt("SELECT attempt_no FROM plan_action_admissions"), 1)
+            childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt("receipt-" + f.child.value,
+                f.child, OperationOutcome.Unknown, objectValue([]), objectValue([]), 15)))
+            let owner = plans.openInspection204(f.run, original).value().getOrThrow()
+            let loan = owner.beginConsumer204()
+            let recovery = pluginChildRecoveryFrame204(loan)
+            loan.returnConsumerFrame204(); owner.closeAfterCaller204()
+            @Expect(recovery, true)
+            @Expect(plans.admit(f.run, f.parent, "delegate", "delegate", f.parentPlan).isError(), true)
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM plan_action_admissions"), 1)
+        } finally { f.close(); original.close() }
+    }
     @TestCase
     func onlyTheActualChildHandoffCanReachTheLaunchVerifier(): Unit {
         let f = ChildStoreFixture111()
@@ -236,4 +294,8 @@ class PluginChildWaitScopeTests111 {
             }finally{f.close()}
         }
     }
+}
+
+private func pluginChildRecoveryFrame204(loan: PlanExecutionReadConsumer204): Bool {
+    loan.value204().field("recovery_required").getOrThrow().asBool()
 }

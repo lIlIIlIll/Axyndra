@@ -5,6 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
+import agent_runtime.*
 import std.collection.*
 
 // Persistent compaction uses a high-water trigger and a lower target so one
@@ -84,12 +85,21 @@ public func estimateContextTokens(
 ): Int64 {
     var tokens = estimateTextTokens(system, 4) + 8
     for (tool in tools) {
-        tokens += 18 + estimateTextTokens(tool.name, 3) + estimateTextTokens(tool.description, 4) +
-            estimateAgentValueTokens(tool.inputSchema)
+        tokens += estimateToolTokensData204(tool.name, tool.description, tool.inputSchema)
     }
     for (message in messages) {
         tokens += estimateMessageTokens(message)
     }
+    max(1, tokens)
+}
+
+// Keep the original base/system/tools/messages order and final clamp when
+// a closed Catalog consumer has already reduced its tools to a scalar.
+public func estimateContextTokensWithToolTokens204(messages: Array<ModelMessage>, toolTokens: Int64,
+    system!: String = ""): Int64 {
+    var tokens = estimateTextTokens(system, 4) + 8
+    tokens += toolTokens
+    for (message in messages) { tokens += estimateMessageTokens(message) }
     max(1, tokens)
 }
 
@@ -182,19 +192,21 @@ public func buildRequestContext(
     budget: ResourceBudget,
     system!: String = "",
     tools!: Array<ModelToolDefinition> = [],
-    oversizedToolResultTokens!: Int64 = 12000
+    oversizedToolResultTokens!: Int64 = 12000,
+    inputTokenLimit!: Int64 = Int64.Max
 ): ContextWindow {
+    let maxInputTokens = min(budget.maxInputTokens, inputTokenLimit)
     let fixedTokens = estimateContextTokens([], system: system, tools: tools)
-    if (fixedTokens > budget.maxInputTokens) {
+    if (fixedTokens > maxInputTokens) {
         return ContextWindow([], fixedTokens, messages.size, 0, true)
     }
     let perPayloadLimit = min(
         oversizedToolResultTokens,
-        max(128, (budget.maxInputTokens - fixedTokens) / 3)
+        max(128, (maxInputTokens - fixedTokens) / 3)
     )
     let truncated = truncateHistoricalToolPayloads(messages, perPayloadLimit)
     let normalized = truncated.messages
-    let available = max(0, budget.maxInputTokens - fixedTokens)
+    let available = max(0, maxInputTokens - fixedTokens)
     var used: Int64 = 0
     var tokenStart = normalized.size
     var index = normalized.size
@@ -232,7 +244,7 @@ public func buildRequestContext(
         total,
         start,
         truncated.toolResults,
-        total > budget.maxInputTokens
+        total > maxInputTokens
     )
 }
 
@@ -321,57 +333,9 @@ func estimateImageTokens(image: ModelImage): Int64 {
     }
 }
 
-func estimateAgentValueTokens(value: AgentValue): Int64 {
-    match (value.unifiedKind) {
-        case ValueKind.Null | ValueKind.Boolean => 1
-        case ValueKind.Number => max(1, estimateTextTokens(value.asNumberText(), 3))
-        case ValueKind.Text => estimateTextTokens(value.text, 3) + 2
-        case ValueKind.List =>
-            var tokens: Int64 = 2
-            for (item in value.items) {
-                tokens += 1 + estimateAgentValueTokens(item)
-            }
-            tokens
-        case ValueKind.Object =>
-            var tokens: Int64 = 2
-            for (field in value.fields) {
-                tokens += 3 + estimateTextTokens(field.name, 3) + estimateAgentValueTokens(field.value)
-            }
-            tokens
-    }
-}
+func estimateAgentValueTokens(value: AgentValue): Int64 { estimateAgentValueTokensData204(value) }
 
-func estimateTextTokens(value: String, asciiDivisor: Int64): Int64 {
-    if (value == "") {
-        return 0
-    }
-    let bytes = unsafe { value.rawData() }
-    var weightedAscii: Int64 = 0
-    var unicodeTokens: Int64 = 0
-    var index: Int64 = 0
-    while (index < bytes.size) {
-        let byte = bytes[index]
-        if (byte < 128) {
-            weightedAscii += if ((byte >= 33 && byte <= 47) || (byte >= 58 && byte <= 64) ||
-                (byte >= 91 && byte <= 96) || (byte >= 123 && byte <= 126)) { 2 } else { 1 }
-            index += 1
-        } else if (byte >= 240) {
-            unicodeTokens += 2
-            index += min(4, bytes.size - index)
-        } else if (byte >= 224) {
-            unicodeTokens += 1
-            index += min(3, bytes.size - index)
-        } else if (byte >= 192) {
-            unicodeTokens += 1
-            index += min(2, bytes.size - index)
-        } else {
-            // Invalid/continuation bytes are charged conservatively.
-            unicodeTokens += 1
-            index += 1
-        }
-    }
-    unicodeTokens + (weightedAscii + asciiDivisor - 1) / asciiDivisor
-}
+func estimateTextTokens(value: String, asciiDivisor: Int64): Int64 { estimateTextTokensData204(value, asciiDivisor) }
 
 func truncateHistoricalToolPayloads(
     messages: Array<ModelMessage>,

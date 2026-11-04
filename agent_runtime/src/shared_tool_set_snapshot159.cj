@@ -196,6 +196,52 @@ public class SharedToolSetSnapshot159 {
             throw error
         }
     }
+    public func reserveModelToolSelection204(): LogicalJsonOwnerReservation {
+        var loan: ?SharedToolSnapshotLoan159 = None<SharedToolSnapshotLoan159>
+        try {
+            loan = Some(begin159(markModelCopyRefusal204: true))
+            let result = loan.getOrThrow().reserveModelToolSelection204()
+            let payments = sharedSnapshotReturnLoanFrame159(loan.getOrThrow())
+            loan = None<SharedToolSnapshotLoan159>
+            sharedSnapshotClosePayments159(payments)
+            result
+        } catch (error: ModelToolCopyInvoiceRefused204) {
+            match (loan) { case Some(actual) =>
+                let payments = sharedSnapshotReturnLoanFrame159(actual)
+                loan = None<SharedToolSnapshotLoan159>
+                sharedSnapshotClosePayments159(payments)
+                case None => () }
+            throw error
+        } catch (error: Exception) {
+            match (loan) { case Some(value) => value.holdFailure159(); case None => () }
+            throw error
+        }
+    }
+    public func copySelectedOwnedModelTools204(names: Array<String>): OwnedModelTools159 {
+        var loan: ?SharedToolSnapshotLoan159 = None<SharedToolSnapshotLoan159>
+        try {
+            loan = Some(begin159(markModelCopyRefusal204: true))
+            let result = loan.getOrThrow().copySelectedModelTools204(names)
+            let payments = sharedSnapshotReturnLoanFrame159(loan.getOrThrow())
+            loan = None<SharedToolSnapshotLoan159>
+            sharedSnapshotClosePayments159(payments)
+            result
+        } catch (error: ModelToolCopyInvoiceRefused204) {
+            // The exact prepay helper has fully unwound. No copy carrier or
+            // schema output was constructed; this private Source loan has
+            // never escaped. This is not a callback or worker ACK.
+            match (loan) {
+                case Some(actual) =>
+                    let payments = sharedSnapshotReturnLoanFrame159(actual)
+                    loan = None<SharedToolSnapshotLoan159>
+                    sharedSnapshotClosePayments159(payments)
+                case None => () }
+            throw error
+        } catch (error: Exception) {
+            match (loan) { case Some(value) => value.holdFailure159(); case None => () }
+            throw error
+        }
+    }
     func manifestCatalog159(): OwnedToolCatalogValue159 {
         // The original-bank phase exists before the carrier, registration and
         // compiler's complete catalog DOM/identity-digest construction.
@@ -249,6 +295,18 @@ public class SharedToolSetSnapshot159 {
             let payments = sharedSnapshotReturnLoanFrame159(loan.getOrThrow())
             loan = None<SharedToolSnapshotLoan159>
             sharedSnapshotClosePayments159(payments)
+        }
+    }
+    public func planReviewSafeExport159(name: String, version: String, fingerprint: String, schemaDigest: String): Bool {
+        var loan: ?SharedToolSnapshotLoan159 = Some(begin159())
+        try {
+            let answer = loan.getOrThrow().planReviewSafeExport159(name, version, fingerprint, schemaDigest)
+            let payments = sharedSnapshotReturnLoanFrame159(loan.getOrThrow())
+            loan = None<SharedToolSnapshotLoan159>
+            sharedSnapshotClosePayments159(payments)
+            answer
+        } catch (error: Exception) {
+            match (loan) { case Some(value) => value.holdFailure159(); case None => () }; throw error
         }
     }
     public func hasExportName159(name: String): Bool {
@@ -333,9 +391,9 @@ public class SharedToolSetSnapshot159 {
             sharedSnapshotClosePayments159(payments)
         }
     }
-    private func begin159(): SharedToolSnapshotLoan159 {
+    private func begin159(markModelCopyRefusal204!: Bool = false): SharedToolSnapshotLoan159 {
         lock.lock()
-        try { owner.getOrThrow().begin159() } finally { lock.unlock() }
+        try { owner.getOrThrow().begin159(markModelCopyRefusal204: markModelCopyRefusal204) } finally { lock.unlock() }
     }
     public func close159(): Unit {
         let payments = clearShareFrame159()
@@ -437,14 +495,16 @@ class SharedToolSnapshotState159 {
             value
         } finally { lock.unlock() }
     }
-    func begin159(): SharedToolSnapshotLoan159 {
+    func begin159(markModelCopyRefusal204!: Bool = false): SharedToolSnapshotLoan159 {
         lock.lock()
         try {
             if (shares == 0 || snapshot.isNone() || dataPayment.isNone()) {
                 throw IllegalStateException("snapshot has no live owning share")
             }
             if (loans == Int64.Max) { throw IllegalStateException("snapshot loan count overflow") }
-            let payment = sharedSnapshotPhase159(dataPayment.getOrThrow(), 131072)
+            let payment = if (markModelCopyRefusal204) {
+                modelToolCopyPhase204(dataPayment.getOrThrow(), 131072)
+            } else { sharedSnapshotPhase159(dataPayment.getOrThrow(), 131072) }
             let result = SharedToolSnapshotLoan159(this, snapshot.getOrThrow(), payment)
             loans++
             result
@@ -536,6 +596,21 @@ class SharedToolSnapshotLoan159 {
         result.installCopies159(snapshot.getOrThrow())
         result
     }
+    func reserveModelToolSelection204(): LogicalJsonOwnerReservation {
+        let count = snapshot.getOrThrow().entries.size
+        if (count > (Int64.Max - 16384) / 8192) { throw LogicalJsonPayloadError("model tool selection invoice overflow") }
+        modelToolCopyPhase204(payment.getOrThrow(), 16384 + count * 8192)
+    }
+    func copySelectedModelTools204(names: Array<String>): OwnedModelTools159 {
+        let paid = modelToolCopyPhase204(payment.getOrThrow(), 131072)
+        try { fundSelectedModelToolsFrame204(snapshot.getOrThrow(), names, paid) }
+        catch (error: Exception) { paid.close(); throw error }
+        // Prepayment, including every selected schema's actual shape, has
+        // completed before either the carrier or any definition copy exists.
+        let result = OwnedModelTools159(paid)
+        result.installSelectedCopies204(snapshot.getOrThrow(), names)
+        result
+    }
     func manifestCatalogValue159(): AgentValue {
         let meter = ToolSnapshotMeasure159(payment.getOrThrow())
         meter.addSnapshot159(snapshot.getOrThrow()); meter.fund159()
@@ -603,6 +678,13 @@ class SharedToolSnapshotLoan159 {
     }
     func thread159(thread: ThreadId): Bool {
         match (snapshot.getOrThrow().threadId) { case Some(value) => value.value == thread.value; case None => true }
+    }
+    func planReviewSafeExport159(name: String, version: String, fingerprint: String, schemaDigest: String): Bool {
+        for (entry in snapshot.getOrThrow().entries where entry.name == name) {
+            return entry.availableAtSnapshot && entry.planReviewSafe && entry.hasCompleteIdentity() &&
+                entry.executorVersion == version && entry.implementationFingerprint == fingerprint && entry.schemaDigest == schemaDigest
+        }
+        false
     }
     func hasName159(name: String): Bool {
         for (entry in snapshot.getOrThrow().entries where entry.name == name) { return true }
@@ -749,3 +831,23 @@ private func sharedSnapshotRetainedCountsFrame159(loan: SharedToolSnapshotLoan15
     loan.retainedReferenceCounts159(bytes, nodes)
 }
 private func sharedSnapshotStoredLaneFrame185(loan: SharedToolSnapshotLoan159, lane: AgentValue): Bool { loan.storedLane185(lane) }
+
+private func fundSelectedModelToolsFrame204(snapshot: ToolSetSnapshot, names: Array<String>,
+    payment: LogicalJsonOwnerReservation): Unit {
+    let meter = ToolSnapshotMeasure159(payment, true)
+    var count: Int64 = 0
+    for (entry in snapshot.entries where entry.availableAtSnapshot && names.contains(entry.name)) { count++ }
+    meter.addSlots159(count)
+    for (entry in snapshot.entries where entry.availableAtSnapshot && names.contains(entry.name)) {
+        meter.addText159(entry.name); meter.addText159(entry.description); meter.addValue159(entry.inputSchema)
+    }
+    meter.fund159()
+}
+private func modelToolCopyPhase204(parent: LogicalJsonOwnerReservation,
+    bytes: Int64): LogicalJsonOwnerReservation {
+    let payment = try { parent.deriveRetainedLease() }
+        catch (_: LogicalJsonPayloadError) { throw ModelToolCopyInvoiceRefused204() }
+    try { payment.ensureRetainedPeak(bytes); payment }
+    catch (_: LogicalJsonPayloadError) { payment.close(); throw ModelToolCopyInvoiceRefused204() }
+    catch (error: Exception) { payment.close(); throw error }
+}

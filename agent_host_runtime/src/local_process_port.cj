@@ -873,6 +873,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
                 "CANGJIE_SDK_ROOT", "CANGJIE_STDX_PATH", "JAVA_HOME"
             ], allowedSecrets: [], secretValues: []),
             resources: hostEffectiveProcessResources(defaultHostProcessSandboxResourceLimits(), request.processLimits),
+            writableRoots: request.approvedWriteRoots,
             readOnlyMounts: mounts.toArray(), pathEntries: []
         ))
         // sandbox4cj owns native process.close in its execution finally. The
@@ -894,7 +895,150 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         }
     }
 
+    private func validateApprovedWriteRoots(request: ProcessRequest): Result<Unit> {
+        if (request.approvedWriteRoots.isEmpty()) { return Result.Ok(()) }
+        try {
+            if (request.sandboxMode == ProcessSandboxMode.Host) { throw IllegalArgumentException("host filesystem bypass") }
+            let workspaceRoot = workspace.rootPath()
+            let cwd = if (request.workingDirectory == "") { workspaceRoot } else { request.workingDirectory }
+            if (!Path(cwd).isAbsolute() || canonicalize(cwd).toString() != cwd) {
+                throw IllegalArgumentException("process cwd changed")
+            }
+            var cwdAllowed = false
+            for (root in request.approvedWriteRoots) {
+                if (!Path(root).isAbsolute() || Path(root).normalize().toString() != root ||
+                    !exists(Path(root)) || !FileInfo(Path(root)).isDirectory() || canonicalize(root).toString() != root ||
+                    (root != workspaceRoot && !root.startsWith(workspaceRoot + "/"))) {
+                    throw IllegalArgumentException("process root changed")
+                }
+                if (cwd == root || cwd.startsWith(root + "/")) { cwdAllowed = true }
+            }
+            if (!cwdAllowed) { throw IllegalArgumentException("process cwd outside approved roots") }
+            Result.Ok(())
+        } catch (_: Exception) {
+            Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                "process.write_scope_invalid", "the process write roots or working directory are outside the approved workspace scope",
+                fields: [ErrorField("started", "false"), ErrorField("failure_class", "policy_denied")]))
+        }
+    }
+
+    public func executeProbe(request: ProcessRequest): Result<ProcessResult> {
+        if (request.resourceOwner.operation.isNone()) { return hostNativeModelAdmissionDenied<ProcessResult>() }
+        if (registryAdmission.isSome()) { return hostPluginResourceError("probe.registry_admission_unsupported", "a command probe requires canonical process execution admission") }
+        match (validateApprovedWriteRoots(request)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
+        }
+        if (request.sandboxMode == ProcessSandboxMode.Host) {
+            return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                "probe.host_filesystem_denied", "command probes require workspace isolation"))
+        }
+        if (request.sandboxMode == ProcessSandboxMode.IsolatedReadOnly) {
+            return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                "probe.isolated_root_unsupported", "command probes require the canonical workspace filesystem root",
+                fields: [ErrorField("started", "false"), ErrorField("failure_class", "policy_denied")]))
+        }
+        if (!sandboxEnabledValue) { return hostSandboxRequired<ProcessResult>(request) }
+        if (!networkPolicyModeIsDenied(request.networkPolicy.mode) &&
+            (sandboxCaBundleValue == "" || sandboxCaBundleMountValue.isNone())) {
+            return Result.Err(AgentError(AgentErrorKind.Configuration,
+                "sandbox.ca_unavailable", "no readable sandbox CA bundle is available"))
+        }
+        if (reservedOperationCancelled(request.operationId)) {
+            return Result.Err(AgentError(AgentErrorKind.Cancelled,
+                "process.cancelled", "process operation was cancelled before launch"))
+        }
+        let workingDirectory = match (workspace.resolve(
+            if (request.workingDirectory == "") { workspace.rootPath() } else { request.workingDirectory },
+            allowDirectory: true
+        )) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let lease = match (acquireNetworkGateway(request)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let helper = hostDefaultNetworkGatewayExecutable()
+        if (helper == "" || !Path(helper).isAbsolute() || !exists(Path(helper))) {
+            releaseNetworkGateway(lease)
+            return Result.Err(AgentError(AgentErrorKind.Configuration,
+                "probe.helper_unavailable", "the trusted command probe helper is unavailable",
+                fields: [ErrorField("started", "false"),
+                    ErrorField("failure_class", "infrastructure_unavailable")]))
+        }
+        let outputLimit = min(67108864, hostEffectiveProcessResources(
+            sandboxResourcesValue, request.processLimits).maxOutputBytes)
+        let probeArguments = ArrayList<String>()
+        probeArguments.add(all: ["--command-probe", request.timeoutMillis.toString(), outputLimit.toString(), "--", request.executable])
+        probeArguments.add(all: request.arguments)
+        let executionStarted = AtomicBool(false)
+        try {
+            let sandbox = processSandbox(request,
+                if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly) {
+                    FilesystemIsolationMode.WorkspaceReadOnly
+                } else { FilesystemIsolationMode.WorkspaceReadWrite },
+                networkLease: lease, probeHelper: helper)
+            match (sandbox.availability()) {
+                case SandboxResult.Err(error) => return Result.Err(hostSandboxAgentError(error))
+                case SandboxResult.Ok(_) => ()
+            }
+            let plan = match (sandbox.plan(WorkspaceSandboxCommand(
+                helper,
+                arguments: probeArguments.toArray(),
+                workingDirectory: workingDirectory,
+                environment: sandboxEnvironment(request),
+                timeoutMillis: request.timeoutMillis,
+                networkBridgeExecutable: match (lease) {
+                    case Some(value) => value.bridgeExecutable; case None => ""
+                },
+                networkBridgeSocket: match (lease) {
+                    case Some(value) => value.bridgeSocket; case None => ""
+                }
+            ))) {
+                case SandboxResult.Ok(value) => value
+                case SandboxResult.Err(error) => return Result.Err(hostSandboxAgentError(error))
+            }
+            // The plan's sandbox arguments include its resource limits,
+            // filtered environment and frozen network boundary. Bypass only
+            // the numeric-status timeout wrapper, never the sandbox itself.
+            let probeSandboxArguments = ArrayList<String>()
+            // The trusted helper (or mediated bridge) is namespace PID 1.
+            // A separate dumpable bwrap reaper would expose its protocol fd
+            // to target code through /proc/1/fd/1.
+            probeSandboxArguments.add("--as-pid-1")
+            probeSandboxArguments.add(all: plan.sandboxArguments)
+            let execution = try { runProcessWithDeadline(ProcessCommand(
+                plan.sandboxExecutable,
+                arguments: probeSandboxArguments.toArray(),
+                workingDirectory: plan.workingDirectory,
+                maxOutputBytes: outputLimit + 1024,
+                passedFileDescriptors: plan.passedFileDescriptors()
+            ), request.timeoutMillis + 2000,
+                onStarted: Some({process => executionStarted.store(true); register(request.operationId, process)})) } finally { plan.releasePinnedRoots() }
+            if (execution.timedOut || execution.result.status.code != 0 || execution.result.truncated) {
+                return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "probe.execution_unknown", "the probe helper did not provide a complete execution receipt"))
+            }
+            hostDecodeCommandProbeFrame(execution.result.stdout, workingDirectory,
+                SecretRedactor(request.redactedValues))
+        } catch (_: Exception) {
+            Result.Err(AgentError(
+                if (executionStarted.load()) { AgentErrorKind.RecoveryRequired } else { AgentErrorKind.Transport },
+                if (executionStarted.load()) { "probe.execution_unknown" } else { "probe.launch_failed" },
+                if (executionStarted.load()) { "the command probe failed after launch; its effects require recovery" }
+                    else { "the command probe could not launch" },
+                fields: [ErrorField("started", if (executionStarted.load()) { "true" } else { "false" }),
+                    ErrorField("failure_class", "infrastructure_unavailable")]))
+        } finally {
+            finish(request.operationId)
+            releaseNetworkGateway(lease)
+        }
+    }
+
+
     public func execute(request: ProcessRequest): Result<ProcessResult> {
+        match (validateApprovedWriteRoots(request)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        if (!request.approvedWriteRoots.isEmpty()) { return executeProbe(request) }
         if (request.resourceOwner.operation.isNone()) { return hostNativeModelAdmissionDenied<ProcessResult>() }
         let requiresSandbox = request.sandboxMode != ProcessSandboxMode.Host ||
             networkPolicyModeIsMediated(request.networkPolicy.mode) ||
@@ -1364,7 +1508,8 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         request: ProcessRequest,
         filesystem: FilesystemIsolationMode,
         networkLease!: ?NetworkGatewayLease = None,
-        strictChannel!: Bool = false
+        strictChannel!: Bool = false,
+        probeHelper!: String = ""
     ): WorkspaceSandbox {
         let filesystemRoot = if (request.sandboxMode == ProcessSandboxMode.IsolatedReadOnly) {
             canonicalize(Path(request.filesystemRoot)).toString()
@@ -1399,6 +1544,11 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
                     if (!duplicate) { mounts.add(caMount) }
                 case None => ()
             }
+        }
+        if (probeHelper != "") {
+            var duplicate = false
+            for (mount in mounts where mount.path == probeHelper) { duplicate = true }
+            if (!duplicate) { mounts.add(SandboxReadOnlyMount(probeHelper)) }
         }
         match (networkLease) {
             case Some(value) =>
@@ -1458,6 +1608,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
             resources: hostEffectiveProcessResources(
                 sandboxResourcesValue, request.processLimits
             ),
+            writableRoots: request.approvedWriteRoots,
             readOnlyMounts: mounts.toArray(),
             pathEntries: if (strictChannel) { [] } else { sandboxPathEntriesValue }
         ))

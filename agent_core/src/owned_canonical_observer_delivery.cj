@@ -96,9 +96,9 @@ class CoreOwnedPostToolFactory {
                 if (call.value != work.block.callId || operation.value != work.prepared.operationId.value ||
                     receipt != "receipt-" + work.prepared.operationId.value) {
                     throw IllegalStateException("actual complete canonical post-hook result changed") }
-                CoreToolHookPostEvent(work.block.name, work.prepared.operationPlan.canonicalArguments,
+                CoreToolHookPostEvent(work.block.name, work.operationPlan204().canonicalArguments,
                     operation.value, receipt, if (isError) { "failed" } else { "completed" },
-                    work.prepared.operationPlan.requiredCapabilities, result: Some(output))
+                    work.operationPlan204().requiredCapabilities, result: Some(output))
             case _ => throw IllegalStateException("actual complete canonical post-hook result missing") }
     }
 }

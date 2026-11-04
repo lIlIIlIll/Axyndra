@@ -144,6 +144,7 @@ class ProductSubagentState {
     let parentRunId: RunId
     let parentSessionId: SessionId
     let parentToolCallId: String
+    let delegationOperationId: String
     let depth: Int64
     let startedAt: Int64
     var status: String
@@ -177,7 +178,14 @@ class ProductSubagentState {
     var pluginCancellationRequested111 = false
     var pluginStartAdmitted111 = false
     let pluginWorkers111 = ArrayList<ProductPluginChildPhysicalWorker111>()
+    // Data retirement description only, observed after actual joins at close.
+    // Runtime admission still requires the original live worker objects.
+    var pluginWorkerAliasesClearedOnClose204 = false
     var pluginJobKey111: ?ProductAsyncJobKey = None
+    var pluginRequestFrame204: ?ProductChildRequestFrame204 = None<ProductChildRequestFrame204>
+    var pluginOwnedFailure113: ?OwnedAgentRunResult113 = None<OwnedAgentRunResult113>
+    let pluginFailureDisplays204 = ArrayList<LogicalJsonCopiedDisplayAllocation>()
+    var pluginFailureText204: String = ""
     var launchInProgress: Bool = false
     var executionInProgress: Bool = false
     var finishing: Bool = false
@@ -201,6 +209,7 @@ class ProductSubagentState {
         capabilities!: CapabilitySet = CapabilitySet(),
         capabilityCeilingKnown!: Bool = true,
         budgetAuthority!: ?ToolInvocationContext = None,
+        delegationOperationId!: String = "",
         startedAt!: Int64 = 0,
         status!: String = "running",
         lastUpdate!: Int64 = 0,
@@ -224,6 +233,7 @@ class ProductSubagentState {
         this.capabilities = capabilities
         this.capabilityCeilingKnown = capabilityCeilingKnown
         this.budgetAuthority = budgetAuthority
+        this.delegationOperationId = delegationOperationId
         this.budgetParentRunId = parentRunId
         this.status = status
         this.startedAt = if (startedAt > 0) { startedAt } else { nowMillis() }
@@ -641,6 +651,23 @@ class ProductJobCancelCapture172 {
     }
 }
 
+// Actual Product DATA frame only. It holds no Run/Source/Receipt or task
+// completion fact; the original supervisor still owns those facts and workers.
+class ProductChildRequestFrame204 {
+    var parentRunId: RunId
+    var parentOperationId: OperationId
+    var session: ?SessionId = None<SessionId>
+    var custody: ?PlanRequestCustody204 = None<PlanRequestCustody204>
+    var stateId: String = ""
+    var inheritedFresh = false
+    var workerAttempted = false
+    var returned = false
+    var applicationReturned = false
+    init(parentRunId: RunId, parentOperationId: OperationId) {
+        this.parentRunId = parentRunId; this.parentOperationId = parentOperationId
+    }
+}
+
 public class ProductTaskRuntime {
     private let lock = Mutex()
     private let records = ArrayList<ProductSubagentState>()
@@ -657,6 +684,7 @@ public class ProductTaskRuntime {
     private var processSupervisor: ?ProductProcessSupervisor = None
     private var processOwner180: ?ActualProcessBrokerRoot180 = None<ActualProcessBrokerRoot180>
     private var taskPersistence: ?ProductTaskPersistence = None
+    private var planExecutionRuntime: ?PlanExecutionPort = None
     private let stateRevisions = HashMap<String, Int64>()
     private let childBudgetPools = HashMap<String, ChildBudgetPool>()
     private let childBudgetOrder = ArrayList<String>()
@@ -684,6 +712,166 @@ public class ProductTaskRuntime {
     ) {
         this.asyncEnabled = asyncEnabled
         this.allowUnsafeDirectLaunchForTests = allowUnsafeDirectLaunchForTests
+    }
+
+    // Share the canonical supervisor with the actual owned child channel.
+    // This hook does not replace that channel's capability or custody checks.
+    public func bindPlanExecutionRuntime(plans: PlanExecutionPort): Unit {
+        lock.lock()
+        try {
+            if (planExecutionRuntime.isSome()) {
+                throw IllegalStateException("plan execution runtime is already attached")
+            }
+            planExecutionRuntime = Some(plans)
+        } finally { lock.unlock() }
+    }
+
+    private func supervisedChildRun(runId: RunId): Result<Bool> {
+        let plans: ?PlanExecutionPort
+        lock.lock()
+        try { plans = planExecutionRuntime } finally { lock.unlock() }
+        match (plans) {
+            case None => Result.Ok(false)
+            case Some(supervisor) => match (supervisor.executionForRun(runId)) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(binding) => Result.Ok(binding.isSome())
+            }
+        }
+    }
+
+    private func returnedChildProductFrame204(frame: ProductChildRequestFrame204): Unit {
+        let plans: ?PlanExecutionPort
+        var unstartedAdmission = None<HostPluginChildAdmission111>
+        lock.lock()
+        try {
+            frame.returned = true
+            plans = planExecutionRuntime
+            if (frame.workerAttempted) { return }
+            if (frame.stateId != "") {
+                match (findSubagentLocked(frame.stateId)) {
+                    case Some(state) =>
+                        if (state.pluginRequestFrame204.isNone() || !refEq(state.pluginRequestFrame204.getOrThrow(), frame) ||
+                            !state.pluginWorkers111.isEmpty() || state.launchInProgress) { return }
+                        // The complete preparation helper has returned and no
+                        // worker was attempted. Drop its actual request alias.
+                        state.pendingRequest = None<AgentRunRequest>
+                        state.executionInProgress = false
+                        match (persistRootLocked(state.parentSessionId)) {
+                            case Result.Err(_) => return
+                            case Result.Ok(_) => ()
+                        }
+                        state.pluginCurrentBudgetAuthority111 = None<ToolInvocationContext>
+                        state.budgetAuthority = None<ToolInvocationContext>
+                        unstartedAdmission = state.pluginAdmission111
+                    case None => ()
+                }
+            }
+        } finally { lock.unlock() }
+        match (unstartedAdmission) {
+            case Some(actual) =>
+                // This is the distinct actual never-submitted producer fence:
+                // the complete helper returned and no physical worker existed.
+                actual.returnContextAfterOriginalChildHelpers180()
+                actual.returnTaskPreparedAfterOriginalHelpers204()
+            case None => ()
+        }
+        match (frame.custody) {
+            case Some(value) => match (value.returnUnsubmittedApplicationFrame204()) {
+                case Result.Err(_) => return
+                case Result.Ok(_) => frame.applicationReturned = true
+            }
+            case None => ()
+        }
+        if (frame.inheritedFresh) {
+            match (plans) {
+                case Some(value) => match (frame.session) {
+                    case Some(session) => let _ = value.abandonUnstartedChild204(
+                        frame.parentRunId, session.value, frame.parentOperationId)
+                    case None => ()
+                }
+                case None => ()
+            }
+        }
+    }
+
+    // Scalar observation of the actual child DATA owner only. This neither
+    // exposes its request/custody nor performs a return or completion ACK.
+    public func planChildRequestDataReturned204(id: String): Bool {
+        lock.lock()
+        try {
+            let state = match (findSubagentLocked(id)) { case Some(value) => value; case None => return false }
+            let frame = match (state.pluginRequestFrame204) { case Some(value) => value; case None => return false }
+            match (frame.custody) { case Some(value) => value.isDataReturned204(); case None => false }
+        } finally { lock.unlock() }
+    }
+
+    // DATA-only observation: missing state/frame/custody is not paid evidence.
+    // No request alias escapes and this performs no return, ACK or admission.
+    public func planChildRequestDataPaid204(id: String): Bool {
+        lock.lock()
+        try {
+            let state = match (findSubagentLocked(id)) { case Some(value) => value; case None => return false }
+            let frame = match (state.pluginRequestFrame204) { case Some(value) => value; case None => return false }
+            match (frame.custody) { case Some(value) => !value.isDataReturned204(); case None => false }
+        } finally { lock.unlock() }
+    }
+
+    // DATA validation only: reads actual transient owner state. It does not
+    // authorize execution, clean consumers, or attest business completion.
+    public func planChildTransientDataReturned204(id: String): Bool {
+        lock.lock()
+        try {
+            let state = match (findSubagentLocked(id)) { case Some(value) => value; case None => return false }
+            let actual = match (state.pluginAdmission111) { case Some(value) => value; case None => return false }
+            if (state.pendingRequest.isSome() || state.pluginProjectionPayment151.isSome() ||
+                state.pluginCompletion111.isSome() || state.pluginCompletionPending111.isSome() ||
+                !state.pluginWorkers111.isEmpty() || !actual.taskPrivateConsumersReturned204() ||
+                !actual.taskTransientDataReturned204()) { return false }
+            match (state.pluginOriginalAdmission111) {
+                case Some(original) => original.taskTransientDataReturned204()
+                case None => true
+            }
+        } finally { lock.unlock() }
+    }
+    // Historical descriptions remain readable and paid after resource close.
+    // This DATA observation is neither a business receipt nor an execution grant.
+    public func planChildDescriptionHeaderPaid204(id: String): Bool {
+        lock.lock()
+        try {
+            let state = match (findSubagentLocked(id)) { case Some(value) => value; case None => return false }
+            match (state.pluginAdmission111) { case Some(value) => value.taskStateHeaderPaid204(); case None => false }
+        } finally { lock.unlock() }
+    }
+
+    private func inheritApprovedChild(id: String, sessionId: SessionId): Result<Unit> {
+        let plans: ?PlanExecutionPort
+        let parentRunId: RunId
+        let parentOperationId: String
+        lock.lock()
+        try {
+            plans = planExecutionRuntime
+            let state = findSubagentLocked(id).getOrThrow()
+            parentRunId = state.parentRunId
+            parentOperationId = state.delegationOperationId
+        } finally { lock.unlock() }
+        match (plans) {
+            case None => Result.Ok(())
+            case Some(supervisor) => match (supervisor.executionForRun(parentRunId)) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(Some(_)) =>
+                    if (parentOperationId == "") {
+                        return taskError("plan.child_delegation_missing",
+                            "supervised child requires its immutable canonical Operation binding")
+                    }
+                    supervisor.inherit(parentRunId, sessionId.value, OperationId(parentOperationId))
+                case Result.Ok(None) => match (supervisor.executionForSession(sessionId.value)) {
+                    case Result.Err(error) => Result.Err(error)
+                    case Result.Ok(Some(_)) => taskError("plan.child_parent_unbound",
+                        "supervised child requires its approved parent execution")
+                    case Result.Ok(None) => Result.Ok(())
+                }
+            }
+        }
     }
 
     func attach(value: ProductRuntime, persistence: ProductTaskPersistence, ownerRoot180!: ?ActualProcessBrokerRoot180 = None<ActualProcessBrokerRoot180>): Unit {
@@ -726,9 +914,19 @@ public class ProductTaskRuntime {
         true
     }
 
+    private func pluginOriginalProducerReturned204(state: ProductSubagentState): Bool {
+        if (closing && state.pluginWorkerAliasesClearedOnClose204) { return true }
+        if (!state.pluginWorkers111.isEmpty()) { return pluginWorkersReturnedLocked111(state) }
+        match (state.pluginRequestFrame204) {
+            case Some(frame) => frame.returned && !frame.workerAttempted &&
+                state.pendingRequest.isNone() && !state.launchInProgress && !state.executionInProgress
+            case None => false
+        }
+    }
+
     private func startPluginWorker111<T>(state: ProductSubagentState,
         build: () -> (() -> Result<T>), idle!: Bool = false,
-        cleanup!: Bool = false): Result<ProductPluginChildWorkerResult111<T>> {
+        cleanup!: Bool = false, requestFrame204!: ?ProductChildRequestFrame204 = None<ProductChildRequestFrame204>): Result<ProductPluginChildWorkerResult111<T>> {
         lock.lock()
         try {
             let actual = findSubagentLocked(state.id)
@@ -745,8 +943,12 @@ public class ProductTaskRuntime {
                 // Both growing lists, holder, closure and future are paid
                 // before construction. Existing request objects are retained
                 // by their original owner; no data payment is released here.
-                state.pluginAdmission111.getOrThrow().retainWorkerMetadata111(
+                state.pluginAdmission111.getOrThrow().retainTaskWorkerMetadata204(
                     16384 + ownedPluginWorkers111.size * 64 + state.pluginWorkers111.size * 64)
+                // A refused initial metadata payment created no result/list/
+                // spawn. Every failure after this actual construction fence
+                // remains conservatively attempted, including unknown spawn.
+                match (requestFrame204) { case Some(frame) => frame.workerAttempted = true; case None => () }
                 let result = ProductPluginChildWorkerResult111<T>()
                 // Register paid custody BEFORE spawn. A failed list growth or
                 // action factory cannot leave an already running orphan.
@@ -803,7 +1005,7 @@ public class ProductTaskRuntime {
         try {
             for (state in records where state.pluginAdmission111.isSome()) {
                 if (!state.pluginCompletionDone111 || childBudgetLeases.get(state.id).isSome() ||
-                    state.launchInProgress || state.executionInProgress || !pluginWorkersReturnedLocked111(state)) { return true }
+                    state.launchInProgress || state.executionInProgress || !pluginOriginalProducerReturned204(state)) { return true }
             }
             false
         } finally { lock.unlock() }
@@ -838,6 +1040,19 @@ public class ProductTaskRuntime {
     }
 
     public func close(): Result<Unit> {
+        // The entire original join/cleanup frame (including its arrays of
+        // Future/wrapper aliases) returns before any metadata refund.
+        match (closeOriginalWorkerFrame204()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        let projections = clearReturnedTaskPrivateDataFrame204()
+        for (payment in projections) { payment.closeUnpublished151() }
+        retireReturnedTaskHistoryFrame204()
+        Result.Ok(())
+    }
+
+    private func closeOriginalWorkerFrame204(): Result<Unit> {
         let targets = ArrayList<ProductSubagentSnapshot>()
         let jobTargets = ArrayList<ProductAsyncJobKey>()
         let workers: Array<Future<Unit>>
@@ -908,6 +1123,77 @@ public class ProductTaskRuntime {
                 firstError
             ))
         }
+    }
+
+    private func clearReturnedTaskPrivateDataFrame204(): Array<HostPaidValueProjection151> {
+        let projections = ArrayList<HostPaidValueProjection151>()
+        lock.lock()
+        try {
+            if (!closing) { return [] }
+            for (state in records where state.pluginAdmission111.isSome()) {
+                let admission = state.pluginAdmission111.getOrThrow()
+                if (!admission.hasClosedTaskData204() || state.executionInProgress || state.launchInProgress ||
+                    state.finishing || state.pendingRequest.isSome() || !state.pluginCompletionDone111 ||
+                    childBudgetLeases.get(state.id).isSome() || !pluginOriginalProducerReturned204(state) ||
+                    !admission.taskPrivateConsumersReturned204()) { continue }
+                var joined = true
+                for (worker in state.pluginWorkers111) {
+                    if (!worker.originalFutureAliasesReturned180()) { joined = false }
+                }
+                if (!joined || admission.hasRetainedOriginalContext180()) { continue }
+                // Remove only real already-observed private worker aliases.
+                // Ordinary records/snapshot descriptions remain intact/paid.
+                for (worker in state.pluginWorkers111) {
+                    var index: Int64 = 0
+                    while (index < ownedPluginWorkers111.size) {
+                        if (refEq(ownedPluginWorkers111[index], worker)) { ownedPluginWorkers111.remove(at: index) }
+                        else { index++ }
+                    }
+                }
+                state.pluginWorkers111.clear()
+                state.pluginWorkerAliasesClearedOnClose204 = true
+                // Background job.result has the legacy raw snapshot contract.
+                // Keep those actual aliases/payment; synchronous Task output
+                // has already crossed an independent real publication lease.
+                if (state.pluginJobKey111.isNone() && state.pluginProjectionPayment151.isSome()) {
+                    let payment = state.pluginProjectionPayment151.getOrThrow()
+                    state.pluginCompletion111 = None<AgentValue>
+                    state.pluginCompletionPending111 = None<AgentValue>
+                    state.pluginProjectionPayment151 = None<HostPaidValueProjection151>
+                    var index: Int64 = 0
+                    while (index < projectionUnretired151.size) {
+                        if (refEq(projectionUnretired151[index], payment)) { projectionUnretired151.remove(at: index) }
+                        else { index++ }
+                    }
+                    projections.add(payment)
+                }
+            }
+            projections.toArray()
+        } finally { lock.unlock() }
+    }
+
+    private func retireReturnedTaskHistoryFrame204(): Unit {
+        lock.lock()
+        try {
+            if (!closing) { return }
+            for (state in records where state.pluginAdmission111.isSome()) {
+                if (state.executionInProgress || state.launchInProgress || state.finishing ||
+                    state.pendingRequest.isSome() || !state.pluginCompletionDone111 ||
+                    childBudgetLeases.get(state.id).isSome() || !pluginOriginalProducerReturned204(state)) { continue }
+                var returned = true
+                for (worker in state.pluginWorkers111) {
+                    if (!worker.originalFutureAliasesReturned180()) { returned = false }
+                }
+                if (!returned || state.pluginAdmission111.getOrThrow().hasRetainedOriginalContext180() ||
+                    !state.pluginAdmission111.getOrThrow().taskPrivateConsumersReturned204()) { continue }
+                state.pluginAdmission111.getOrThrow().returnTaskWorkerMetadataAfterPrivateAliases204()
+                let _ = state.pluginAdmission111.getOrThrow().retireTaskHistoryAfterProductFrame204()
+                match (state.pluginOriginalAdmission111) {
+                    case Some(original) => let _ = original.retireTaskHistoryAfterProductFrame204()
+                    case None => ()
+                }
+            }
+        } finally { lock.unlock() }
     }
 
     private func restoreTaskStateLocked(values: Array<ProductTaskPersistedRoot>): Unit {
@@ -1212,7 +1498,8 @@ public class ProductTaskRuntime {
         let stage = match (startPluginWorker111<Unit>(state,
             { => { => decideSubagentApprovalAction111(rootSessionId, subagentId, decision) } }, idle: true)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        stage.collect()
+        try { stage.collect() }
+        finally { collectCompletedPluginChildContexts180() }
     }
 
     private func decideSubagentApprovalAction111(
@@ -1268,14 +1555,14 @@ public class ProductTaskRuntime {
             match (validatePluginChildContinuation111(subagentId)) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let _ = tasks.transition(TaskId(subagentId), TaskStatus.Running)
-            match (childRunAction(subagentId, { => runtime.client.decide(
+            match (childRunAction(subagentId, { => invokeOwnedChildRun204(subagentId, { => runtime.client.decideOwnedCheckpointFailure113(
                 request,
                 approval,
                 decision,
                 {event => recordChildEvent(subagentId, event)}
-            ) })) {
+            ) }) })) {
                 case Result.Err(error) =>
-                    let ended = finishSubagent(subagentId, "failed", error: error.message)
+                    let ended = finishSubagent(subagentId, "failed", error: childFailureDisplayText204(subagentId, error.message))
                     if (ended.status == "recovery_required") {
                         taskError<Unit>("child.budget_recovery_required", ended.error)
                     } else { Result.Err(error) }
@@ -2076,21 +2363,53 @@ public class ProductTaskRuntime {
     // original Core admission notification, never by merely queuing a worker.
     func startPluginChild111(context: ToolInvocationContext, value: AgentValue,
         admission: HostPluginChildAdmission111): Result<ToolResult> {
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        admission.retainWorkerMetadata111(16384)
+        let frame = ProductChildRequestFrame204(context.runId, admission.canonicalParentOperationId111)
+        try { startPluginChildFrame204(context, value, admission, frame) }
+        finally { returnedChildProductFrame204(frame); collectCompletedPluginChildContexts180() }
+    }
+
+    private func startPluginChildFrame204(context: ToolInvocationContext, value: AgentValue,
+        admission: HostPluginChildAdmission111, frame: ProductChildRequestFrame204): Result<ToolResult> {
         let data = try { ProductPluginChildRequest111(value) } catch (_: Exception) {
             return taskError("child.request_invalid", "invalid frozen child request") }
         // The existing operator switch may run a background-requested role inline.
-        let background = data.background && asyncEnabled
+        let supervised = match (supervisedChildRun(context.runId)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value
+        }
+        let background = data.background && asyncEnabled && !supervised
         match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let runtime = match (attachedProduct()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
         let model = if (data.modelAlias == "") { parentModel(runtime, context.sessionId) } else { data.modelAlias }
-        let base = match (runtime.prepareRequest(data.prompt, modelOverride: model, thinking: data.thinking, inheritedModelSettings180: Some(context.modelSettingsDescriptor180()))) {
+        let childSession = runtime.ids.nextSessionId()
+        frame.session = Some(childSession)
+        let plans: ?PlanExecutionPort
+        lock.lock(); try { plans = planExecutionRuntime } finally { lock.unlock() }
+        if (supervised) {
+            let supervisor = plans.getOrThrow()
+            match (supervisor.inherit(context.runId, childSession.value, admission.canonicalParentOperationId111)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => frame.inheritedFresh = true
+            }
+        }
+        let base = match (runtime.prepareRequest(data.prompt, sessionId: Some(childSession), modelOverride: model,
+            thinking: data.thinking, inheritedModelSettings180: Some(context.modelSettingsDescriptor180()))) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+        frame.custody = base.planRequestCustody204
         let capabilities = effectiveChildCapabilities(context.capabilities, data.ceiling, context.capabilities)
         let child = productPluginChildRequest111(base, data, capabilities, context.budget)
         let depth = depthForRun(context.runId) + 1
-        if (depth > child.budget.maxDepth) { return taskError("subagent.budget_exceeded", "subagent resource budget exceeded") }
-        let state = match (createPluginChild111(runtime, context, data, child, depth, admission)) {
+        match (requirePluginChildDepth204(depth, child.budget)) {
+            case Result.Err(error) =>
+                return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        let state = match (createPluginChild111(runtime, context, data, child, depth, admission, frame)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+        frame.stateId = state.id
+        lock.lock(); try { state.pluginRequestFrame204 = Some(frame) } finally { lock.unlock() }
         match (reserveChildBudget(context, state.id, executionBudgetFrom(child.budget))) {
             case Result.Err(error) =>
                 let _ = finishSubagent(state.id, "failed", error: error.message); releaseChildExecution(state.id)
@@ -2108,12 +2427,14 @@ public class ProductTaskRuntime {
                 return Result.Err(error)
             case Result.Ok(_) => () } }
         let worker = match (startPluginWorker111<ToolResult>(state,
-            { => { => runPluginChild111(runtime, state.id, child, admission) } })) {
+            { => { => runPluginChild111(runtime, state.id, child, admission) } }, requestFrame204: Some(frame))) {
             case Result.Err(error) =>
                 let _ = finishSubagent(state.id, "failed", error: error.message); releaseChildExecution(state.id)
                 return Result.Err(error)
             case Result.Ok(value) => value }
-        if (!background && !data.admissionOnly) { return worker.collect() }
+        // A supervised launch waits for the original physical worker collector;
+        // an admission-only/background result cannot seal unsettled child work.
+        if (!background && (!data.admissionOnly || supervised)) { return worker.collect() }
         while (true) {
             match (context.cancellation.check()) {
                 case Result.Err(error) => let _ = runtime.client.cancel(child.runId); return Result.Err(error)
@@ -2615,7 +2936,7 @@ public class ProductTaskRuntime {
             // It is never used as the authority for the next Run. A persisted
             // historical-definition reader will be a separate verified path;
             // absent live data currently refuses this incomplete WIP route.
-            let definition=state.pluginAdmission111.getOrThrow().frozenDefinition111()
+            state.pluginAdmission111.getOrThrow().withFrozenDefinition204({ definition =>
             var bytes=logicalJsonWriteReservationBytes(definition,8388608)+16384
             var nodes=logicalJsonValueNodeCount(definition)+256
             for(text in [caller.id,caller.sessionId.value,caller.rootSessionId.value,state.id,state.sessionId.value,
@@ -2645,7 +2966,8 @@ public class ProductTaskRuntime {
                         ValueField("sender_session",textValue(caller.sessionId.value)),ValueField("root_thread",textValue(caller.rootSessionId.value)),
                         ValueField("counter",integerValue(messageCounter)),ValueField("message",message),ValueField("target",target)]))])
             })
-            Result.Ok(output)
+            Result<AgentValue>.Ok(output)
+            })
         } finally {lock.unlock()}
     }
 
@@ -2941,7 +3263,19 @@ public class ProductTaskRuntime {
     // Main ACK association remain the original immutable Task fields.
     private func resumePluginPeerMember111(context:ToolInvocationContext,input:AgentValue,
         admission:HostPluginChildAdmission111):Result<ToolResult> {
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        admission.retainWorkerMetadata111(16384)
+        let frame = ProductChildRequestFrame204(context.runId, admission.canonicalParentOperationId111)
+        try { resumePluginPeerMemberFrame204(context, input, admission, frame) }
+        finally { returnedChildProductFrame204(frame); collectCompletedPluginChildContexts180() }
+    }
+    private func resumePluginPeerMemberFrame204(context:ToolInvocationContext,input:AgentValue,
+        admission:HostPluginChildAdmission111, frame: ProductChildRequestFrame204):Result<ToolResult> {
         match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let supervised = match (supervisedChildRun(context.runId)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value
+        }
         let runtime=match(attachedProduct()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         let resume=input.field("resume").getOrThrow();let proposal=resume.field("proposal").getOrThrow()
         let target=proposal.field("target").getOrThrow();let id=httpIntentText(target,"id")
@@ -2964,27 +3298,44 @@ public class ProductTaskRuntime {
         if(!isTerminalRunState(previous.status) || previous.status==RunState.RecoveryRequired ||
             previous.sessionId.value!=old.sessionId.value) {
             return taskError("peer.member_run_unsettled","previous actual child Run is not terminal") }
+        frame.session = Some(old.sessionId)
+        frame.parentRunId = old.parentRunId
+        frame.parentOperationId = OperationId(old.delegationOperationId)
         let next=proposal.field("request").getOrThrow()
         // Original revival uses the current Root model and thinking defaults;
         // the Native recipe contributes only prompt/role ceiling/limits.
         let base=match(runtime.prepareRequest(httpIntentText(next,"prompt"),sessionId:Some(old.sessionId),modelOverride:runtime.model, inheritedModelSettings180: Some(context.modelSettingsDescriptor180()))) {
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+        frame.custody = base.planRequestCustody204
         let data=try{ProductPluginChildRequest111(next,base.thinking)}catch(_:Exception) {
             return taskError("peer.resume_request_invalid","frozen resume data is invalid") }
         let capabilities=effectiveChildCapabilities(old.capabilities,data.ceiling,context.capabilities)
         let child=productPluginChildRequest111(base,data,capabilities,context.budget)
-        if(old.depth>child.budget.maxDepth){return taskError("subagent.budget_exceeded","subagent resource budget exceeded")}
+        match (requirePluginChildDepth204(old.depth, child.budget)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
         match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-        let state=match(claimPluginPeerIncarnation111(context,input,old,child,admission)) {
+        let state=match(claimPluginPeerIncarnation111(context,input,old,child,admission,frame)) {
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+        frame.stateId = state.id
+        lock.lock(); try { state.pluginRequestFrame204 = Some(frame) } finally { lock.unlock() }
         match(reserveChildBudget(context,id,executionBudgetFrom(child.budget))) {
             case Result.Err(error)=>
                 let _=finishSubagent(id,"failed",error:error.message);releaseChildExecution(id);return Result.Err(error)
             case Result.Ok(_)=>() }
-        match(startPluginWorker111<ToolResult>(state,{=>{=>runPluginChild111(runtime,id,child,admission)}})) {
+        let worker = match(startPluginWorker111<ToolResult>(state,{=>{=>runPluginChild111(runtime,id,child,admission)}}, requestFrame204: Some(frame))) {
             case Result.Err(error)=>
                 let _=finishSubagent(id,"failed",error:error.message);releaseChildExecution(id);return Result.Err(error)
-            case Result.Ok(_)=>() }
+            case Result.Ok(value)=>value }
+        if (supervised) {
+            // Retain the target's physical collector and finalizer ACK before
+            // this supervised peer action can publish a completed receipt.
+            match (worker.collect()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => ()
+            }
+        }
         while(true) {
             match(context.cancellation.check()) {
                 case Result.Err(error)=>let _=cancelPluginChild111(runtime,id);return Result.Err(error)
@@ -3011,13 +3362,13 @@ public class ProductTaskRuntime {
     }
 
     private func claimPluginPeerIncarnation111(context:ToolInvocationContext,input:AgentValue,old:ProductSubagentState,
-        request:AgentRunRequest,admission:HostPluginChildAdmission111):Result<ProductSubagentState> {
+        request:AgentRunRequest,admission:HostPluginChildAdmission111,frame:ProductChildRequestFrame204):Result<ProductSubagentState> {
         let resume=input.field("resume").getOrThrow();let proposal=resume.field("proposal").getOrThrow()
         let observed=resume.field("read_fact").getOrThrow().field("observation").getOrThrow()
         let identity=proposal.field("message").getOrThrow()
         var bytes:Int64=16384
         for(text in [old.id,old.agent,old.agentSource,old.description,old.task,old.assignment,old.sessionId.value,
-            old.sessionRef,old.parentRunId.value,old.parentSessionId.value,old.parentToolCallId,
+            old.sessionRef,old.parentRunId.value,old.parentSessionId.value,old.parentToolCallId,old.delegationOperationId,
             httpIntentText(identity,"id"),httpIntentText(identity,"body"),httpIntentText(identity,"reply_to"),httpIntentText(observed,"sender")]) {
             if(text.size>Int64.Max/12 || bytes>Int64.Max-text.size*6) {
                 return taskError("peer.resume_size_invalid","actual incarnation metadata invoice overflow") }
@@ -3049,8 +3400,9 @@ public class ProductTaskRuntime {
                 state=ProductSubagentState(old.id,old.index,old.agent,old.description,old.task,old.assignment,
                     old.sessionId,old.sessionRef,request.runId,old.parentRunId,old.parentSessionId,old.parentToolCallId,old.depth,
                     agentSource:admission.sourceIdentity,capabilities:request.capabilities,capabilityCeilingKnown:old.capabilityCeilingKnown,
-                    budgetAuthority:old.budgetAuthority,startedAt:old.startedAt,status:"running",lastUpdate:nowMillis(),
+                    budgetAuthority:old.budgetAuthority,delegationOperationId:old.delegationOperationId,startedAt:old.startedAt,status:"running",lastUpdate:nowMillis(),
                     settlementLock111:Some(old.settlementLock))
+                frame.stateId=state.id;state.pluginRequestFrame204=Some(frame)
                 state.budgetParentRunId=context.runId;state.pluginAdmission111=Some(admission)
                 state.pluginOriginalAdmission111=old.pluginOriginalAdmission111;state.pluginCurrentBudgetAuthority111=Some(context)
                 state.pendingRequest=Some(request);state.executionInProgress=true
@@ -3076,6 +3428,13 @@ public class ProductTaskRuntime {
     }
 
     func pluginBackgroundEnabled111(): Bool { asyncEnabled }
+    func pluginBackgroundEnabledFor111(context: ToolInvocationContext): Result<Bool> {
+        if (!asyncEnabled) { return Result.Ok(false) }
+        match (supervisedChildRun(context.runId)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(supervised) => Result.Ok(!supervised)
+        }
+    }
 
     func waitPluginChild111(context: ToolInvocationContext, receipt: VNextOperationReceipt,
         admission: HostPluginChildAdmission111): Result<ToolResult> {
@@ -3096,6 +3455,7 @@ public class ProductTaskRuntime {
                     !admission.selectsStart(state.pluginAdmission111.getOrThrow(),receipt)) {
                     return taskError("child.wait_owner_changed","wait is not bound to this exact actual launch custody") }
                 if (pluginWorkersReturnedLocked111(state) && !state.executionInProgress && !state.launchInProgress) {
+                    admission.retainTaskOutputSourceReader204(state.pluginAdmission111.getOrThrow())
                     return pluginLaunchResultLocked111(state,admission.callId) }
             } finally { lock.unlock() }
             sleep(Duration.millisecond*5)
@@ -3103,21 +3463,151 @@ public class ProductTaskRuntime {
         taskError("child.wait_unavailable","child wait has no acknowledged result")
     }
 
+    // The actual Task caller consumes the real owned Core outcome. No raw
+    // AgentError or borrowed field may outlive its original withError frame.
+    private func invokeOwnedChildRun204(id: String,
+        invoke: () -> OwnedAgentRunResult113): Result<AgentRunOutcome> {
+        var actual = try { invoke() }
+            catch (failure: OwnedCanonicalPaidFailure113) { OwnedAgentRunResult113.Pending(failure.takeConsumer()) }
+        var observed: ?AgentError = None<AgentError>
+        while (true) {
+            match (actual) {
+                case OwnedAgentRunResult113.Existing(value) =>
+                    return match (observed) {
+                        case Some(marker) => Result<AgentRunOutcome>.Err(marker)
+                        case None => value
+                    }
+                case _ =>
+                    lock.lock()
+                    try { findSubagentLocked(id).getOrThrow().pluginOwnedFailure113 = Some(actual) }
+                    finally { lock.unlock() }
+                    match (consumeOwnedChildFailure204(id, actual)) {
+                        case Result.Ok(value) => return Result.Ok(value)
+                        case Result.Err(marker) =>
+                            if (marker.code != "child.owned_failure_observed") { return Result.Err(marker) }
+                            if (observed.isNone()) { observed = Some(marker) }
+                    }
+                    // Each completed loan/ACK makes real progress. Refresh the
+                    // exact child queue for further already-produced callers;
+                    // Existing is only a drain result, never Run completion.
+                    let run: RunId
+                    lock.lock()
+                    try { run = findSubagentLocked(id).getOrThrow().runId }
+                    finally { lock.unlock() }
+                    let runtime = match (attachedProduct()) {
+                        case Result.Err(error) => return Result.Err(error)
+                        case Result.Ok(value) => value
+                    }
+                    actual = try { runtime.client.takeOwnedCheckpointFailure113(run) }
+                        catch (failure: OwnedCanonicalPaidFailure113) {
+                            OwnedAgentRunResult113.Pending(failure.takeConsumer())
+                        }
+            }
+        }
+        taskError("child.owned_failure_pending", "the actual child failure queue remains unconsumed")
+    }
+
+    private func copyOwnedChildFailureFrame204(id: String, error: AgentError,
+        fund: (Int64) -> Result<Unit>, allocate: (Int64) -> Result<LogicalJsonCopiedDisplayAllocation>): Result<Unit> {
+        let encoded = match (encodeOwnedFailureError113(error, fund)) {
+            case Result.Err(failure) => return Result.Err(failure)
+            case Result.Ok(value) => value
+        }
+        let previous: Int64
+        lock.lock(); try { previous = findSubagentLocked(id).getOrThrow().pluginFailureText204.size }
+        finally { lock.unlock() }
+        if (encoded.size > (Int64.Max - 16384) / 16 - previous) {
+            return taskError("child.failure_copy_overflow", "complete child failure cannot fit its original data invoice")
+        }
+        // This independent full DATA copy is prepaid by the SAME original
+        // error bank before allocation. It grants no Source or execution right.
+        let display = match (allocate((previous + encoded.size) * 16 + 16384)) {
+            case Result.Err(failure) => return Result.Err(failure)
+            case Result.Ok(value) => value
+        }
+        let copied = String.fromUtf8(encoded.toArray())
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            state.pluginFailureDisplays204.add(display)
+            state.pluginFailureText204 = if (state.pluginFailureText204 == "") { copied }
+                else { state.pluginFailureText204 + "\n" + copied }
+            state.error = state.pluginFailureText204
+            persistRootLocked(state.parentSessionId)
+        } finally { lock.unlock() }
+    }
+
+    private func consumeOwnedChildFailure204(id: String, actual: OwnedAgentRunResult113): Result<AgentRunOutcome> {
+        let kind = [AgentErrorKind.RecoveryRequired]
+        match (actual) {
+            case OwnedAgentRunResult113.Failed(caller) =>
+                let observed = caller.withError({ error, fund =>
+                    kind[0] = error.kind
+                    copyOwnedChildFailureFrame204(id, error, fund,
+                        { bytes => caller.deriveCopiedDisplayAllocation113(bytes) })
+                })
+                if (observed.isError() || caller.acknowledgeAfterConsumption().isError()) {
+                    return taskError("child.owned_failure_pending", "the actual child failure caller remains unconsumed")
+                }
+            case OwnedAgentRunResult113.Pending(caller) =>
+                let copied = [Result<Unit>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "child.owned_failure_pending", "the actual child failure caller remains unconsumed"))]
+                let observed = caller.withError({ error, fund =>
+                    kind[0] = error.kind
+                    copied[0] = copyOwnedChildFailureFrame204(id, error, fund,
+                        { bytes => caller.deriveCopiedDisplayAllocation113(bytes) })
+                })
+                if (observed.isError() || copied[0].isError() || caller.acknowledgeAfterConsumption().isError()) {
+                    return taskError("child.owned_failure_pending", "the actual pending child failure remains unconsumed")
+                }
+            case OwnedAgentRunResult113.Held =>
+                return taskError("child.owned_failure_pending", "the actual child Core caller is still held")
+            case OwnedAgentRunResult113.Existing(value) => return value
+        }
+        lock.lock()
+        try { findSubagentLocked(id).getOrThrow().pluginOwnedFailure113 = None<OwnedAgentRunResult113> }
+        finally { lock.unlock() }
+        // The full original was consumed, paid, and persisted in the existing
+        // Task snapshot. This bounded result is only a propagation marker.
+        Result.Err(AgentError(kind[0], "child.owned_failure_observed",
+            "the complete original child failure was transferred to its actual Task data owner"))
+    }
+
+    private func childFailureDisplayText204(id: String, fallback: String): String {
+        lock.lock()
+        try {
+            let full = findSubagentLocked(id).getOrThrow().pluginFailureText204
+            if (full == "") { fallback } else { full }
+        } finally { lock.unlock() }
+    }
+
     private func runPluginChild111(runtime: ProductRuntime, id: String, child: AgentRunRequest,
         admission: HostPluginChildAdmission111): Result<ToolResult> {
         try {
             let restriction = ProductPluginChildRestriction111(child, admission,
                 { => retainedPluginChild111(id, child, admission) }, { => acknowledgePluginChild111(runtime, id, child, admission) })
-            let started = childRunAction(id, { => runtime.client.startRestricted111(child, restriction,
-                { event => recordChildEvent(id, event) }) })
+            let started = childRunAction(id, { =>
+                match (admission.check()) {
+                    case Result.Err(error) => return Result<AgentRunOutcome>.Err(error)
+                    case Result.Ok(_) => ()
+                }
+                match (inheritApprovedChild(id, child.sessionId)) {
+                    case Result.Err(error) => return Result<AgentRunOutcome>.Err(error)
+                    case Result.Ok(_) => ()
+                }
+                invokeOwnedChildRun204(id, { =>
+                    runtime.client.startRestrictedOwnedCheckpointFailure113(child, restriction,
+                        { event => recordChildEvent(id, event) })
+                })
+            })
             let initial = match (started) {
                 case Result.Err(error) =>
-                    let _ = finishSubagent(id, "failed", error: error.message)
+                    let _ = finishSubagent(id, "failed", error: childFailureDisplayText204(id, error.message))
                     return knownPluginChildTerminal111(id, admission.callId, error)
                 case Result.Ok(item) => item }
             let outcome = match (reviewSubagentOutcome(runtime, id, child, initial)) {
                 case Result.Err(error) =>
-                    let _ = finishSubagent(id, "failed", error: error.message)
+                    let _ = finishSubagent(id, "failed", error: childFailureDisplayText204(id, error.message))
                     return knownPluginChildTerminal111(id, admission.callId, error)
                 case Result.Ok(item) => item }
             match (outcome) {
@@ -3136,7 +3626,7 @@ public class ProductTaskRuntime {
             try { pluginLaunchResultLocked111(findSubagentLocked(id).getOrThrow(), admission.callId) }
             finally { lock.unlock() }
         } catch (error: Exception) {
-            let _ = finishSubagent(id, "failed", error: error.message)
+            let _ = finishSubagent(id, "failed", error: childFailureDisplayText204(id, error.message))
             knownPluginChildTerminal111(id, admission.callId,
                 AgentError(AgentErrorKind.InvalidInput, "child.worker_failed", "actual child worker did not complete"))
         } finally {
@@ -3303,7 +3793,11 @@ public class ProductTaskRuntime {
             let selected = try {
                 var found: ?ProductSubagentState = None<ProductSubagentState>
                 for (state in records where state.pluginAdmission111.isSome() &&
-                    state.pluginAdmission111.getOrThrow().hasRetainedOriginalContext180() && state.pluginCompletionDone111 &&
+                    (state.pluginAdmission111.getOrThrow().hasRetainedOriginalContext180() ||
+                        (state.pluginRequestFrame204.isSome() && state.pluginRequestFrame204.getOrThrow().custody.isSome() &&
+                            !state.pluginRequestFrame204.getOrThrow().applicationReturned)) &&
+                    (state.pluginRequestFrame204.isNone() || state.pluginRequestFrame204.getOrThrow().returned) &&
+                    state.pendingRequest.isNone() && state.pluginCompletionDone111 &&
                     !state.launchInProgress && !state.executionInProgress && !state.finishing && childBudgetLeases.get(state.id).isNone() &&
                     pluginWorkersReturnedLocked111(state)) { state.finishing = true; found = Some(state); break }
                 found
@@ -3326,6 +3820,19 @@ public class ProductTaskRuntime {
                     state.pluginAdmission111.getOrThrow()
                 } finally { lock.unlock() }
                 actual.returnContextAfterOriginalChildHelpers180()
+                // The complete retained-Context helper has returned. Retire
+                // only this Task's independent live metadata consumer; its
+                // descriptive history remains available for exact matching.
+                actual.returnTaskPreparedAfterOriginalHelpers204()
+                let custody: ?PlanRequestCustody204
+                lock.lock()
+                try {
+                    custody = match (state.pluginRequestFrame204) {
+                        case Some(frame) => frame.applicationReturned = true; frame.custody
+                        case None => None<PlanRequestCustody204>
+                    }
+                } finally { lock.unlock() }
+                match (custody) { case Some(value) => value.returnApplicationFrame204(); case None => () }
             } finally { lock.lock(); try { state.finishing = false } finally { lock.unlock() } }
         }
     }
@@ -3360,7 +3867,7 @@ public class ProductTaskRuntime {
 
     private func createPluginChild111(runtime: ProductRuntime, context: ToolInvocationContext,
         data: ProductPluginChildRequest111, request: AgentRunRequest, depth: Int64,
-        admission: HostPluginChildAdmission111): Result<ProductSubagentState> {
+        admission: HostPluginChildAdmission111, frame: ProductChildRequestFrame204): Result<ProductSubagentState> {
         lock.lock()
         let state: ProductSubagentState
         let sinks: Array<ProductSubagentListener>
@@ -3368,11 +3875,24 @@ public class ProductTaskRuntime {
             if (closing) { return taskError("task.runtime_closing", "child runtime is closing") }
             let previousRecords = records.toArray(); let previousYields = yields.toArray()
             let previousCounter = subagentCounter
-            let allocated = reserveSubagentLocked(data.label)
-            state = ProductSubagentState(allocated.id, allocated.index, data.label, data.description,
-                data.prompt, data.prompt, request.sessionId, runtime.sessionReference(request.sessionId), request.runId,
-                context.runId, context.sessionId, admission.parentCallId, depth,
-                agentSource: admission.sourceIdentity, capabilities: request.capabilities, budgetAuthority: Some(context))
+            // These ordinary historical descriptions remain readable after
+            // close. Copy their UTF8 backing under the still-live state/header
+            // payer instead of retaining the transient Prepared/history DOM.
+            let label = admission.copyTaskStateText204(data.label)
+            let prompt = admission.copyTaskStateText204(data.prompt)
+            let allocated = reserveSubagentLocked(label)
+            state = ProductSubagentState(allocated.id, allocated.index, label,
+                admission.copyTaskStateText204(data.description), prompt, prompt,
+                SessionId(admission.copyTaskStateText204(request.sessionId.value)),
+                admission.copyTaskStateText204(runtime.sessionReference(request.sessionId)),
+                RunId(admission.copyTaskStateText204(request.runId.value)),
+                RunId(admission.copyTaskStateText204(context.runId.value)),
+                SessionId(admission.copyTaskStateText204(context.sessionId.value)),
+                admission.copyTaskStateText204(admission.parentCallId), depth,
+                agentSource: admission.copyTaskStateText204(admission.sourceIdentity),
+                capabilities: admission.copyTaskStateCapabilities204(request.capabilities), budgetAuthority: Some(context),
+                delegationOperationId: admission.copyTaskStateText204(admission.canonicalParentOperationId111.value))
+            frame.stateId = state.id; state.pluginRequestFrame204 = Some(frame)
             state.pluginAdmission111 = Some(admission)
             state.pluginOriginalAdmission111 = Some(admission)
             state.pluginCurrentBudgetAuthority111 = Some(context)
@@ -3826,6 +4346,10 @@ public class ProductTaskRuntime {
                     case None => return workflowConsumerError("workflow.live_policy_missing") }
             } finally { lock.unlock() }
             match (pin.validateCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            match (inheritApprovedChild(id, request.sessionId)) {
+                case Result.Err(error) => return Result<AgentRunOutcome>.Err(error)
+                case Result.Ok(_) => ()
+            }
             runtime.client.start(request, { event => recordChildEvent(id, event) })
         })
     }
@@ -3890,12 +4414,12 @@ public class ProductTaskRuntime {
                             )
                             ApprovalDecision.RejectWithReason(reviewerDenialMessage(review.reason))
                         }
-                        outcome = match (runtime.client.decide(
+                        outcome = match (invokeOwnedChildRun204(id, { => runtime.client.decideOwnedCheckpointFailure113(
                             request,
                             reviewed,
                             decision,
                             {event => recordChildEvent(id, event)}
-                        )) {
+                        ) })) {
                             case Result.Ok(value) => value
                             case Result.Err(error) => return Result.Err(error)
                         }
@@ -4044,7 +4568,10 @@ public class ProductTaskRuntime {
         try {
             let state = findSubagentLocked(id).getOrThrow()
             state.status = effectiveStatus
-            state.error = effectiveError
+            state.error = match (state.pluginAdmission111) {
+                case Some(admission) => admission.copyTaskStateText204(effectiveError)
+                case None => effectiveError }
+
             state.pendingApproval = None
             if (effectiveStatus != "blocked") {
                 state.pendingRequest = None

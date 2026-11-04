@@ -287,6 +287,7 @@ func prepareManagedChannelOwnedParentInTransaction(tx:SqliteTransaction,root:Ope
 func markManagedChannelOwnedParentExecutingInTransaction(tx:SqliteTransaction,root:OperationRootSource,parent:OperationId,
     run:RunId,thread:ThreadId,epoch:Int64,plan:NormalizedOperationPlan,nowMillis:Int64,approvalRequired:Bool,
     allocate:(Int64)->LogicalJsonOwnerReservation,guard:()->Result<Unit>):Unit{
+    requireApprovedPlanAdmission(tx,parent,run,plan.bindingDigest,Some(allocate))
     if(nowMillis<0){throw IllegalStateException("negative live execution timestamp")}
     requireManagedChannelOwnedParentSource(tx,root,parent,run,thread,epoch,plan,allocate,guard,phase:ManagedChannelParentPhase.Prepared)
     requireManagedChannelPreparedParentMarker(tx,parent,root,run,thread,epoch,plan,allocate,guard)
@@ -308,6 +309,7 @@ func markManagedChannelOwnedParentExecutingInTransaction(tx:SqliteTransaction,ro
 func markManagedChannelOwnedParentHandoffInTransaction(tx:SqliteTransaction,root:OperationRootSource,parent:OperationId,
     run:RunId,thread:ThreadId,epoch:Int64,plan:NormalizedOperationPlan,nowMillis:Int64,
     allocate:(Int64)->LogicalJsonOwnerReservation,guard:()->Result<Unit>):Unit{
+    requireApprovedPlanAdmission(tx,parent,run,plan.bindingDigest,Some(allocate))
     requireManagedChannelActiveResource(tx,plan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow(),allocate,guard)
     if(nowMillis<0){throw IllegalStateException("negative live handoff timestamp")}
     requireManagedChannelOwnedParentSource(tx,root,parent,run,thread,epoch,plan,allocate,guard,phase:ManagedChannelParentPhase.ExecutingWithoutHandoff)
@@ -773,6 +775,7 @@ func markManagedChannelOwnedChildExecutingInTransaction(tx:SqliteTransaction,roo
     parentPlan:NormalizedOperationPlan,childPlan:NormalizedOperationPlan,requestKey:String,callId:String,
     expected:?ApprovalRequest,nowMillis:Int64,approvalRequired:Bool,
     allocate:(Int64)->LogicalJsonOwnerReservation,guard:()->Result<Unit>):Unit{
+    requireApprovedPlanAdmission(tx,child,run,childPlan.bindingDigest,Some(allocate))
     if(approvalRequired!=expected.isSome()){
         throw IllegalStateException("live child cannot downgrade its retained actual approval requirement")}
     requireManagedChannelChildPreparedTuple(tx,root,parent,child,run,thread,epoch,parentPlan,childPlan,
@@ -797,6 +800,7 @@ func markManagedChannelOwnedChildHandoffInTransaction(tx:SqliteTransaction,root:
     parent:OperationId,child:OperationId,run:RunId,thread:ThreadId,epoch:Int64,
     parentPlan:NormalizedOperationPlan,childPlan:NormalizedOperationPlan,requestKey:String,callId:String,
     expected:?ApprovalRequest,nowMillis:Int64,allocate:(Int64)->LogicalJsonOwnerReservation,guard:()->Result<Unit>):Unit{
+    requireApprovedPlanAdmission(tx,child,run,childPlan.bindingDigest,Some(allocate))
     if(nowMillis<0){throw IllegalStateException("negative live child handoff timestamp")}
     requireManagedChannelChildPreparedTuple(tx,root,parent,child,run,thread,epoch,parentPlan,childPlan,
         requestKey,callId,expected,ManagedChannelChildPhase.ExecutingWithoutHandoff,allocate,guard)

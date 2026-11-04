@@ -125,6 +125,9 @@ class ProductPluginChildBackend111 <: HostPluginChildBackend111 {
     public func observeProcess197(context:ToolInvocationContext,input:AgentValue,
         admission:HostPluginChildAdmission111):Result<ToolResult>{tasks.observePluginProcess197(context,input,admission)}
     public func backgroundEnabled(): Bool { tasks.pluginBackgroundEnabled111() }
+    public func backgroundEnabledFor(context: ToolInvocationContext): Result<Bool> {
+        tasks.pluginBackgroundEnabledFor111(context)
+    }
     public func cancel(parentRun: RunId): Result<Unit> { tasks.cancel(parentRun) }
 }
 
@@ -153,6 +156,15 @@ class ProductPluginChildRestriction111 <: AgentRunStartRestriction111 {
         match (check(value)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         admission.acquireStartLease()
     }
+}
+
+// The same admission boundary is used by initial and revived real Native
+// children. This pure check creates no worker, membership or authority.
+func requirePluginChildDepth204(depth: Int64, budget: ResourceBudget): Result<Unit> {
+    if (depth > budget.maxDepth) {
+        return taskError("subagent.budget_exceeded", "subagent resource budget exceeded")
+    }
+    Result.Ok(())
 }
 
 func productPluginChildRequest111(
@@ -201,7 +213,7 @@ func productPluginChildRequest111(
             maxWallMillis: productRequestedChildLimit(description.limits.maxWallMillis, base.budget.maxWallMillis),
             maxIdleMillis: min(description.limits.maxIdleMillis, base.budget.maxIdleMillis),
             maxChildren: min(description.limits.maxChildren, base.budget.maxChildren),
-            maxDepth: min(description.limits.maxDepth, base.budget.maxDepth),
+            maxDepth: min(description.limits.maxDepth, min(base.budget.maxDepth, parentBudget.maxDepth)),
             maxConcurrentChildren: min(description.limits.maxConcurrentChildren, base.budget.maxConcurrentChildren),
             maxContextMessages: base.budget.maxContextMessages,
             maxConcurrentTools: base.budget.maxConcurrentTools,
@@ -232,7 +244,9 @@ func productPluginChildRequest111(
         initializeContext: base.initializeContext,
         contextWindow: base.contextWindow,
         providerSafetyMargin: base.providerSafetyMargin,
-        executionLaneId: base.executionLaneId
+        executionLaneId: base.executionLaneId,
+        planContextFacts: base.planContextFacts,
+        planRequestCustody204: base.planRequestCustody204
     )
 }
 

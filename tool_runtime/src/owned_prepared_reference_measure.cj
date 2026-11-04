@@ -194,6 +194,17 @@ class OwnedPreparedReferenceMeasure {
         match(value.opaqueState){case Some(state)=>node();text(state.providerId);text(state.protocol)
             text(state.itemId);text(state.payload);case None=>()}
     }
+    func metadataCopy204(value:PreparedToolInvocation):Unit{
+        let call=value.borrowUnpublishedCall204()
+        node();text(call.callId);text(call.name);json(call.arguments)
+        node();plan(value.borrowOperationPlanFrame204())
+        text(value.borrowOperationPlanFrame204().policyVersion);texts(value.borrowOperationPlanFrame204().approvedWriteRoots)
+        let concurrency=value.borrowConcurrencyFrame204();node();cells(concurrency.accesses.size)
+        for(access in concurrency.accesses){node();text(access.namespace);text(access.resource)}
+        match(value.borrowApprovalFrame204()){case Some(request)=>approval(request);case None=>()}
+        text(value.borrowPlanStepIdFrame204());text(value.borrowPlanActionIdFrame204())
+    }
+    func planCopy204(value:NormalizedOperationPlan):Unit{plan(value);text(value.policyVersion);texts(value.approvedWriteRoots)}
     func prepared(value:PreparedToolInvocation):Unit{
         let source=value.source
         if(source.contextReadAdmission.isSome() || source.contextReadPreparation.isSome()){

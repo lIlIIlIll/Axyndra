@@ -84,12 +84,20 @@ public class PreparedToolInvocation {
     public let operationId: OperationId
     // Identity/display only. Authority-relevant arguments live in
     // operationPlan.canonicalArguments.
-    public let call: ToolCall
+    private var callData204: ?ToolCall
+    public prop call: ToolCall { get() {
+        match (detachedMetadata204) { case Some(value) => value.holdUnknown204(); case None => () }
+        callData204.getOrThrow()
+    } }
     private var concurrencyData204: ?ToolConcurrencyProfile = None<ToolConcurrencyProfile>
     public prop concurrency: ToolConcurrencyProfile {
         get() { requireMetadataExport204(); concurrencyData204.getOrThrow() }
     }
     public let authorization: PreparedAuthorization
+    private var planStepIdData204: ?String = None<String>
+    private var planActionIdData204: ?String = None<String>
+    public prop planStepId: String { get() { requireMetadataExport204(); planStepIdData204.getOrThrow() } }
+    public prop planActionId: String { get() { requireMetadataExport204(); planActionIdData204.getOrThrow() } }
     private var approvalData204: ?ApprovalRequest = None<ApprovalRequest>
     public prop approval: ?ApprovalRequest {
         get() { if (approvalData204.isSome()) { requireMetadataExport204() }; approvalData204 }
@@ -100,7 +108,86 @@ public class PreparedToolInvocation {
     }
 
     private var catalogConsumer204: ?ToolCatalogHostConsumer204 = None<ToolCatalogHostConsumer204>
+    private var detachedMetadata204: ?PreparedMetadataOwner204 = None<PreparedMetadataOwner204>
     private var metadataReturned204 = false
+    public func retainMetadataConsumer204(): ?PreparedMetadataConsumer204 {
+        match (detachedMetadata204) { case Some(value) => Some(value.retain204()); case None => None<PreparedMetadataConsumer204> }
+    }
+    public func withCall204<T>(body: (ToolCall) -> T): T {
+        if (metadataReturned204) { throw IllegalStateException("prepared DATA has returned") }
+        try { body(callData204.getOrThrow()) }
+        catch (error: Exception) {
+            match (detachedMetadata204) { case Some(value) => value.holdUnknown204(); case None => () }; throw error
+        }
+    }
+    public func withApproval204<T>(body: (?ApprovalRequest) -> T): T {
+        requireMetadataBorrow204()
+        try { body(approvalData204) }
+        catch (error: Exception) {
+            match (detachedMetadata204) { case Some(value) => value.holdUnknown204()
+                case None => match (catalogConsumer204) { case Some(value) => value.holdUnknown204(); case None => () } }
+            throw error
+        }
+    }
+    public func borrowCallForCore204(actual: PaidExecutionFailureSink173): ToolCall {
+        if (metadataReturned204) { throw IllegalStateException("prepared DATA has returned") }
+        // The legacy display call had no Catalog metadata export hook. Only
+        // the new independently copied call requires the exact Core owner.
+        match (detachedMetadata204) { case Some(value) => value.requireCore204(actual); case None => () }
+        callData204.getOrThrow()
+    }
+    // Only the unpublished constructor/copy producer may use this accessor.
+    func borrowUnpublishedCall204(): ToolCall {
+        if (detachedMetadata204.isSome() || metadataReturned204) { throw IllegalStateException("prepared DATA is already published") }
+        callData204.getOrThrow()
+    }
+    func borrowDetachedCall204(): ToolCall { callData204.getOrThrow() }
+    public func withOperationPlan204<T>(body: (NormalizedOperationPlan) -> T): T {
+        requireMetadataBorrow204()
+        try { body(operationPlanData204.getOrThrow()) }
+        catch (error: Exception) {
+            match (detachedMetadata204) { case Some(value) => value.holdUnknown204()
+                case None => match (catalogConsumer204) { case Some(value) => value.holdUnknown204(); case None => () } }
+            throw error
+        }
+    }
+    // Only the independently prepaid copy may be borrowed by the exact Core
+    // DATA consumer which owns its whole Run frame. No Source is exported.
+    public func borrowOperationPlanForCore204(actual: PaidExecutionFailureSink173): NormalizedOperationPlan {
+        requireCoreMetadata204(actual); operationPlanData204.getOrThrow()
+    }
+    public func borrowConcurrencyForCore204(actual: PaidExecutionFailureSink173): ToolConcurrencyProfile {
+        requireCoreMetadata204(actual); concurrencyData204.getOrThrow()
+    }
+    public func borrowApprovalForCore204(actual: PaidExecutionFailureSink173): ?ApprovalRequest {
+        requireCoreMetadata204(actual); approvalData204
+    }
+    public func borrowPlanStepIdForCore204(actual: PaidExecutionFailureSink173): String {
+        requireCoreMetadata204(actual); planStepIdData204.getOrThrow()
+    }
+    public func borrowPlanActionIdForCore204(actual: PaidExecutionFailureSink173): String {
+        requireCoreMetadata204(actual); planActionIdData204.getOrThrow()
+    }
+    private func requireCoreMetadata204(actual: PaidExecutionFailureSink173): Unit {
+        if (metadataReturned204) { throw IllegalStateException("prepared metadata has returned") }
+        match (detachedMetadata204) { case Some(value) => value.requireCore204(actual)
+            case None => requireMetadataExport204() }
+    }
+    func hasDetachedMetadata204(): Bool { detachedMetadata204.isSome() }
+    func installDetachedMetadata204(owner: PreparedMetadataOwner204, call: ToolCall, plan: NormalizedOperationPlan,
+        concurrency: ToolConcurrencyProfile, approval: ?ApprovalRequest): Unit {
+        if (detachedMetadata204.isSome() || metadataReturned204) { throw IllegalStateException("prepared DATA already has an owner") }
+        callData204 = Some(call)
+        operationPlanData204 = Some(plan); concurrencyData204 = Some(concurrency); approvalData204 = approval
+        detachedMetadata204 = Some(owner)
+    }
+    func borrowDetachedPlan204(): NormalizedOperationPlan { operationPlanData204.getOrThrow() }
+    func clearDetachedMetadata204(): Unit {
+        callData204 = None<ToolCall>
+        operationPlanData204 = None<NormalizedOperationPlan>; concurrencyData204 = None<ToolConcurrencyProfile>
+        approvalData204 = None<ApprovalRequest>; planStepIdData204 = None<String>; planActionIdData204 = None<String>
+        detachedMetadata204 = None<PreparedMetadataOwner204>; metadataReturned204 = true
+    }
     var nextPrepared204: ?PreparedToolInvocation = None<PreparedToolInvocation>
     func ownCatalogConsumer204(value: ToolCatalogHostConsumer204): Bool {
         if (metadataReturned204) { throw IllegalStateException("prepared metadata has returned") }
@@ -113,8 +200,11 @@ public class PreparedToolInvocation {
     }
     private func requireMetadataExport204(): Unit {
         if (metadataReturned204) { throw IllegalStateException("prepared metadata has returned") }
-        match (catalogConsumer204) { case Some(value) => value.holdPreparedExport204(this); case None => () }
+        match (detachedMetadata204) { case Some(value) => value.holdUnknown204()
+            case None => match (catalogConsumer204) { case Some(value) => value.holdPreparedExport204(this); case None => () } }
     }
+    func borrowPlanStepIdFrame204(): String { requireMetadataBorrow204(); planStepIdData204.getOrThrow() }
+    func borrowPlanActionIdFrame204(): String { requireMetadataBorrow204(); planActionIdData204.getOrThrow() }
     func borrowOperationPlanFrame204(): NormalizedOperationPlan {
         requireMetadataBorrow204(); operationPlanData204.getOrThrow()
     }
@@ -126,10 +216,13 @@ public class PreparedToolInvocation {
     }
     private func requireMetadataBorrow204(): Unit {
         if (metadataReturned204) { throw IllegalStateException("prepared metadata has returned") }
-        match (catalogConsumer204) { case Some(value) => value.requirePreparedBorrow204(this); case None => () }
+        if (detachedMetadata204.isNone()) {
+            match (catalogConsumer204) { case Some(value) => value.requirePreparedBorrow204(this); case None => () }
+        }
     }
     func clearCatalogMetadataFrame204(): ?PreparedToolInvocation {
         operationPlanData204 = None<NormalizedOperationPlan>
+        planStepIdData204 = None<String>; planActionIdData204 = None<String>
         concurrencyData204 = None<ToolConcurrencyProfile>; approvalData204 = None<ApprovalRequest>
         catalogConsumer204 = None<ToolCatalogHostConsumer204>; metadataReturned204 = true
         let next = nextPrepared204; nextPrepared204 = None<PreparedToolInvocation>; next
@@ -152,15 +245,18 @@ public class PreparedToolInvocation {
         authorization: PreparedAuthorization,
         operationPlan: NormalizedOperationPlan,
         source: PreparedInvocationSource,
-        approval!: ?ApprovalRequest = None
+        approval!: ?ApprovalRequest = None,
+        planStepId!: String = "", planActionId!: String = ""
     ) {
         this.operationId = operationId
-        this.call = call
+        this.callData204 = Some(call)
         this.concurrencyData204 = Some(concurrency)
         this.authorization = authorization
         this.approvalData204 = approval
         this.operationPlanData204 = Some(operationPlan)
         this.source = source
+        this.planStepIdData204 = Some(String.fromUtf8(planStepId.toArray()))
+        this.planActionIdData204 = Some(String.fromUtf8(planActionId.toArray()))
     }
 }
 
@@ -253,6 +349,8 @@ public func recoverableToolResult(
     fields.add(ValueField("error_kind", textValue(toolErrorKindName(error.kind))))
     fields.add(ValueField("message", textValue(error.message)))
     fields.add(ValueField("retryable", boolValue(error.retryable)))
+    fields.add(ValueField("failure_class", textValue(operationFailureClass(error))))
+    fields.add(ValueField("error_detail", operationErrorValue(error)))
     let details = ArrayList<AgentValue>()
     for (field in error.fields) {
         details.add(objectValue([

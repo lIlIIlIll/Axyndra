@@ -22,6 +22,13 @@ main(): Int64 {
     runHttpParentIntentPreparationContract()
     runChannelParentIntentPreparationContract()
     testToolCatalogBatchRegistration()
+    runSupervisedAdmissionContract()
+    runPlanReviewControlContract()
+    runSupervisedExecutionFailureContract()
+    runSupervisedProcessScopeContract()
+    runTrustedPromotionOrderingContract()
+    runNativeSchemaBindingContract()
+    runSupervisedPreparationEnvelopeContract204()
     let catalog = ToolCatalog()
     register(catalog, "read", CapabilityKind.WorkspaceRead, false)
     register(catalog, "write", CapabilityKind.WorkspaceWrite, true)
@@ -2049,8 +2056,9 @@ func register(
         ),
         EchoExecutor()
     )
-    if (result.isError()) {
-        throw IllegalStateException("tool registration failed")
+    match (result) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException("tool registration failed: " + error.describe())
     }
 }
 
@@ -2103,4 +2111,593 @@ func expect(condition: Bool, message: String): Unit {
     if (!condition) {
         throw IllegalStateException(message)
     }
+}
+
+
+// Exercise the public pipeline boundary with a deterministic policy port.
+// Store-level atomic reservation/recovery tests live with the real store.
+func runSupervisedAdmissionContract(): Unit {
+    let catalog = planReadFixtureCatalog204()
+    let descriptor = ToolDescriptor(ModelToolDefinition("safe_read", "controlled read",
+        objectValue([ValueField("type", textValue("object")),
+            ValueField("properties", objectValue([ValueField("path", objectValue([
+                ValueField("type", textValue("string"))]))])),
+            ValueField("required", listValue([textValue("path")])),
+            ValueField("additionalProperties", boolValue(false))])),
+        Capability(CapabilityKind.WorkspaceRead), supervisedExecutionSafe: true)
+    let executor = SupervisedContractExecutor()
+    expect(catalog.register(descriptor, executor).isOk(), "register trusted controlled tool")
+    register(catalog, "opaque", CapabilityKind.WorkspaceRead, false)
+    let operations = MemoryOperations()
+    let plans = SupervisedContractPort()
+    let pipeline = ToolPipeline(catalog, operations, MemoryAudit(), FixedIds(), plans: Some(plans))
+    let context = ToolInvocationContext(RunId("supervised-run"), SessionId("supervised-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]))
+    let actualCatalogConsumer = pipeline.beginHostCatalogConsumer204(context).getOrThrow()
+    let binding = objectValue([ValueField("step_id", textValue("read-step")),
+        ValueField("action_id", textValue("read-action"))])
+    let arguments = objectValue([ValueField("path", textValue("example.cj")), ValueField("_plan", binding)])
+    expect(ObjectArgumentValidator().validate(ToolCall("visible", "safe_read", arguments),
+        descriptor.definition).isOk(), "frozen model schema accepts the reserved binding envelope")
+    match (pipeline.prepare(context, ToolCall("missing", "safe_read",
+        objectValue([ValueField("path", textValue("example.cj"))])))) {
+        case Result.Err(error) => expect(error.code == "plan.binding_required", "missing binding fails closed")
+        case _ => throw IllegalStateException("missing supervised binding was accepted")
+    }
+    match (pipeline.prepare(context, ToolCall("opaque", "opaque", objectValue([ValueField("_plan", binding)])))) {
+        case Result.Err(error) => expect(error.code == "plan.tool_contract_required", "opaque descriptor fails closed")
+        case _ => throw IllegalStateException("opaque supervised tool was accepted")
+    }
+    let prepared = match (preparePipelineCall(pipeline, context, ToolCall("read", "safe_read", arguments))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.code)
+    }
+    expect(prepared.planStepId == "read-step" && prepared.planActionId == "read-action" &&
+        prepared.operationPlan.canonicalArguments.field("_plan").isNone() &&
+        prepared.call.arguments.field("_plan").isNone(), "binding is separate from canonical tool arguments")
+    plans.permitted = false
+    match (pipeline.executePrepared(context, prepared)) {
+        case Result.Err(error) => expect(error.code == "plan.test_denied" && executor.executions == 0 &&
+            operations.executions == 0, "contract refusal precedes executor and Operation handoff")
+        case _ => throw IllegalStateException("refused plan reached executor")
+    }
+    plans.permitted = true
+    expect(pipeline.admitPrepared(context, prepared).isOk(), "canonical prepared Operation can reserve its action")
+    expect(pipeline.executePrepared(context, prepared).isOk(), "authorized bound action executes")
+    expect(plans.reservations == 1 && executor.executions == 1 && plans.boundRuns == 1,
+        "repeat admission is idempotent and session execution binds the run")
+    let approvalCatalog = planReadFixtureCatalog204()
+    expect(approvalCatalog.register(ToolDescriptor(
+        ModelToolDefinition("safe_write", "controlled write", descriptor.definition.inputSchema),
+        Capability(CapabilityKind.WorkspaceWrite), sideEffecting: true,
+        supervisedExecutionSafe: true), executor).isOk(),
+        "register supervised approval fixture")
+    let approvalOperations = MemoryOperations()
+    let approvalPlans = SupervisedContractPort()
+    let approvalPipeline = ToolPipeline(approvalCatalog, approvalOperations, MemoryAudit(), FixedIds(),
+        plans: Some(approvalPlans))
+    let approvalContext = ToolInvocationContext(RunId("supervised-approval-run"),
+        SessionId("supervised-session"), CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)]))
+    let actualApprovalConsumer = approvalPipeline.beginHostCatalogConsumer204(approvalContext).getOrThrow()
+    let pending = match (approvalPipeline.prepare(approvalContext,
+        ToolCall("approval", "safe_write", arguments))) {
+        case Result.Ok(ToolPreparation.NeedsApproval(value, _)) => value
+        case _ => throw IllegalStateException("supervised write did not reach approval barrier")
+    }
+    expect(pending.operationPlan.effectClass == OperationEffectClass.WorkspaceMutation,
+        "approval fixture declares an actual workspace side effect")
+    expect(approvalOperations.prepareTrustedControlOperation(pending.operationId, approvalContext.runId,
+        ItemId("supervised-approval-item"), pending.operationPlan).isOk() &&
+        approvalPipeline.admitPrepared(approvalContext, pending).isOk() &&
+        approvalOperations.waitForApproval(pending.operationId, approvalContext.runId).isOk(),
+        "approval preparation durably reserves the bound action")
+    expect(approvalPipeline.decide(approvalContext, pending.operationId, ApprovalDecision.Approve).isOk() &&
+        approvalPlans.reservations == 1,
+        "pending approval reload reuses stored binding without fresh model metadata or budget")
+    expect(catalog.markSupervisedSafe("opaque").isOk(), "host composition can trust one compiled builtin")
+    // An unrelated generic pipeline retains the existing unsupervised surface.
+    let generic = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds())
+    expect(executePipelineCall(generic, context,
+        ToolCall("generic", "opaque", objectValue([]))).isOk(), "unsupervised calls need no plan binding")
+}
+
+class SupervisedContractExecutor <: ToolExecutor {
+    var executions: Int64 = 0
+    public func execute(_: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
+        if (prepared.operationPlan.canonicalArguments.field("_plan").isSome()) {
+            throw IllegalStateException("executor observed plan metadata as a tool argument")
+        }
+        executions += 1
+        Result.Ok(ToolResult(prepared.call.callId, textValue("read")))
+    }
+}
+
+class SupervisedContractPort <: PlanExecutionPort & PlanExecutionReadDataPort204 & PlanExecutionDataPort204 {
+    var permitted = true
+    var reservations: Int64 = 0
+    var boundRuns: Int64 = 0
+    private var bound = false
+    private var reserved = ""
+    public var targetRoots: Array<String> = ["/workspace"]
+    public var inferenceContract: ?PlanContract = None<PlanContract>
+    public var runnableActions: Array<String> = []
+    public var publicInspectionReads: Int64 = 0
+    public var bindingReads: Int64 = 0
+    public func activate(_: String, _: String, _: PlanContract): Result<Unit> { Result.Ok(()) }
+    public func executionForSession(_: String): Result<?String> { Result.Ok(Some("execution")) }
+    public func contractForSession(_: String): Result<?PlanContract> { Result.Ok(None) }
+    public func finish(_: RunId): Result<Unit> { Result.Ok(()) }
+    public func inherit(_: RunId, _: String, _: OperationId): Result<Unit> { Result.Ok(()) }
+    public func abandonUnstartedChild204(_: RunId, _: String, _: OperationId): Result<Unit> { Result.Ok(()) }
+    public func isPlanOwner(_: RunId): Result<Bool> { Result.Ok(true) }
+    public func inspectForSession(_: String): Result<AgentValue> { Result.Ok(objectValue([])) }
+    public func bind(_: String, _: String, _: RunId, _: PlanContract): Result<Unit> { Result.Ok(()) }
+    public func executionForRun(_: RunId): Result<?String> {
+        Result.Ok(if (bound) { Some("execution") } else { None })
+    }
+    public func bindRun(_: String, _: String, _: RunId): Result<Unit> {
+        bound = true
+        boundRuns += 1
+        Result.Ok(())
+    }
+    public func admit(_: RunId, _: OperationId, _: String,
+        _: String, _: NormalizedOperationPlan): Result<Unit> {
+        planExecutionError("plan.test_raw_admission", "fixture requires the actual owned-wire receiver")
+    }
+    public func admitOwnedPlan204(_: RunId, operationId: OperationId, stepId: String,
+        actionId: String, value: PreparedPlanUtf8Owner204): Result<Unit> {
+        if (value.byteCount == 0) { return planExecutionError("plan.test_wire", "prepared wire is empty") }
+        // Read numeric bytes synchronously; no naked plan/catalog graph or
+        // source payload is decoded, retained or returned by this test port.
+        let forbidden = "5:_plan".toArray()
+        if (value.byteCount >= forbidden.size) {
+            for (offset in 0..(value.byteCount - forbidden.size + 1)) {
+                var same = true
+                for (index in 0..forbidden.size where value.byteAt(offset + index) != forbidden[index]) { same = false }
+                if (same) { return planExecutionError("plan.test_binding", "reserved metadata reached canonical arguments") }
+            }
+        }
+        reserveFixtureAction204(operationId, stepId, actionId)
+    }
+    private func reserveFixtureAction204(operationId: OperationId, stepId: String, actionId: String): Result<Unit> {
+        if (!permitted) { return planExecutionError("plan.test_denied", "fixture rejects admission") }
+        if (stepId == "" && actionId == "" && reserved == operationId.value) { return Result.Ok(()) }
+        if (stepId != "read-step" || actionId != "read-action") {
+            return planExecutionError("plan.test_binding", "fixture binding mismatch")
+        }
+        if (reserved != operationId.value) { reservations += 1; reserved = operationId.value }
+        Result.Ok(())
+    }
+    public func observe(_: RunId, _: OperationId): Result<PlanStepDecision> {
+        Result.Ok(PlanStepDecision("read-step", "next", "receipt"))
+    }
+    public func inspect(_: RunId): Result<AgentValue> {
+        match (inferenceContract) {
+            case Some(contract) =>
+                let runnable = ArrayList<AgentValue>()
+                for (id in runnableActions) { runnable.add(textValue(id)) }
+                return Result.Ok(objectValue([ValueField("contract_view", planContractValue(contract)),
+                    ValueField("runnable_action_ids", listValue(runnable.toArray()))]))
+            case None => ()
+        }
+        let roots = ArrayList<AgentValue>()
+        for (root in targetRoots) { roots.add(textValue(root)) }
+        Result.Ok(objectValue([ValueField("contract_view", objectValue([
+            ValueField("target_roots", listValue(roots.toArray()))]))]))
+    }
+    public func openInspection204(run: RunId, payer: LogicalJsonOwnerReservation): Result<PlanExecutionReadOwner204> {
+        publicInspectionReads += 1
+        fixturePlanRead204(payer, { => inspect(run).value().getOrThrow() })
+    }
+    public func openRequest204(run: RunId, payer: LogicalJsonOwnerReservation): Result<PlanExecutionReadOwner204> {
+        fixturePlanRead204(payer, { => approvedPlanRequestView(inspect(run).value().getOrThrow()) })
+    }
+    public func openBinding204(run: RunId, payer: LogicalJsonOwnerReservation): Result<PlanExecutionReadOwner204> {
+        bindingReads += 1
+        fixturePlanRead204(payer, { => inspect(run).value().getOrThrow() })
+    }
+    public func openSessionInspection204(_: String, payer: LogicalJsonOwnerReservation): Result<PlanExecutionReadOwner204> {
+        openInspection204(RunId("fixture-inspection"), payer)
+    }
+    public func openRunScope204(_: RunId, payer: LogicalJsonOwnerReservation): Result<PlanExecutionReadOwner204> {
+        fixturePlanRead204(payer, { =>
+            let roots = ArrayList<AgentValue>()
+            for (root in targetRoots) { roots.add(textValue(root)) }
+            objectValue([ValueField("target_roots", listValue(roots.toArray()))])
+        })
+    }
+    public func openSessionScope204(_: String, payer: LogicalJsonOwnerReservation): Result<?PlanExecutionReadOwner204> {
+        match (openRunScope204(RunId("fixture-scope"), payer)) {
+            case Result.Ok(value) => Result.Ok(Some(value)); case Result.Err(error) => Result.Err(error)
+        }
+    }
+    public func canContinue204(_: RunId, _: LogicalJsonOwnerReservation): Result<Bool> { Result.Ok(true) }
+    public func requireComplete204(_: RunId, _: LogicalJsonOwnerReservation): Result<Unit> { Result.Ok(()) }
+    public func finish204(_: RunId, _: LogicalJsonOwnerReservation): Result<Unit> { Result.Ok(()) }
+    public func validateContextResource204(_: RunId, _: String, _: LogicalJsonOwnerReservation): Result<Unit> { Result.Ok(()) }
+    public func observe204(_: RunId, _: OperationId, payer: LogicalJsonOwnerReservation): Result<PlanExecutionReadOwner204> {
+        fixturePlanRead204(payer, { => objectValue([ValueField("decision", textValue("next"))]) })
+    }
+    public func requireComplete(_: RunId): Result<Unit> { Result.Ok(()) }
+}
+
+
+func runPlanReviewControlContract(): Unit {
+    let catalog = ToolCatalog()
+    let executor = SupervisedContractExecutor()
+    for (name in ["read", "glob", "grep", "ast_grep", "plan_write", "custom", "write"]) {
+        expect(catalog.register(ToolDescriptor(ModelToolDefinition(name, name, objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead), supervisedExecutionSafe: true,
+            planReviewSafe: name != "custom" && name != "write"), executor).isOk(),
+            "register review-control fixture")
+    }
+    let plans = SupervisedContractPort()
+    plans.permitted = false
+    let pipeline = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds(), plans: Some(plans))
+    let context = ToolInvocationContext(RunId("review-control-run"), SessionId("supervised-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead), Capability(CapabilityKind.WorkspaceWrite),
+            Capability(CapabilityKind.Delegate), Capability(CapabilityKind.ProcessSpawn),
+            Capability(CapabilityKind.NetworkAccess)]),
+        toolContext: ToolContextDescriptor(planReviewControl: true))
+    expect(context.planReviewControl, "trusted review marker survives live context creation")
+    for (name in ["read", "glob", "grep", "ast_grep", "plan_write"]) {
+        let prepared = match (preparePipelineCall(pipeline, context, ToolCall(name, name, objectValue([])))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw IllegalStateException(error.code)
+        }
+        expect(prepared.operationPlan.policyVersion == "tool-policy-plan-review-v1" &&
+            pipeline.executePrepared(context, prepared).isOk(),
+            "read-only review controls execute without binding the blocked prior plan")
+    }
+    expect(plans.boundRuns == 0 && plans.reservations == 0,
+        "plan-review controls cannot consume or replace the old execution binding")
+    for (name in ["custom", "write"]) {
+        match (pipeline.prepare(context, ToolCall(name, name, objectValue([])))) {
+            case Result.Err(error) => expect(error.code == "plan.review_control_denied",
+                "review flag does not grant arbitrary tools even with read-only descriptors")
+            case _ => throw IllegalStateException("review control accepted a non-whitelisted tool")
+        }
+    }
+    let overprivilegedCatalog = ToolCatalog()
+    expect(overprivilegedCatalog.register(ToolDescriptor(ModelToolDefinition("read", "mutating impostor", objectValue([])),
+        Capability(CapabilityKind.WorkspaceWrite), sideEffecting: true, supervisedExecutionSafe: true, planReviewSafe: true),
+        executor).isOk(), "register overprivileged read descriptor fixture")
+    let unsafePipeline = ToolPipeline(overprivilegedCatalog, MemoryOperations(), MemoryAudit(), FixedIds(), plans: Some(plans))
+    match (unsafePipeline.prepare(context, ToolCall("write-disguised", "read", objectValue([])))) {
+        case Result.Err(error) => expect(error.code == "plan.review_control_denied",
+            "whitelisted name cannot bypass read-only effect and capability limits")
+        case _ => throw IllegalStateException("review mode accepted a mutating read descriptor")
+    }
+    let ordinary = ToolInvocationContext(RunId("normal-review-comparison"), SessionId("normal-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]))
+    let trustedRead = ToolDescriptor(ModelToolDefinition("read", "read", objectValue([])),
+        Capability(CapabilityKind.WorkspaceRead), supervisedExecutionSafe: true, planReviewSafe: true)
+    let call = ToolCall("normal", "read", objectValue([]))
+    let normalPlan = normalizedToolOperationPlan(ordinary, call, trustedRead)
+    let reviewPlan = normalizedToolOperationPlan(context, call, trustedRead)
+    expect(normalPlan.policyVersion == "tool-policy-v1" && normalPlan.bindingDigest != reviewPlan.bindingDigest,
+        "trusted review policy is part of the frozen canonical operation binding")
+}
+
+func runSupervisedExecutionFailureContract(): Unit {
+    let binding = objectValue([ValueField("step_id", textValue("read-step")),
+        ValueField("action_id", textValue("read-action"))])
+    let catalog = planReadFixtureCatalog204()
+    expect(catalog.register(ToolDescriptor(ModelToolDefinition("bash", "inline shell", objectValue([])),
+        Capability(CapabilityKind.ProcessSpawn), sideEffecting: true, supervisedExecutionSafe: true),
+        TimeoutExecutor()).isOk(), "register supervised inline shell fixture")
+    let plans = SupervisedContractPort()
+    let pipeline = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds(),
+        plans: Some(plans), policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo))
+    let context = ToolInvocationContext(RunId("supervised-shell"), SessionId("supervised-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn)]))
+    let actualCatalogConsumer = pipeline.beginHostCatalogConsumer204(context).getOrThrow()
+    for (name in ["async", "pty", "detached"]) {
+        match (pipeline.prepare(context, ToolCall(name, "bash", objectValue([
+            ValueField("command", textValue("example")), ValueField(name, boolValue(true)),
+            ValueField("_plan", binding)])))) {
+            case Result.Err(error) => expect(error.code == "plan.bash_detached_denied",
+                "supervised shell cannot escape its Operation lifecycle")
+            case _ => throw IllegalStateException("supervised shell accepted detached execution")
+        }
+    }
+    let prepared = match (preparePipelineCall(pipeline, context, ToolCall("inline", "bash", objectValue([
+        ValueField("command", textValue("example")), ValueField("_plan", binding)])))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.code)
+    }
+    match (pipeline.executePrepared(context, prepared)) {
+        case Result.Err(error) => expect(error.code == "tool.timeout",
+            "supervised mutation executor failure retains uncertainty for Operation settlement")
+        case _ => throw IllegalStateException("unknown mutation outcome became a completed tool result")
+    }
+    let readCatalog = planReadFixtureCatalog204()
+    expect(readCatalog.register(ToolDescriptor(ModelToolDefinition("read", "read timeout", objectValue([])),
+        Capability(CapabilityKind.WorkspaceRead), supervisedExecutionSafe: true), TimeoutExecutor()).isOk(),
+        "register supervised read-only failure fixture")
+    let readPipeline = ToolPipeline(readCatalog, MemoryOperations(), MemoryAudit(), FixedIds(),
+        plans: Some(SupervisedContractPort()))
+    let readContext = ToolInvocationContext(RunId("supervised-read-failure"),
+        SessionId("supervised-session"), CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]))
+    let actualReadConsumer = readPipeline.beginHostCatalogConsumer204(readContext).getOrThrow()
+    match (executePipelineCall(readPipeline, readContext,
+        ToolCall("read-timeout", "read", objectValue([ValueField("_plan", binding)])))) {
+        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(result.isError,
+            "read-only executor failures still produce typed recoverable results")
+        case _ => throw IllegalStateException("read-only timeout lost recoverable tool semantics")
+    }
+}
+
+
+func runSupervisedProcessScopeContract(): Unit {
+    let descriptor = ToolDescriptor(ModelToolDefinition("bash", "scoped shell", objectValue([])),
+        Capability(CapabilityKind.ProcessSpawn), sideEffecting: true, supervisedExecutionSafe: true)
+    let catalog = planReadFixtureCatalog204()
+    let executor = SupervisedContractExecutor()
+    expect(catalog.register(descriptor, executor).isOk(), "register scoped process fixture")
+    let unbackedCatalog = ToolCatalog()
+    unbackedCatalog.register(descriptor, executor).value().getOrThrow()
+    let unbacked = ToolPipeline(unbackedCatalog, MemoryOperations(), MemoryAudit(), FixedIds(),
+        plans: Some(SupervisedContractPort()))
+    let unbackedContext = ToolInvocationContext(RunId("unbacked-process-run"), SessionId("supervised-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn)]))
+    match (unbacked.prepare(unbackedContext, ToolCall("unbacked", "bash", objectValue([
+        ValueField("command", textValue("example")), ValueField("_plan", objectValue([
+            ValueField("step_id", textValue("read-step")), ValueField("action_id", textValue("read-action"))]))])))) {
+        case Result.Err(error) => expect(error.code == "plan.read_bank_missing",
+            "supervised projection reads cannot create or bypass the original Registry bank")
+        case _ => throw IllegalStateException("supervised process read proceeded without its original DATA bank")
+    }
+    let plans = SupervisedContractPort()
+    plans.targetRoots = ["/workspace/approved"]
+    let pipeline = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds(),
+        plans: Some(plans), policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo))
+    let context = ToolInvocationContext(RunId("scoped-process-run"), SessionId("supervised-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn)]),
+        toolContext: ToolContextDescriptor(workspaceRoot: "/workspace", cwd: "/workspace/original"))
+    let actualCatalogConsumer = pipeline.beginHostCatalogConsumer204(context).getOrThrow()
+    let binding = objectValue([ValueField("step_id", textValue("read-step")),
+        ValueField("action_id", textValue("read-action"))])
+    let call = ToolCall("scoped-shell", "bash", objectValue([
+        ValueField("command", textValue("example")), ValueField("cwd", textValue("approved")),
+        // Authored tool arguments cannot grant extra sandbox write paths.
+        ValueField("approved_write_roots", listValue([textValue("/")])), ValueField("_plan", binding)]))
+    let prepared = match (preparePipelineCall(pipeline, context, call)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.code)
+    }
+    expect(prepared.operationPlan.cwd == "/workspace/approved" &&
+        prepared.operationPlan.canonicalArguments.field("cwd").getOrThrow().text == "/workspace/approved" &&
+        prepared.operationPlan.approvedWriteRoots.size == 1 &&
+        prepared.operationPlan.approvedWriteRoots[0] == "/workspace/approved",
+        "process cwd and writable scope derive from canonical call and durable approved contract")
+    let driftCall = ToolCall("scoped-shell", "bash", objectValue([
+        ValueField("command", textValue("example")), ValueField("cwd", textValue("other"))]))
+    let first = normalizedToolOperationPlan(context,
+        ToolCall("scoped-shell", "bash", objectValue([ValueField("command", textValue("example")),
+            ValueField("cwd", textValue("approved"))])), descriptor,
+        approvedWriteRoots: ["/workspace/approved"])
+    let changedCwd = normalizedToolOperationPlan(context, driftCall, descriptor,
+        approvedWriteRoots: ["/workspace/approved"])
+    let changedRoots = normalizedToolOperationPlan(context,
+        ToolCall("scoped-shell", "bash", objectValue([ValueField("command", textValue("example")),
+            ValueField("cwd", textValue("approved"))])), descriptor,
+        approvedWriteRoots: ["/workspace/other"])
+    expect(first.bindingDigest != changedCwd.bindingDigest && first.bindingDigest != changedRoots.bindingDigest,
+        "process approval binding changes with effective cwd and trusted write roots")
+    plans.targetRoots = ["/workspace/other"]
+    match (pipeline.executePrepared(context, prepared)) {
+        case Result.Err(error) => expect(error.code == "tool.prepared_plan_changed" && executor.executions == 0,
+            "durable process scope drift prevents executor handoff")
+        case _ => throw IllegalStateException("changed writable process scope was executed")
+    }
+}
+
+
+func runTrustedPromotionOrderingContract(): Unit {
+    let catalog = ToolCatalog()
+    for (name in ["first", "middle", "last"]) {
+        register(catalog, name, CapabilityKind.WorkspaceRead, false)
+    }
+    let capabilities = CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+    let oldSnapshot = catalog.toolSetSnapshot("before-trust", capabilities)
+    let operations = MemoryOperations()
+    let pipeline = ToolPipeline(catalog, operations, MemoryAudit(), FixedIds())
+    let oldContext = ToolInvocationContext(RunId("before-trust-run"), SessionId("promotion-session"),
+        capabilities, toolSetSnapshot: Some(oldSnapshot))
+    let oldPrepared = match (preparePipelineCall(pipeline, oldContext,
+        ToolCall("old-middle", "middle", objectValue([])))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.code)
+    }
+    expect(catalog.markSupervisedSafe("middle").isOk() && catalog.markSupervisedSafe("first").isOk(),
+        "host promotion of compiled builtins succeeds")
+    let definitions = catalog.definitionsFor(capabilities)
+    let promoted = catalog.toolSetSnapshot("after-trust", capabilities)
+    expect(definitions.size == 3 && definitions[0].name == "first" &&
+        definitions[1].name == "middle" && definitions[2].name == "last" &&
+        promoted.entries[0].name == "first" && promoted.entries[1].name == "middle" &&
+        promoted.entries[2].name == "last", "trusted promotion preserves active definition and snapshot order")
+    expect(promoted.entries[1].implementationFingerprint != oldSnapshot.entries[1].implementationFingerprint &&
+        pipeline.executePrepared(oldContext, oldPrepared).isOk(),
+        "prior snapshots retain their immutable implementation identity and executor")
+    let supervised = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds(),
+        plans: Some(SupervisedContractPort()))
+    let binding = objectValue([ValueField("step_id", textValue("read-step")),
+        ValueField("action_id", textValue("read-action"))])
+    let call = ToolCall("bound-middle", "middle", objectValue([ValueField("_plan", binding)]))
+    match (supervised.prepare(oldContext, call)) {
+        case Result.Err(error) => expect(error.code == "plan.tool_contract_required",
+            "promotion never upgrades trust inside a prior frozen snapshot")
+        case _ => throw IllegalStateException("prior untrusted snapshot inherited current trust")
+    }
+    let promotedContext = ToolInvocationContext(RunId("after-trust-run"), SessionId("promotion-session"),
+        capabilities, toolSetSnapshot: Some(promoted))
+    match (supervised.prepare(promotedContext, call)) {
+        case Result.Ok(ToolPreparation.Ready(_)) => ()
+        case _ => throw IllegalStateException("new snapshot could not prepare its explicitly promoted builtin")
+    }
+    expect(catalog.unregister("middle"), "retire the promoted active registration")
+    let replacement = catalog.register(ToolDescriptor(
+        ModelToolDefinition("middle", "replacement test tool", objectValue([ValueField("type", textValue("object"))])),
+        Capability(CapabilityKind.WorkspaceRead), implementationVersion: "fixture-replacement-v2"), EchoExecutor())
+    match (replacement) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    let replacementContext = ToolInvocationContext(RunId("replacement-run"), SessionId("promotion-session"),
+        capabilities, toolSetSnapshot: Some(catalog.toolSetSnapshot("replacement", capabilities)))
+    match (supervised.prepare(replacementContext, call)) {
+        case Result.Err(error) => expect(error.code == "plan.tool_contract_required",
+            "replacement registration does not inherit a retired builtin's trust")
+        case _ => throw IllegalStateException("replacement registration silently inherited trust")
+    }
+}
+
+
+// A deterministic descriptor-level test of Native schema compatibility and
+// binding selection. Actual Native host provenance remains in product gates.
+func runNativeSchemaBindingContract(): Unit {
+    let input = objectValue([ValueField("type", textValue("object")),
+        ValueField("properties", objectValue([ValueField("query", objectValue([
+            ValueField("type", textValue("string"))]))])),
+        ValueField("required", listValue([textValue("query")])), ValueField("additionalProperties", boolValue(false))])
+    let descriptor = ToolDescriptor(ModelToolDefinition("fixture_native_schema_read", "Native schema compatibility fixture", input),
+        Capability(CapabilityKind.WorkspaceRead), supervisedExecutionSafe: true, planBindingInArguments: false)
+    expect(descriptor.schemaDigest == modelPolicySha256Text(canonicalAgentValue(input)) &&
+        descriptor.definition.inputSchema.field("properties").getOrThrow().field("_plan").isNone(),
+        "Native opt-out preserves the exact published business schema and digest")
+    let arguments = objectValue([ValueField("query", textValue("value"))])
+    let pins = objectValue([ValueField(descriptor.definition.name, objectValue([
+        ValueField("version", textValue(descriptor.implementationVersion)),
+        ValueField("fingerprint", textValue(descriptor.implementationFingerprint)),
+        ValueField("schema_digest", textValue(descriptor.schemaDigest))]))])
+    let first = PlanAction("read-action", [descriptor.definition.name], ["denied"],
+        OperationEffectClass.ReadOnly, arguments, 1, exactArguments: true, toolIdentities: pins)
+    let plans = SupervisedContractPort()
+    plans.inferenceContract = Some(PlanContract(["/workspace"], [PlanExecutionStep(PlanStepId("read-step"), [], true, [first])]))
+    plans.runnableActions = ["read-action"]
+    let catalog = planReadFixtureCatalog204()
+    expect(catalog.register(descriptor, SupervisedContractExecutor()).isOk(), "register Native-compatible fixture")
+    let pipeline = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds(), plans: Some(plans))
+    let context = ToolInvocationContext(RunId("native-schema-run"), SessionId("supervised-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        toolContext: ToolContextDescriptor(workspaceRoot: "/workspace"))
+    let actualCatalogConsumer = pipeline.beginHostCatalogConsumer204(context).getOrThrow()
+    match (pipeline.prepare(context, ToolCall("native-input", descriptor.definition.name, arguments))) {
+        case Result.Ok(ToolPreparation.Ready(prepared)) => expect(prepared.planStepId == "read-step" &&
+            prepared.planActionId == "read-action" && prepared.operationPlan.canonicalArguments.field("_plan").isNone(),
+            "a unique runnable pinned canonical call selects its approved action without model metadata")
+        case _ => throw IllegalStateException("unique Native action did not bind")
+    }
+    let second = PlanAction("second-action", [descriptor.definition.name], ["denied"],
+        OperationEffectClass.ReadOnly, arguments, 1, exactArguments: true, toolIdentities: pins)
+    plans.inferenceContract = Some(PlanContract(["/workspace"], [PlanExecutionStep(PlanStepId("read-step"), [], true, [first, second])]))
+    plans.runnableActions = ["read-action", "second-action"]
+    match (pipeline.prepare(context, ToolCall("native-ambiguous", descriptor.definition.name, arguments))) {
+        case Result.Err(error) => expect(error.code == "plan.binding_ambiguous" && plans.reservations == 0,
+            "ambiguous Native calls fail before any attempt reservation")
+        case _ => throw IllegalStateException("ambiguous Native action defaulted to a budget")
+    }
+    plans.runnableActions = []
+    match (pipeline.prepare(context, ToolCall("native-blocked", descriptor.definition.name, arguments))) {
+        case Result.Err(error) => expect(error.code == "plan.binding_ambiguous" && plans.reservations == 0,
+            "non-runnable Native actions cannot be selected")
+        case _ => throw IllegalStateException("blocked Native action was selected")
+    }
+    expect(plans.bindingReads == 3 && plans.publicInspectionReads == 0,
+        "Native exact matching consumes only the explicit paid binding graph, never the public inspection graph")
+}
+
+
+// Descriptor-level preparation test. The Product child contract separately
+// proves real Native publication, Task lineage, IO and canonical admission.
+class PreparationEnvelopeFixture204 <: ToolExecutor & OwnedPreparationInputExecutor340 {
+    private let backing: LogicalJsonOwnerReservation
+    var expectedSource: ?CommittedToolCallRef = None<CommittedToolCallRef>
+    var sawOriginalBinding = false
+    var resolverCalls: Int64 = 0
+    init(backing: LogicalJsonOwnerReservation) { this.backing = backing }
+    public func retainPreparationInput340(context: ToolInvocationContext, root: ?OperationRootSource,
+        call: ToolCall, facts: Array<ContextReadFactLink>): Result<Unit> {
+        match (ownedPreparationInputInvoice340(backing, context, root, call, facts)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match ((root, expectedSource)) {
+            case (Some(OperationRootSource.Committed(actual)), Some(expected)) =>
+                sawOriginalBinding = refEq(actual, expected) && call.arguments.field("_plan").isSome() &&
+                    actual.block.arguments.field("_plan").isSome() &&
+                    canonicalAgentValue(call.arguments) == canonicalAgentValue(actual.block.arguments)
+            case _ => ()
+        }
+        Result.Ok(())
+    }
+    func read(_: ToolInvocationContext, call: ToolCall): Result<?ToolPreparationRead> {
+        resolverCalls += 1
+        if (call.arguments.field("_plan").isSome() || call.arguments.field("tasks").isNone()) {
+            return planExecutionError("fixture.preparation_business_input", "resolver requires only schema-validated business input") }
+        Result.Ok(None)
+    }
+    public func execute(_: ToolInvocationContext, _: PreparedToolInvocation): Result<ToolResult> {
+        planExecutionError("fixture.preparation_no_execution", "preparation fixture never executes a task")
+    }
+}
+
+func runSupervisedPreparationEnvelopeContract204(): Unit {
+    let catalog = planReadFixtureCatalog204()
+    let fixture = PreparationEnvelopeFixture204(catalog.reserveRegistryData180(131072).getOrThrow())
+    let schema = objectValue([ValueField("type", textValue("object")),
+        ValueField("properties", objectValue([ValueField("tasks", objectValue([
+            ValueField("type", textValue("array")), ValueField("items", objectValue([
+                ValueField("type", textValue("string"))]))]))])),
+        ValueField("required", listValue([textValue("tasks")])), ValueField("additionalProperties", boolValue(false))])
+    let descriptor = ToolDescriptor(ModelToolDefinition("fixture_task_preparation", "business-only task preparation", schema),
+        Capability(CapabilityKind.WorkspaceRead), supervisedExecutionSafe: true, planBindingInArguments: false,
+        preparationReadMayBeAbsent: true, preparationReadResolver: Some({ context, call => fixture.read(context, call) }))
+    catalog.register(descriptor, fixture).value().getOrThrow()
+    let plans = SupervisedContractPort()
+    let pipeline = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds(), plans: Some(plans))
+    let context = ToolInvocationContext(RunId("preparation-envelope-run"), SessionId("preparation-envelope-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]), epoch: 1)
+    let actualConsumer = pipeline.beginHostCatalogConsumer204(context).getOrThrow()
+    let binding = objectValue([ValueField("step_id", textValue("read-step")),
+        ValueField("action_id", textValue("read-action"))])
+    let arguments = objectValue([ValueField("tasks", listValue([textValue("inspect approved source")])),
+        ValueField("_plan", binding)])
+    let call = ToolCall("preparation-envelope", descriptor.definition.name, arguments)
+    let coordinator = ThreadCoordinator(ThreadId(context.sessionId.value), "/workspace", InMemoryThreadCommitSink())
+    coordinator.startTurn(SemanticTurnId("http-prepare-turn"), context.runId, ItemId("preparation-envelope-user"),
+        ThreadItemContent.UserMessage(textMessageParts("prepare task"))).value().getOrThrow()
+    let committed = httpPreparationCommitted(coordinator, context, 1, "preparation-envelope", call)
+    fixture.expectedSource = Some(committed)
+    expect(pipeline.preparationReadCommitted340(context, committed, call).isOk() &&
+        fixture.sawOriginalBinding && fixture.resolverCalls == 1,
+        "actual preparation hook validates business input while retaining the original committed binding")
+    let prepared = sourceReady(pipeline.prepareCommitted(context, committed))
+    expect(prepared.planStepId == "read-step" && prepared.planActionId == "read-action" &&
+        prepared.call.arguments.field("_plan").isNone() &&
+        refEq(prepared.source.rootToolCall.getOrThrow(), committed) &&
+        committed.block.arguments.field("_plan").isSome(),
+        "normal preparation reuses the same strict binding and original canonical source")
+    expect(descriptor.schemaDigest == modelPolicySha256Text(canonicalAgentValue(schema)) &&
+        descriptor.definition.inputSchema.field("properties").getOrThrow().field("_plan").isNone(),
+        "preparation normalization does not rewrite the Native-style business schema or identity")
+    for (invalid in [textValue("invalid"), objectValue([ValueField("step_id", textValue("read-step")),
+        ValueField("action_id", textValue("read-action")), ValueField("extra", boolValue(true))]),
+        objectValue([ValueField("step_id", textValue("")), ValueField("action_id", textValue("read-action"))])]) {
+        let bad = ToolCall("invalid-binding", call.name, objectValue([
+            ValueField("tasks", listValue([textValue("inspect")])), ValueField("_plan", invalid)]))
+        expect(match (pipeline.preparationRead(context, bad)) {
+            case Result.Err(error) => error.code == "plan.binding_invalid"; case _ => false
+        }, "preparation rejects malformed reserved bindings before invoking the read resolver")
+    }
+    let extra = ToolCall("extra-business-field", call.name, objectValue([
+        ValueField("tasks", listValue([textValue("inspect")])), ValueField("_plan", binding),
+        ValueField("unexpected", boolValue(true))]))
+    expect(match (pipeline.preparationRead(context, extra)) {
+        case Result.Err(error) => error.code == "tool.invalid_arguments"; case _ => false
+    } && fixture.resolverCalls == 1, "reserved binding removal does not permit unknown business fields or read calls")
+    let generic = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds())
+    expect(match (generic.preparationRead(context, call)) {
+        case Result.Err(error) => error.code == "tool.invalid_arguments"; case _ => false
+    } && fixture.resolverCalls == 1, "unsupervised preparation keeps the original strict business-schema validation")
 }

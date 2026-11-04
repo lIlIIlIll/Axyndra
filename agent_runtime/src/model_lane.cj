@@ -51,6 +51,7 @@ public class ToolSnapshotEntry {
     public let implementationFingerprint: String
     public let schemaDigest: String
     public let availableAtSnapshot: Bool
+    public let planReviewSafe: Bool
     public let requiredCapabilities: Array<Capability>
 
     public init(
@@ -61,7 +62,8 @@ public class ToolSnapshotEntry {
         requiredCapabilities: Array<Capability>,
         implementationFingerprint!: String = "",
         schemaDigest!: String = "",
-        availableAtSnapshot!: Bool = true
+        availableAtSnapshot!: Bool = true,
+        planReviewSafe!: Bool = false
     ) {
         if (name.trimAscii() == "" || executorVersion.trimAscii() == "" ||
             inputSchema.unifiedKind != ValueKind.Object ||
@@ -79,6 +81,7 @@ public class ToolSnapshotEntry {
         this.implementationFingerprint = implementationFingerprint.trimAscii()
         this.schemaDigest = schemaDigest.trimAscii()
         this.availableAtSnapshot = availableAtSnapshot
+        this.planReviewSafe = planReviewSafe
         this.requiredCapabilities = requiredCapabilities
     }
 
@@ -509,6 +512,20 @@ public class ModelLane {
                 case None => None<OwnedModelTools159> }
         } finally { toolDataLock159.unlock() }
     }
+    public func reserveModelToolSelection204(): ?LogicalJsonOwnerReservation {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => Some(value.reserveModelToolSelection204())
+                case None => None<LogicalJsonOwnerReservation> }
+        } finally { toolDataLock159.unlock() }
+    }
+    public func selectedOwnedModelTools204(names: Array<String>): ?OwnedModelTools159 {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => Some(value.copySelectedOwnedModelTools204(names))
+                case None => None<OwnedModelTools159> }
+        } finally { toolDataLock159.unlock() }
+    }
     public func ownedManifestCatalog159(): ?OwnedToolCatalogValue159 {
         toolDataLock159.lock()
         try {
@@ -585,7 +602,7 @@ func modelLaneSnapshotFrame159(lane: ModelLane, snapshot: ToolSetSnapshot): Agen
                 ValueField("resource", textValue(capability.resource))
             ]))
         }
-        tools.add(objectValue([
+        let toolValue = objectValue([
             ValueField("name", textValue(entry.name)),
             ValueField("description", textValue(entry.description)),
             ValueField("input_schema", entry.inputSchema),
@@ -594,7 +611,9 @@ func modelLaneSnapshotFrame159(lane: ModelLane, snapshot: ToolSetSnapshot): Agen
             ValueField("schema_digest", textValue(entry.schemaDigest)),
             ValueField("available_at_snapshot", boolValue(entry.availableAtSnapshot)),
             ValueField("capabilities", listValue(capabilities.toArray()))
-        ]))
+        ])
+        if (entry.planReviewSafe) { toolValue.put("plan_review_safe", boolValue(true)) }
+        tools.add(toolValue)
     }
     let hooks = ArrayList<AgentValue>()
     for (handler in snapshot.hookHandlers) {
@@ -666,7 +685,8 @@ public func modelLaneFromSnapshotValue(value: AgentValue): ModelLane {
             capabilities.toArray(),
             implementationFingerprint: laneOptionalTextField(tool, "implementation_fingerprint"),
             schemaDigest: laneOptionalTextField(tool, "schema_digest"),
-            availableAtSnapshot: laneOptionalBoolField(tool, "available_at_snapshot")
+            availableAtSnapshot: laneOptionalBoolField(tool, "available_at_snapshot"),
+            planReviewSafe: laneOptionalBoolField(tool, "plan_review_safe", defaultValue: false)
         ))
     }
     let hookValues = match (value.field("hooks")) {
@@ -802,14 +822,14 @@ func laneOptionalTextField(value: AgentValue, name: String): String {
     }
 }
 
-func laneOptionalBoolField(value: AgentValue, name: String): Bool {
+func laneOptionalBoolField(value: AgentValue, name: String, defaultValue!: Bool = true): Bool {
     match (value.field(name)) {
         case Some(item) =>
             if (item.unifiedKind != ValueKind.Boolean) {
                 throw IllegalStateException("ModelLane snapshot field is not boolean: " + name)
             }
             item.asBool()
-        case None => true
+        case None => defaultValue
     }
 }
 

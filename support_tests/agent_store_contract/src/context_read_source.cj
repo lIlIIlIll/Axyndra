@@ -1,6 +1,7 @@
 package agent_store_contract
 
 import std.fs.*
+import std.env.getVariable
 import agent_domain.*
 import agent_runtime.*
 import agent_store.*
@@ -24,9 +25,10 @@ class ContextReadStoreFixture {
     let call = ToolCall("context-read-call", HOST_CONTEXT_READ_TOOL,
         objectValue([ValueField("path", textValue("document.cj"))]))
     let plan: NormalizedOperationPlan
-    init(mode!: String = "") {
-        root = Directory.createTemp("/tmp").toString(); database = SqliteDatabase(root + "/context-read.db")
-        let sink = SqliteThreadCommitSink(database)
+    init(mode!: String = "", paths!: Array<String> = [], policyVersion!: String = "tool-policy-v1",
+        allocation!: ?(Int64)->LogicalJsonOwnerReservation = None) {
+        root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString(); database = SqliteDatabase(root + "/context-read.db")
+        let sink = SqliteThreadCommitSink(database, knownParentAllocation: allocation)
         coordinator = ThreadCoordinator(sink.createThread(thread, "workspace"), sink)
         runtime = AgentThreadRuntime(coordinator, ContextProjector("context-read", StoreEstimator()), { => 10 })
         active = runtime.startTurn(turn, run, ItemId("context-read-user"),
@@ -34,8 +36,8 @@ class ContextReadStoreFixture {
             .value().getOrThrow()
         plan = NormalizedOperationPlan(call.name, call.arguments, [Capability(CapabilityKind.WorkspaceRead)],
             OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "read-plan-binding",
-            toolVersion: HOST_CONTEXT_READ_IMPLEMENTATION, implementationFingerprint: HOST_CONTEXT_READ_IMPLEMENTATION)
-        store = DurableOperationStore(database)
+            resolvedPaths: paths, policyVersion: policyVersion, toolVersion: HOST_CONTEXT_READ_IMPLEMENTATION, implementationFingerprint: HOST_CONTEXT_READ_IMPLEMENTATION)
+        store = DurableOperationStore(database, documentPayloadAllocation: allocation)
         var parent: ?OperationRootSource = None
         if (mode == "committed" || mode == "forged-decision" || mode == "prepared-parent") {
             let actual = commitDurableToolCall(database, coordinator, thread, turn, run, active.epoch, 1,

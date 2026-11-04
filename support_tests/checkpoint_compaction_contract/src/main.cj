@@ -5,6 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
+import agent_core.*
 import agent_product.*
 import std.collection.*
 import std.fs.*
@@ -15,6 +16,10 @@ main(): Int64 {
     try {
         let workspace = root + "/workspace"
         Directory.create(workspace, recursive: true)
+        // The positive fixture must fit the current frozen tool catalog and
+        // the retained checkpoint protocol. A 12k target is now smaller than
+        // the catalog alone; the oversized active-tail case below still fails.
+        let fixtureInputTokens: Int64 = 24000
         let product = openProduct(config: ProductConfig(
             settingsRoot: root + "/config",
             stateRoot: root + "/state",
@@ -22,7 +27,7 @@ main(): Int64 {
             fixture: true,
             asyncEnabled: false,
             compactionOverride: Some(ProductCompactionSettings(
-                maxInputTokens: 20000,
+                maxInputTokens: fixtureInputTokens,
                 triggerPercent: 80,
                 targetPercent: 60,
                 emergencyMaxMessages: 512,
@@ -31,6 +36,8 @@ main(): Int64 {
                 oversizedToolResultTokens: 512
             ))
         )).value().getOrThrow()
+        expect(estimateContextTokens([], tools: product.tools()) + 1024 < fixtureInputTokens * 60 / 100,
+            "positive checkpoint fixture leaves room for protocol after the actual frozen tools")
 
         let preserved = SessionId("active-checkpoint-preserved")
         let preservedMessages = ArrayList<ModelMessage>()
@@ -43,7 +50,10 @@ main(): Int64 {
         preservedMessages.add(checkpointResult("checkpoint-preserved"))
         preservedMessages.add(textMessage("small active exploration"))
         product.replaceMessages(preserved, preservedMessages.toArray()).value().getOrThrow()
-        let removed = product.compactSession(preserved, force: false).value().getOrThrow()
+        let removed = match (product.compactSession(preserved, force: false)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw IllegalStateException("checkpoint compaction failed: " + error.describe())
+        }
         let preservedApplication = product.applicationSession(sessionId: Some(preserved))
         preservedApplication.setAutoCompaction(false)
         preservedApplication.handle("checkpoint projection probe").value().getOrThrow()

@@ -176,6 +176,9 @@ public class HostOwnedPrimitiveConfiguration191 {
         withData191({ _ => owner.getOrThrow().retain191() })
     }
     public func permits(localTool: String): Bool { withData191({ value => value.permits(localTool) }) }
+    func supervisedTaskServices191(localTool: String): Bool {
+        withData191({ value => value.supervisedTaskServices191(localTool) })
+    }
     public func permitsService(localTool: String, service: String): Bool { withData191({ value => value.permitsService(localTool, service) }) }
     public func mappedInvocation(localTool: String): Bool { withData191({ value => value.mappedInvocation(localTool) }) }
     public func callerAllows(localTool: String, capabilities: CapabilitySet, service!: String = ""): Bool {

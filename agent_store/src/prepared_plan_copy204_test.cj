@@ -59,7 +59,8 @@ private func receiverMetadataPlan204(): NormalizedOperationPlan {
         idempotencyKey: "copy-key", replayDisposition: Some(ReplayDisposition.Idempotent("copy-key")),
         toolVersion: "fixture-v2", implementationFingerprint: "fixture-implementation",
         schemaDigest: "fixture-schema", effectiveArgumentsDigest: "fixture-arguments",
-        replayContractVersion: 1u32, contextReadFacts: [reference])
+        replayContractVersion: 1u32, contextReadFacts: [reference],
+        policyVersion: "tool-policy-plan-review-v1", approvedWriteRoots: ["/workspace/approved"])
 }
 
 private func receiverSummaryValue204(summary: WriteApprovalSummary): AgentValue {
@@ -112,9 +113,12 @@ private func receiverConsumeFrame204(source: PreparedNumericFixture204,
         !source.matchesDurableDigest204(modelPolicySha256Text(encodeOperationPlan(decoded)))) { return false }
     if (!complete) {
         return decoded.approvalMetadata.writeSummary.isNone() && decoded.approvalMetadata.sessionApprovalAllowed &&
-            decoded.implementation.toolVersion == "legacy-v1" && decoded.implementation.replayContractVersion == 1u32
+            decoded.implementation.toolVersion == "legacy-v1" && decoded.implementation.replayContractVersion == 1u32 &&
+            decoded.policyVersion == "tool-policy-v1" && decoded.approvedWriteRoots.isEmpty()
     }
-    if (decoded.contextReadFactCount180() != 1 || decoded.approvalMetadata.sessionApprovalAllowed ||
+    if (decoded.policyVersion != "tool-policy-plan-review-v1" || decoded.approvedWriteRoots.size != 1 ||
+        decoded.approvedWriteRoots[0] != "/workspace/approved" ||
+        decoded.contextReadFactCount180() != 1 || decoded.approvalMetadata.sessionApprovalAllowed ||
         decoded.approvalMetadata.writeSummary.isNone()) { return false }
     let b = decoded.approvalMetadata.writeSummary.getOrThrow()
     b.path == "/tmp/fixture.txt" && b.action == "replace" && b.exists && b.bytes == 21 &&
@@ -158,6 +162,20 @@ private func receiverMalformedFrame204(payment: LogicalJsonOwnerReservation): Bo
 
 @Test
 class PreparedPlanCopiedData204Tests {
+    @TestCase
+    func ApprovedPolicyAndWriteRootDataAreIncludedInTheOriginalInvoice(): Unit {
+        let base = NormalizedOperationPlan("fixture.invoice", objectValue([]), [],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "invoice-digest")
+        let bounded = NormalizedOperationPlan("fixture.invoice", objectValue([]), [],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "invoice-digest",
+            policyVersion: "tool-policy-plan-review-v1", approvedWriteRoots: ["/workspace/approved", "/workspace/other"])
+        let first = HubProcessPlanInvoice180({ _ => () })
+        let second = HubProcessPlanInvoice180({ _ => () })
+        first.includePlan(base); second.includePlan(bounded)
+        let extraBytes = bounded.policyVersion.size - base.policyVersion.size +
+            bounded.approvedWriteRoots[0].size + bounded.approvedWriteRoots[1].size
+        @Expect(second.retainedPeak() - first.retainedPeak() >= extraBytes * 64 + 2 * 2048, true)
+    }
     @TestCase
     func CompleteMetadataSurvivesSenderRevocationAndWholeHelperReturnsBothChildren(): Unit {
         let bank = LogicalJsonOwnerBudget()

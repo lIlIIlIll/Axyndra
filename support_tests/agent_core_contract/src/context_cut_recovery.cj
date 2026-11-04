@@ -14,6 +14,13 @@ import std.time.*
 import yjson.*
 import yjson_support.*
 
+func contextRecoveryPlanFacts(): AgentValue {
+    objectValue([ValueField("approval_hash", textValue("recovery-plan-data")),
+        ValueField("instruction_sources", listValue([objectValue([
+            ValueField("hash", textValue(modelPolicySha256Text("frozen-context-instructions")))
+        ])]))])
+}
+
 // Test-only barrier after a genuine commit. The external controller SIGKILLs
 // this process and opens this same WAL in a new process; no catch simulates it.
 class CutRecoveryBarrier {
@@ -140,13 +147,15 @@ func maybeRunContextCutRecoveryWorker(): ?Int64 {
         let catalog = ToolCatalog(); let probe = CutContextTool()
         catalog.register(ToolDescriptor(ModelToolDefinition("context_probe", "real context probe", objectValue([])),
             Capability(CapabilityKind.WorkspaceRead), implementationVersion: "cut-recovery-v1",
-            implementationFingerprint: "cut-recovery-v1"), probe).value().getOrThrow()
+            implementationFingerprint: "cut-recovery-v1", supervisedExecutionSafe: true,
+            planReviewSafe: true), probe).value().getOrThrow()
         let runs = SqliteRunRepository(database); let operations = DurableOperationStore(database)
         let core = AgentCore(model, runs, ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()), catalog,
             threadRuntimes: Some(threads), operationRuntime: Some(operations), modelDecisionRuntime: Some(SqliteModelDecisionStore(database)),
             contextManifestRuntime: Some(CutRecoveryManifest(database, path, barrier)))
         let request = AgentRunRequest(RunId("cut-recovery-run"), SessionId("cut-recovery-thread"), "fixture", "recover at applied context cut",
             contextSnapshot: selectedCutContext("ORIGINAL_CONTEXT"), capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+            toolContext: ToolContextDescriptor(planReviewControl: true), planContextFacts: contextRecoveryPlanFacts(),
             interactions: if (mode == "start") { Some(interactions) } else { None },
             budget: ResourceBudget(maxTurns: 4, maxConcurrentTools: 1, maxToolCalls: 2))
         let sink: AgentEventSink = { event =>
@@ -184,6 +193,10 @@ func maybeRunContextCutRecoveryWorker(): ?Int64 {
             expect(exists(Path(gate)), "two actual reopen processes meet before resume within original sixty seconds")
         }
         let restored = coreContextBoundaryRequestFromValue(contextBoundaryField(boundary.data(), "request"))
+        expect(restored.toolContext.planReviewControl &&
+            canonicalAgentValue(restored.planContextFacts) == canonicalAgentValue(contextRecoveryPlanFacts()) &&
+            !restored.capabilities.allows(CapabilityKind.NetworkAccess),
+            "physical restart recovers the original frozen review flag and plan facts without additional authority")
         expect(runs.pendingRecoveryContinuation(request.sessionId).value().getOrThrow().isNone(),
             "a settled context marker never pretends to be old RunningModel")
         match (core.resumeContextBoundary(restored, sink)) {
@@ -217,8 +230,10 @@ class CutRecoveryBudgetRoundTripManifest107 <: ModelContextManifestRuntimePort {
     let database: SqliteDatabase
     let path: String
     var checked = false
-    init(database: SqliteDatabase, path: String) {
+    let changePlanFacts: Bool
+    init(database: SqliteDatabase, path: String, changePlanFacts!: Bool = false) {
         this.actual = ContextCutManifest(database, path); this.database = database; this.path = path
+        this.changePlanFacts = changePlanFacts
     }
     public func recordBeforeModelEffect(request: AgentRunRequest, requestId: RequestId,
         turnId: SemanticTurnId, laneId: LaneId, stepId: StepId, ordinal: Int64, projection: ModelContextProjection,
@@ -232,6 +247,10 @@ class CutRecoveryBudgetRoundTripManifest107 <: ModelContextManifestRuntimePort {
                 let repository = SqliteRunRepository(reopened)
                 let boundary = repository.contextBoundary(request.runId).value().getOrThrow().getOrThrow()
                 let expected = contextBoundaryUsage(contextBoundaryField(boundary.data(), "usage"))
+                let restored = coreContextBoundaryRequestFromValue(contextBoundaryField(boundary.data(), "request"))
+                expect(restored.toolContext.planReviewControl &&
+                    canonicalAgentValue(restored.planContextFacts) == canonicalAgentValue(contextRecoveryPlanFacts()),
+                    "genuine SQLite context cut and reopen retain the original nonempty plan data and review flag")
                 let decoded = repository.events(request.runId, 0).value().getOrThrow()
                 var typedBudgetCount: Int64 = 0
                 var matchingBudget = false
@@ -249,6 +268,11 @@ class CutRecoveryBudgetRoundTripManifest107 <: ModelContextManifestRuntimePort {
                     repository.pendingRecoveryContinuation(request.sessionId).value().getOrThrow().isNone(),
                     "budget data never supplies old RunningModel execution authority")
                 checked = true
+                if (changePlanFacts) {
+                    // Change only the live host request after the actual cut
+                    // and independent SQLite reopen verified its frozen data.
+                    request.planContextFacts.put("approval_hash", textValue("changed-after-real-cut"))
+                }
             } finally { reopened.close() }
         }
         Result.Ok(())
@@ -256,6 +280,11 @@ class CutRecoveryBudgetRoundTripManifest107 <: ModelContextManifestRuntimePort {
 }
 
 func coreContextBoundaryBudgetJsonReopenContract107(): Unit {
+    coreContextBoundaryBudgetJsonReopenCase107(false)
+    coreContextBoundaryBudgetJsonReopenCase107(true)
+}
+
+func coreContextBoundaryBudgetJsonReopenCase107(changePlanFacts: Bool): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/cut.db"
     let database = SqliteDatabase(path)
@@ -267,17 +296,45 @@ func coreContextBoundaryBudgetJsonReopenContract107(): Unit {
         let catalog = ToolCatalog(); let probe = CutContextTool()
         catalog.register(ToolDescriptor(ModelToolDefinition("context_probe", "real context probe", objectValue([])),
             Capability(CapabilityKind.WorkspaceRead), implementationVersion: "cut-recovery-v1",
-            implementationFingerprint: "cut-recovery-v1"), probe).value().getOrThrow()
+            implementationFingerprint: "cut-recovery-v1", supervisedExecutionSafe: true,
+            planReviewSafe: true), probe).value().getOrThrow()
         let runs = SqliteRunRepository(database); let operations = DurableOperationStore(database)
-        let manifests = CutRecoveryBudgetRoundTripManifest107(database, path)
+        let manifests = CutRecoveryBudgetRoundTripManifest107(database, path, changePlanFacts: changePlanFacts)
         let core = AgentCore(model, runs, ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()), catalog,
             threadRuntimes: Some(threads), operationRuntime: Some(operations),
             modelDecisionRuntime: Some(SqliteModelDecisionStore(database)), contextManifestRuntime: Some(manifests))
         let request = AgentRunRequest(RunId("cut-recovery-run"), SessionId("cut-recovery-thread"), "fixture", "original event codec after actual cut",
             contextSnapshot: selectedCutContext("ORIGINAL_CONTEXT"), capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+            toolContext: ToolContextDescriptor(planReviewControl: true), planContextFacts: contextRecoveryPlanFacts(),
             interactions: Some(interactions), budget: ResourceBudget(maxTurns: 4, maxConcurrentTools: 1, maxToolCalls: 2))
-        expect(core.start(request).isOk() && manifests.checked && model.calls == 2,
-            "actual BudgetUpdated write, legal cut and closed/reopened SQLite are a runnable positive")
+        let outcome = core.start(request)
+        let outcomeDescription = match (outcome) {
+            case Result.Err(error) => error.describe()
+            case Result.Ok(AgentRunOutcome.Completed(_)) => "Completed"
+            case Result.Ok(AgentRunOutcome.AwaitingApproval(_, approval)) => "AwaitingApproval:" + approval.operationId.value
+        }
+        let runRows = database.query("SELECT state FROM runs WHERE id='cut-recovery-run'")
+        let stateDescription = if (runRows.isEmpty()) { "missing" } else { runRows[0].required(0) }
+        let diagnostic = "outcome=" + outcomeDescription + " run_state=" + stateDescription +
+            " model_calls=" + model.calls.toString() + " tools=" + probe.contexts.size.toString() +
+            " cuts=" + database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='context_snapshot_safe_cut'").toString() +
+            " reopened_budget_checked=" + manifests.checked.toString()
+        println("context recovery JSON reopen diagnostic drift=" + changePlanFacts.toString() + " " + diagnostic)
+        if (changePlanFacts) {
+            let refusedFacts = match (outcome) {
+                case Result.Err(error) => error.code == "persistence.sqlite_model_attempt_prepare" &&
+                    error.message.contains("context boundary plan facts changed before fresh prepare")
+                case _ => false
+            }
+            expect(refusedFacts && manifests.checked && model.calls == 1 && probe.contexts.size == 1 &&
+                database.scalarInt("SELECT COUNT(*) FROM model_attempts") == 1 &&
+                database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 1 &&
+                database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='context_snapshot_safe_cut'") == 1,
+                "changed live plan facts after genuine cut/reopen dispatch no fresh model Attempt or duplicate tool; " + diagnostic)
+            return
+        }
+        expect(outcome.isOk() && manifests.checked && model.calls == 2,
+            "actual BudgetUpdated write, legal cut and closed/reopened SQLite are a runnable positive; " + diagnostic)
         expect(database.scalarInt("SELECT COUNT(*) FROM model_attempts") == 2 &&
             database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 1 && probe.contexts.size == 1,
             "event codec repair never replays old Attempt/Tool/Receipt or creates a replacement Run")

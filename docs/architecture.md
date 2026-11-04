@@ -310,9 +310,9 @@ the result is `unknown`, not a no-effect conflict. The host retains the
 staging file for recovery and reports its path. It does not attempt a
 pathname-based rollback that could overwrite a newer edit.
 
-## Schema v28 evolution and rollback boundary
+## Schema v29 evolution and rollback boundary
 
-The current SQLite schema is v28. Migrations remain incremental rather than
+The current SQLite schema is v29. Migrations remain incremental rather than
 preallocating future structures:
 
 - v22 removes the obsolete tool-intent/receipt side ledgers after canonical
@@ -362,3 +362,8 @@ runtime never substitutes another backend.
 这些证据不能替代完整 `scripts/release_gate.sh`。聚焦 contract 通过，不代表真实
 Provider、打包产物、入口黑盒、真实 PTY、长时间性能/内存或目标平台已验证。详细
 能力矩阵见 [runtime-capabilities.md](runtime-capabilities.md)。
+
+Approved plan contracts are documented in [Execute an approved plan](plan-execution.md).
+Schema v29 adds durable approved-plan bindings, shared attempts, and decisions
+backed by canonical Operation receipts. Plan completion seals in the same
+transaction as successful Run settlement after existing owned-work checks.

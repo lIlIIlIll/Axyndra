@@ -8,6 +8,7 @@ import agent_domain.*
 
 main(): Int64 {
     genericContextSnapshotContracts()
+    planExecutionDomainContract()
     networkPolicyContract()
     let writePlan = NormalizedOperationPlan(
         "write", objectValue([]),

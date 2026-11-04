@@ -47,6 +47,81 @@ func installWorkflowContractPolicy(product: ProductRuntime): ProductPluginRecord
     record
 }
 
+// New plan contracts consume setup metadata in a complete closed frame.
+// The legacy installer above deliberately retains exported fixture Strings;
+// this variant exports no record, String, DOM, allocation or callback value.
+private class WorkflowPolicyClosedCopies204 {
+    var payment: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    func closeAfterSetupFrame204(): Unit {
+        let returned = payment; payment = None<LogicalJsonOwnerReservation>
+        match (returned) { case Some(value) => value.close(); case None => () }
+    }
+}
+func installWorkflowContractPolicyScoped204(product: ProductRuntime): Unit {
+    let record = match (product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow())) {
+        case PluginRegistryResult.Ok(value) => value
+        case PluginRegistryResult.Err(error) => throw IllegalStateException("closed workflow fixture import: " + supportRegistryExclusiveErrorCode96(error))
+    }
+    let copies = WorkflowPolicyClosedCopies204()
+    try { installWorkflowContractPolicyScopedFrame204(product, record, copies) }
+    finally { copies.closeAfterSetupFrame204(); record.close() }
+}
+private func installWorkflowContractPolicyScopedFrame204(product: ProductRuntime,
+    record: ProductPluginRecord, copies: WorkflowPolicyClosedCopies204): Unit {
+    let namespaceSource = match (record.descriptor.copyText(PluginDescriptorText.Namespace)) {
+        case PluginRegistryResult.Ok(value) => value
+        case PluginRegistryResult.Err(error) => throw IllegalStateException("closed workflow namespace: " + supportRegistryExclusiveErrorCode96(error))
+    }
+    try {
+        let digestSource = match (record.descriptor.copyText(PluginDescriptorText.ContentDigest)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException("closed workflow digest: " + supportRegistryExclusiveErrorCode96(error))
+        }
+        try {
+            let namespaceSize = namespaceSource.byteCount
+            let digestSize = digestSource.byteCount
+            if (namespaceSize > 4096 || digestSize > 4096) {
+                throw IllegalStateException("closed workflow metadata exceeds its bounded fixture profile") }
+            // Charge these independent text copies and the bounded fixed
+            // configuration-construction peak BEFORE allocating either copy.
+            copies.payment = Some(namespaceSource.deriveCopiedDataPayment(
+                (namespaceSize + digestSize) * 256 + 2097152))
+            let namespace = String.fromUtf8(Array<UInt8>(namespaceSize, { index => namespaceSource.byteAt(index) }))
+            let digest = String.fromUtf8(Array<UInt8>(digestSize, { index => digestSource.byteAt(index) }))
+            configureTodoContractDocumentValues204(product, namespace, digest)
+            configureWorkflowYieldContractValues204(product, namespace, digest)
+            match (product.setPluginEnabled(namespace, true)) {
+                case PluginRegistryResult.Ok(enabled) => enabled.close()
+                case PluginRegistryResult.Err(error) => throw IllegalStateException("closed workflow fixture enable: " + supportRegistryExclusiveErrorCode96(error))
+            }
+            configureWorkflowPolicySelectionValues204(product, namespace, digest)
+        } finally { digestSource.close() }
+    } finally { namespaceSource.close() }
+}
+private func configureWorkflowPolicySelectionValues204(product: ProductRuntime, namespace: String, digest: String): Unit {
+    let directory = product.settingsRoot + "/plugins"
+    let path = directory + "/policies.json"
+    let settings = if (exists(Path(path))) {
+        parseUnifiedJson(String.fromUtf8(File.readFrom(path)), maxBytes: 65536)
+    } else { objectValue([ValueField("version", integerValue(1)), ValueField("bindings", objectValue([]))]) }
+    if (settings.field("version").isNone() || settings.field("version").getOrThrow().asNumberText() != "1" ||
+        settings.field("bindings").isNone() || settings.field("bindings").getOrThrow().unifiedKind != ValueKind.Object) {
+        throw IllegalStateException("workflow fixture refuses unexpected operator policy settings") }
+    let expected = objectValue([ValueField("namespace", textValue(namespace)),
+        ValueField("provider", textValue("propose")), ValueField("package_digest", textValue(digest)),
+        ValueField("plan_tool", textValue("plan_write"))])
+    let bindings = settings.field("bindings").getOrThrow()
+    match (bindings.field("workflow")) {
+        case Some(current) =>
+            if (canonicalAgentValue(current) != canonicalAgentValue(expected)) {
+                throw IllegalStateException("workflow fixture refuses to overwrite another selected provider") }
+        case None =>
+            bindings.put("workflow", expected)
+            if (!exists(Path(directory))) { Directory.create(directory, recursive: true) }
+            File.writeTo(path, stringifyUnifiedJson(settings).toArray())
+    }
+}
+
 // A second Product over this same settings root reuses only the original
 // enabled local package and exact operator selection. A duplicate import is
 // still an error; this check neither installs nor changes configuration.
@@ -94,6 +169,19 @@ func configureTodoContractDocument(product:ProductRuntime,record:ProductPluginRe
                 ValueField("documents",listValue([objectValue([ValueField("key",textValue("todo")),ValueField("read",boolValue(true)),ValueField("write",boolValue(true))])]))])]))])]))])).toArray())
 }
 
+private func configureTodoContractDocumentValues204(product: ProductRuntime, namespace: String, digest: String): Unit {
+    let directory=product.settingsRoot+"/plugins"
+    if(!exists(Path(directory))){Directory.create(directory,recursive:true)}
+    File.writeTo(directory+"/todo-tools.json",stringifyUnifiedJson(objectValue([
+        ValueField("schema",textValue("axyndra.todo-tools/v1")),ValueField("namespace",textValue(namespace)),
+        ValueField("package_digest",textValue(digest)),ValueField("tool",textValue("todo")),ValueField("command",textValue("todo"))])).toArray())
+    File.writeTo(directory+"/documents.json",stringifyUnifiedJson(objectValue([
+        ValueField("version",integerValue(1)),ValueField("plugins",listValue([objectValue([
+            ValueField("namespace",textValue(namespace)),ValueField("package_digest",textValue(digest)),
+            ValueField("tools",listValue([objectValue([ValueField("name",textValue("todo")),ValueField("preparation_provider",textValue("prepare_document")),
+                ValueField("documents",listValue([objectValue([ValueField("key",textValue("todo")),ValueField("read",boolValue(true)),ValueField("write",boolValue(true))])]))])]))])]))])).toArray())
+}
+
 // This is ordinary operator selection for the real package. There is no
 // synthetic executor, bare alias or builtin Yield fallback in this fixture.
 func configureWorkflowYieldContract150(product: ProductRuntime, record: ProductPluginRecord): Unit {
@@ -134,6 +222,53 @@ func configureWorkflowYieldContract150(product: ProductRuntime, record: ProductP
     let entries=ArrayList<AgentValue>();var matched=false
     for(entry in settings.field("plugins").getOrThrow().items){
         if(entry.field("namespace").getOrThrow().text==supportRegistryDescriptor96(record,"namespace")){
+            if(matched || canonicalAgentValue(entry)!=canonicalAgentValue(selected)){
+                throw IllegalStateException("workflow fixture refuses to overwrite another selected primitive")}
+            matched=true
+        }
+        entries.add(entry)
+    }
+    if(!matched){entries.add(selected);settings.put("plugins",listValue(entries.toArray()));File.writeTo(path,stringifyUnifiedJson(settings).toArray())}
+}
+
+private func configureWorkflowYieldContractValues204(product: ProductRuntime, namespace: String, digest: String): Unit {
+    let directory=product.settingsRoot+"/plugins"
+    if(!exists(Path(directory))){Directory.create(directory,recursive:true)}
+    let path=directory+"/primitives.json"
+    let selected=objectValue([ValueField("namespace",textValue(namespace)),
+        ValueField("package_digest",textValue(digest)),
+        ValueField("tools",listValue([objectValue([ValueField("name",textValue("task")),
+            ValueField("profile",textValue("frozen-primitives-v1")),
+            ValueField("services",listValue([textValue("child.start"),textValue("child.wait")])),
+            ValueField("preparation_provider",textValue("prepare_child"))]),
+            objectValue([ValueField("name",textValue("yield")),
+            ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("child.result.write")])),
+            ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("workspace.read"))]),
+            objectValue([ValueField("name",textValue("hub_peers")),
+            ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("peer.list"),textValue("peer.receive")])),
+            ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("workspace.read"))]),
+            objectValue([ValueField("name",textValue("hub_messages")),
+            ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("peer.send"),textValue("peer.wait")])),
+            ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",objectValue([ValueField("catalog",textValue("workspace.read")),ValueField("services",objectValue([ValueField("peer.send",textValue("peer.message")),ValueField("peer.wait",textValue("workspace.read"))]))]))]),
+            objectValue([ValueField("name",textValue("hub_jobs")),
+            ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("job.list"),textValue("job.wait")])),
+            ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("workspace.read"))]),
+            objectValue([ValueField("name",textValue("hub_cancel")),
+            ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("job.cancel")])),
+            ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("delegate"))]),
+            objectValue([ValueField("name",textValue("hub_process_read")),
+            ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("process.observe")])),
+            ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("workspace.read"))]),
+            objectValue([ValueField("name",textValue("hub_process")),
+            ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("process.service")])),
+            ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("process.spawn"))])]))])
+    let settings=if(exists(Path(path))){parseUnifiedJson(String.fromUtf8(File.readFrom(path)),maxBytes:65536)}else{
+        objectValue([ValueField("version",integerValue(1)),ValueField("plugins",listValue([]))])}
+    if(settings.field("version").getOrThrow().asNumberText()!="1" || settings.field("plugins").getOrThrow().unifiedKind!=ValueKind.List){
+        throw IllegalStateException("workflow fixture refuses unexpected primitive selection")}
+    let entries=ArrayList<AgentValue>();var matched=false
+    for(entry in settings.field("plugins").getOrThrow().items){
+        if(entry.field("namespace").getOrThrow().text==namespace){
             if(matched || canonicalAgentValue(entry)!=canonicalAgentValue(selected)){
                 throw IllegalStateException("workflow fixture refuses to overwrite another selected primitive")}
             matched=true

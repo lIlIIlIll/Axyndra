@@ -21,6 +21,7 @@ func storedCheckpointToolSetMatches185(lane: AgentValue, expected: ToolSetSnapsh
             storedCheckpoint185OptionalText(actual, "implementation_fingerprint").trimAscii() != wanted.implementationFingerprint ||
             storedCheckpoint185OptionalText(actual, "schema_digest") != wanted.schemaDigest ||
             storedCheckpoint185OptionalBool(actual, "available_at_snapshot") != wanted.availableAtSnapshot ||
+            storedCheckpoint185OptionalBool(actual, "plan_review_safe", defaultValue: false) != wanted.planReviewSafe ||
             !canonicalAgentValuesEqual(actual.field("input_schema").getOrThrow(), wanted.inputSchema)) { return false }
         let caps = actual.field("capabilities").getOrThrow()
         if (caps.unifiedKind != ValueKind.List || caps.items.size != wanted.requiredCapabilities.size) { return false }
@@ -61,9 +62,9 @@ private func storedCheckpoint185Integer(value: AgentValue, name: String): Int64 
     if (item.unifiedKind != ValueKind.Number) { throw IllegalStateException("frozen snapshot integer field changed kind") }
     Int64.parse(item.asNumberText())
 }
-private func storedCheckpoint185OptionalBool(value: AgentValue, name: String): Bool {
+private func storedCheckpoint185OptionalBool(value: AgentValue, name: String, defaultValue!: Bool = true): Bool {
     match (value.field(name)) {
-        case None => true
+        case None => defaultValue
         case Some(item) => if (item.unifiedKind == ValueKind.Boolean) { item.asBool() }
             else { throw IllegalStateException("frozen tool bool field changed kind") } }
 }

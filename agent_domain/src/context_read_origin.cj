@@ -171,5 +171,9 @@ public func contextReadPlanDigest(plan: NormalizedOperationPlan): String {
             ValueField("grant", objectValue([ValueField("capability", textValue(metadata.grantScope.capability)),
                 ValueField("path", textValue(metadata.grantScope.pathPrefix)), ValueField("tool", textValue(metadata.grantScope.toolName)),
                 ValueField("host", textValue(metadata.grantScope.host)), ValueField("session_only", boolValue(metadata.grantScope.sessionOnly))]))]))])
+    // A host review initializer's policy is part of the private seal's exact
+    // plan proof. Historical/default plans keep their original digest bytes.
+    if (plan.policyVersion != "tool-policy-v1") { value.put("policy_version", textValue(plan.policyVersion)) }
+    if (!plan.approvedWriteRoots.isEmpty()) { value.put("approved_write_roots", planStringValues(plan.approvedWriteRoots)) }
     modelPolicySha256Text(canonicalAgentValue(value))
 }

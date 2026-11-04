@@ -192,7 +192,8 @@ public open class HostContextManifestRuntime <: ModelContextManifestRuntimePort 
             intent.id,
             objectValue([
                 ValueField("thread_revision", integerValue(projection.threadRevision)),
-                ValueField("context_snapshot_digest", textValue(contextReadProjectionDigest(request.contextSnapshot)))
+                ValueField("context_snapshot_digest", textValue(contextReadProjectionDigest(request.contextSnapshot))),
+                ValueField("task_context", request.planContextFacts)
             ]),
             skillIds.toArray(),
             memoryReferences.toArray(),

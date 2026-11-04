@@ -67,12 +67,13 @@ func initialContextStoreContracts(): Unit {
         expect(!initialStoreBind(f, request, epoch: epoch) && f.continuation().digest == after.digest,
             "the Accepted-only binding cannot overwrite a later canonical context checkpoint")
     } finally { f.close() }
+    initialContextPlanFactsContracts()
     initialContextStoreRollback()
     for (scenario in ["schema", "unknown-field", "system-type", "capability-shape", "run", "thread", "epoch", "model",
         "prompt", "user-item", "budget", "projection", "lane", "before-start", "cancelled", "pending-call", "work-debt", "phase"]) {
         initialContextStoreFence(scenario)
     }
-    println("Store initial context request contract passed (persistence, rollback, 18 fences)")
+    println("Store initial context request contract passed (persistence, rollback, immutable plan facts, 18 fences)")
 }
 
 func initialContextStoreRollback(): Unit {
@@ -131,4 +132,47 @@ func initialContextStoreFence(scenario: String): Unit {
             f.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='initial_context_request_bound'") == 0,
             "initial context rejects " + scenario + " without overwriting its existing durable witness")
     } finally { f.close() }
+}
+
+func initialContextPlanFactsContracts(): Unit {
+    let fixture = ModelLaneCutFixture()
+    try {
+        let legacy = initialStoreRequest(fixture)
+        expect(isInitialContextRequest(legacy) && legacy.field("plan_context_facts").isNone(),
+            "historical initial request retains its absent plan-facts field")
+        let facts = objectValue([ValueField("approval_hash", textValue("approved-plan")),
+            ValueField("target_roots", listValue([textValue("/workspace/approved")]))])
+        let request = initialStoreRequest(fixture)
+        request.put("plan_context_facts", facts)
+        let original = encodeStoredValue(request)
+        expect(isInitialContextRequest(request) && initialStoreBind(fixture, request,
+            epoch: fixture.runtime.activeRun().getOrThrow().epoch),
+            "nonempty structured plan facts bind through the real Accepted request transaction")
+        let bound = fixture.continuation()
+        let revision = fixture.database.scalarInt("SELECT revision FROM run_continuations")
+        expect(encodeStoredValue(optionalRunRequestSnapshotFromDurableContinuation(bound).getOrThrow()) == original,
+            "the complete plan-facts Object is frozen in the durable request projection")
+        facts.put("approval_hash", textValue("caller-mutated"))
+        expect(encodeStoredValue(optionalRunRequestSnapshotFromDurableContinuation(fixture.continuation()).getOrThrow()) == original &&
+            !initialStoreBind(fixture, request, epoch: fixture.runtime.activeRun().getOrThrow().epoch) &&
+            fixture.continuation().digest == bound.digest && fixture.database.scalarInt("SELECT revision FROM run_continuations") == revision,
+            "caller mutation cannot alias or replace the original persisted approval facts")
+        expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operations") == 0 &&
+            fixture.database.scalarInt("SELECT COUNT(*) FROM model_attempts") == 0,
+            "initial plan facts remain request data and manufacture no Operation or model Attempt")
+    } finally { fixture.close() }
+    for (invalid in [nullValue(), boolValue(false), textValue("approved"), listValue([]), objectValue([])]) {
+        let fixture = ModelLaneCutFixture()
+        try {
+            let request = initialStoreRequest(fixture)
+            request.put("plan_context_facts", invalid)
+            let before = fixture.continuation().digest
+            let revision = fixture.database.scalarInt("SELECT revision FROM run_continuations")
+            expect(!isInitialContextRequest(request) && !initialStoreBind(fixture, request,
+                epoch: fixture.runtime.activeRun().getOrThrow().epoch) && fixture.continuation().digest == before &&
+                fixture.database.scalarInt("SELECT revision FROM run_continuations") == revision &&
+                fixture.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='initial_context_request_bound'") == 0,
+                "empty or non-Object plan facts reject before mutating the Accepted continuation")
+        } finally { fixture.close() }
+    }
 }

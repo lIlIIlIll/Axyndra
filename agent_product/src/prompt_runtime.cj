@@ -18,9 +18,20 @@ public func buildProductPrompt(
     activeGoal: String,
     guide: String,
     modeSystem: String,
-    memoryContext!: String = ""
+    memoryContext!: String = "",
+    taskScope!: ?TaskContextScope = None
 ): PromptBuild {
-    let context = loadProductProjectContext(workspaceRoot)
+    let context = loadProductProjectContext(workspaceRoot, taskScope: taskScope)
+    buildProductPromptFromContext(context, activeGoal, guide, modeSystem, memoryContext)
+}
+
+func buildProductPromptFromContext(
+    context: ProjectContext,
+    activeGoal: String,
+    guide: String,
+    modeSystem: String,
+    memoryContext: String
+): PromptBuild {
     let builder = PromptBuilder()
     builder.add(PromptSection(
         PromptSectionKind.Base,
@@ -108,10 +119,30 @@ func productPromptJoin(values: Array<String>, separator: String): String {
     output
 }
 
-public func loadProductProjectContext(workspaceRoot: String): ProjectContext {
+public func loadProductProjectContext(
+    workspaceRoot: String,
+    taskScope!: ?TaskContextScope = None
+): ProjectContext {
+    loadProductProjectContextFrame204(workspaceRoot, taskScope, None<TaskInstructionDataMeter204>)
+}
+
+func loadProductProjectContextFrame204(workspaceRoot: String, taskScope: ?TaskContextScope,
+    meter: ?TaskInstructionDataMeter204): ProjectContext {
+    let base = productPromptProjectFacts(workspaceRoot, meter: meter)
+    ProjectContext(base.repositoryRoot, base.cwd, base.branch, base.dirty,
+        base.buildSystem, base.language,
+        instructions: match (taskScope) {
+            case Some(scope) => loadProductScopedInstructionsFrame204(workspaceRoot, scope,
+                base.preloadBudget, meter).instructions
+            case None => productPromptInstructions(base.repositoryRoot, base.cwd, base.preloadBudget, meter: meter)
+        }, preloadBudget: base.preloadBudget, version: base.version)
+}
+
+func productPromptProjectFacts(workspaceRoot: String,
+    meter!: ?TaskInstructionDataMeter204 = None<TaskInstructionDataMeter204>): ProjectContext {
     let cwd = productPromptCanonical(workspaceRoot)
     let repositoryRoot = productPromptRepositoryRoot(cwd)
-    let gitDirectory = productPromptGitDirectory(repositoryRoot)
+    let gitDirectory = productPromptGitDirectory(repositoryRoot, meter: meter)
     let budget = ProjectPreloadBudget(
         maxFiles: PRODUCT_PROJECT_PRELOAD_MAX_FILES,
         maxBytes: PRODUCT_PROJECT_PRELOAD_MAX_BYTES,
@@ -120,11 +151,10 @@ public func loadProductProjectContext(workspaceRoot: String): ProjectContext {
     ProjectContext(
         repositoryRoot,
         cwd,
-        productPromptBranch(gitDirectory),
+        productPromptBranch(gitDirectory, meter: meter),
         productPromptDirty(repositoryRoot, gitDirectory),
         productPromptBuildSystem(repositoryRoot),
         productPromptLanguage(repositoryRoot),
-        instructions: productPromptInstructions(repositoryRoot, cwd, budget),
         preloadBudget: budget,
         version: "1"
     )
@@ -153,7 +183,8 @@ func productPromptRepositoryRoot(cwd: String): String {
     cwd
 }
 
-func productPromptGitDirectory(repositoryRoot: String): String {
+func productPromptGitDirectory(repositoryRoot: String,
+    meter!: ?TaskInstructionDataMeter204 = None<TaskInstructionDataMeter204>): String {
     let marker = Path(repositoryRoot).join(".git")
     if (!exists(marker)) { return "" }
     let info = try {
@@ -165,10 +196,13 @@ func productPromptGitDirectory(repositoryRoot: String): String {
     if (!info.isRegular() || info.isSymbolicLink() || info.size < 1 || info.size > 4096) {
         return ""
     }
-    let contents = try {
-        String.fromUtf8(File.readFrom(marker))
-    } catch (_: Exception) {
-        return ""
+    let contents = match (meter) {
+        case Some(value) => match (readProductTaskInstruction204(marker.toString(), 4096, Some(value))) {
+            case Some(text) => text
+            case None => return ""
+        }
+        case None => try { String.fromUtf8(File.readFrom(marker)) }
+            catch (_: Exception) { return "" }
     }
     for (line in contents.split("\n")) {
         let trimmed = line.trimAscii()
@@ -188,14 +222,18 @@ func productPromptGitDirectory(repositoryRoot: String): String {
     ""
 }
 
-func productPromptBranch(gitDirectory: String): String {
+func productPromptBranch(gitDirectory: String,
+    meter!: ?TaskInstructionDataMeter204 = None<TaskInstructionDataMeter204>): String {
     if (gitDirectory == "") { return "" }
     let headPath = Path(gitDirectory).join("HEAD")
     if (!productPromptBoundedRegularFile(headPath, 4096)) { return "" }
-    let head = try {
-        String.fromUtf8(File.readFrom(headPath)).trimAscii()
-    } catch (_: Exception) {
-        return ""
+    let head = match (meter) {
+        case Some(value) => match (readProductTaskInstruction204(headPath.toString(), 4096, Some(value))) {
+            case Some(text) => text.trimAscii()
+            case None => return ""
+        }
+        case None => try { String.fromUtf8(File.readFrom(headPath)).trimAscii() }
+            catch (_: Exception) { return "" }
     }
     if (head.startsWith("ref: refs/heads/") && head.size > 16) {
         return head[16..]
@@ -277,7 +315,8 @@ func productPromptHasMarker(root: String, name: String): Bool {
 func productPromptInstructions(
     repositoryRoot: String,
     cwd: String,
-    budget: ProjectPreloadBudget
+    budget: ProjectPreloadBudget,
+    meter!: ?TaskInstructionDataMeter204 = None<TaskInstructionDataMeter204>
 ): Array<ProjectInstruction> {
     let candidates = ArrayList<String>()
     for (relative in [
@@ -303,10 +342,13 @@ func productPromptInstructions(
         if (remaining <= 0 || !productPromptBoundedRegularFile(Path(candidate), remaining)) {
             continue
         }
-        let content = try {
-            String.fromUtf8(File.readFrom(candidate))
-        } catch (_: Exception) {
-            continue
+        let content = match (meter) {
+            case Some(value) => match (readProductTaskInstruction204(candidate, remaining, Some(value))) {
+                case Some(text) => text
+                case None => continue
+            }
+            case None => try { String.fromUtf8(File.readFrom(candidate)) }
+                catch (_: Exception) { continue }
         }
         if (content.trimAscii() == "") { continue }
         let instruction = try {

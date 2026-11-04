@@ -272,6 +272,8 @@ func taskPersistSubagentValue(state: ProductSubagentState): AgentValue {
         ValueField("runId", textValue(state.runId.value)),
         ValueField("parentRunId", textValue(state.parentRunId.value)),
         ValueField("parentToolCallId", textValue(state.parentToolCallId)),
+        ValueField("delegationOperationId", textValue(state.delegationOperationId)),
+        ValueField("ownedFailureData204", textValue(state.pluginFailureText204)),
         ValueField("depth", integerValue(state.depth)),
         ValueField("capabilities", if (state.capabilityCeilingKnown) {
             taskPersistCapabilitiesValue(state.capabilities)
@@ -497,6 +499,14 @@ func taskPersistDecodeSubagent(value: AgentValue, rootSessionId: String): Produc
         agentSource: if (value.field("agentSource").isSome()) { taskPersistNonEmptyText(value, "agentSource") } else { "bundled" },
         capabilities: taskPersistCapabilities(value),
         capabilityCeilingKnown: taskPersistCapabilityCeilingKnown(value),
+        delegationOperationId: match (value.field("delegationOperationId")) {
+            case Some(binding) =>
+                if (binding.unifiedKind != ValueKind.Text) {
+                    throw IllegalArgumentException("delegation Operation identity must be text")
+                }
+                binding.text
+            case None => ""
+        },
         startedAt: startedAt,
         status: restoredStatus,
         lastUpdate: lastUpdate
@@ -506,6 +516,11 @@ func taskPersistDecodeSubagent(value: AgentValue, rootSessionId: String): Produc
     state.toolCount = taskPersistNonNegative(value, "toolCount")
     state.currentTool = if (interrupted) { "" } else { taskPersistText(value, "currentTool") }
     state.error = restoredError
+    state.pluginFailureText204 = match (value.field("ownedFailureData204")) {
+        case Some(data) => if (data.unifiedKind == ValueKind.Text) { data.text }
+            else { throw IllegalArgumentException("owned failure data must be text") }
+        case None => ""
+    }
     if (value.field("pluginCompletionDone111").isSome() || value.field("pluginCompletion111").isSome()) {
         if (!state.agentSource.startsWith("plugin:") || value.field("pluginCompletionDone111").isNone() ||
             value.field("pluginCompletion111").isNone()) {

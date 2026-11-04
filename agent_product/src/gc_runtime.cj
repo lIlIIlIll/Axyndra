@@ -8,6 +8,7 @@ import std.convert.*
 import std.env.*
 import std.fs.*
 import std.time.*
+import yjson_support.*
 
 let GC_DAY_MILLIS: Int64 = 86400000
 let GC_WRITE_GRACE_MILLIS: Int64 = 300000
@@ -582,6 +583,8 @@ func collectRequiredBlobReferencesWithQuery(query: (String) -> Array<SqliteRow>)
         "SELECT payload FROM run_continuations",
         "SELECT normalized_plan||capability_requirement||resource_scope FROM operations",
         "SELECT detail||verification FROM operation_receipts",
+        "SELECT contract FROM plan_executions",
+        "SELECT decision FROM plan_step_decisions",
         "SELECT operation_digest||capability_ceiling FROM approvals",
         "SELECT payload FROM capability_grants",
         "SELECT payload FROM audit_events",
@@ -595,6 +598,19 @@ func collectRequiredBlobReferencesWithQuery(query: (String) -> Array<SqliteRow>)
             for (row in query(sql)) {
                 let source = match (row[0]) { case Some(value) => value case None => "" }
                 extractBlobHashes(source, references)
+            }
+        }
+        for (row in query("SELECT contract FROM plan_executions")) {
+            let contract = match (parsePlanContract(decodeStoredValue(row.required(0)))) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => throw IllegalStateException(error.describe())
+            }
+            for (step in contract.steps) {
+                for (action in step.actions where action.artifactDigest != "") {
+                    if (isGcHash(action.artifactDigest) && !containsGcString(references, action.artifactDigest)) {
+                        insertGcString(references, action.artifactDigest)
+                    }
+                }
             }
         }
         for (reference in references) { generations.add(reference) }

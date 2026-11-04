@@ -22,25 +22,27 @@ main(): Int64 {
             arguments[2], arguments[3], arguments[4]
         )
     }
-    readonlyDerivedTreeContracts()
-    cancellationUnpreparedSettlementContracts()
-    approvalContinuationSettlementContracts()
-    contextReadApprovalRefusalContracts()
-    continuationForegroundGuardContracts()
-    initialContextStoreContracts()
-    genericContextStoreContracts()
-    modelLaneSafeCutContracts()
-    threadCodecContract()
-    runRequestSnapshotProjectionContract()
-    v19ToV20ContinuationColumnContract()
-    v23ToV24AdmissionMigrationContract()
-    v25ToV26TranscriptMigrationContract()
-    futureSchemaVersionContract()
-    let root = Directory.createTemp("/tmp").toString()
+    runStoreContractPhase("readonlyDerivedTreeContracts", { => readonlyDerivedTreeContracts() })
+    runStoreContractPhase("cancellationUnpreparedSettlementContracts", { => cancellationUnpreparedSettlementContracts() })
+    runStoreContractPhase("approvalContinuationSettlementContracts", { => approvalContinuationSettlementContracts() })
+    runStoreContractPhase("contextReadApprovalRefusalContracts", { => contextReadApprovalRefusalContracts() })
+    runStoreContractPhase("continuationForegroundGuardContracts", { => continuationForegroundGuardContracts() })
+    runStoreContractPhase("initialContextStoreContracts", { => initialContextStoreContracts() })
+    runStoreContractPhase("genericContextStoreContracts", { => genericContextStoreContracts() })
+    runStoreContractPhase("modelLaneSafeCutContracts", { => modelLaneSafeCutContracts() })
+    runStoreContractPhase("planExecutionPersistenceContract", { => planExecutionPersistenceContract() })
+    runStoreContractPhase("planDerivedAdmissionContract", { => planDerivedAdmissionContract() })
+    runStoreContractPhase("threadCodecContract", { => threadCodecContract() })
+    runStoreContractPhase("runRequestSnapshotProjectionContract", { => runRequestSnapshotProjectionContract() })
+    runStoreContractPhase("v19ToV20ContinuationColumnContract", { => v19ToV20ContinuationColumnContract() })
+    runStoreContractPhase("v23ToV24AdmissionMigrationContract", { => v23ToV24AdmissionMigrationContract() })
+    runStoreContractPhase("v25ToV26TranscriptMigrationContract", { => v25ToV26TranscriptMigrationContract() })
+    runStoreContractPhase("futureSchemaVersionContract", { => futureSchemaVersionContract() })
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 28, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 29, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -137,43 +139,53 @@ main(): Int64 {
     } finally {
         reopened.close()
     }
-    repeatedCrashRecoveryContract(root)
-    modelDecisionDurabilityContract()
-    derivedOperationAdmissionContract()
-    directDerivedOperationAdmissionContract()
-    hostServiceOriginContract()
-    contextReadSourceStoreContract()
-    directPreparationRejectionStoreContract()
-    externalOriginContract()
-    hostServiceHttpCancellationContract()
-    channelServiceIntentContract()
-    channelStartupReadMemoContracts()
-    channelInvocationReadMemoContracts()
-    channelWriteExecutionReadMemoContracts()
-    channelPayloadRootSharedSlotContracts()
-    managedJobFoundationContract()
-    managedJobExecutionContract()
-    managedFilePlanContract()
-    httpStreamServiceIntentContract()
-    serviceEffectPolicyDurableContract()
-    operationObservationDurableContract()
-    derivedRecoveryOwnershipContract()
-    serviceCapacityDurableContract()
-    servicePayloadDurableContract()
-    httpPayloadDurableContract()
-    httpParentIntentAdmissionContract()
-    pluginDocumentServiceContracts()
-    pluginDocumentReadContracts()
-    pluginDocumentPayloadReadContracts()
-    continuationPayloadHistoryContracts()
-    readViewParentIntentContract()
-    derivedCallIdentityContract()
-    totalContinuationCrashContract()
-    v6ToV16MigrationContract()
-    v7ToV16MigrationContract()
-    sqliteAppendRestoreBenchmark()
+    runStoreContractPhase("repeatedCrashRecoveryContract", { => repeatedCrashRecoveryContract(root) })
+    runStoreContractPhase("modelDecisionDurabilityContract", { => modelDecisionDurabilityContract() })
+    runStoreContractPhase("derivedOperationAdmissionContract", { => derivedOperationAdmissionContract() })
+    runStoreContractPhase("directDerivedOperationAdmissionContract", { => directDerivedOperationAdmissionContract() })
+    runStoreContractPhase("hostServiceOriginContract", { => hostServiceOriginContract() })
+    runStoreContractPhase("contextReadSourceStoreContract", { => contextReadSourceStoreContract() })
+    runStoreContractPhase("directPreparationRejectionStoreContract", { => directPreparationRejectionStoreContract() })
+    runStoreContractPhase("externalOriginContract", { => externalOriginContract() })
+    runStoreContractPhase("hostServiceHttpCancellationContract", { => hostServiceHttpCancellationContract() })
+    runStoreContractPhase("channelServiceIntentContract", { => channelServiceIntentContract() })
+    runStoreContractPhase("channelStartupReadMemoContracts", { => channelStartupReadMemoContracts() })
+    runStoreContractPhase("channelInvocationReadMemoContracts", { => channelInvocationReadMemoContracts() })
+    runStoreContractPhase("channelWriteExecutionReadMemoContracts", { => channelWriteExecutionReadMemoContracts() })
+    runStoreContractPhase("channelPayloadRootSharedSlotContracts", { => channelPayloadRootSharedSlotContracts() })
+    runStoreContractPhase("managedJobFoundationContract", { => managedJobFoundationContract() })
+    runStoreContractPhase("managedJobExecutionContract", { => managedJobExecutionContract() })
+    runStoreContractPhase("managedFilePlanContract", { => managedFilePlanContract() })
+    runStoreContractPhase("httpStreamServiceIntentContract", { => httpStreamServiceIntentContract() })
+    runStoreContractPhase("serviceEffectPolicyDurableContract", { => serviceEffectPolicyDurableContract() })
+    runStoreContractPhase("operationObservationDurableContract", { => operationObservationDurableContract() })
+    runStoreContractPhase("derivedRecoveryOwnershipContract", { => derivedRecoveryOwnershipContract() })
+    runStoreContractPhase("serviceCapacityDurableContract", { => serviceCapacityDurableContract() })
+    runStoreContractPhase("servicePayloadDurableContract", { => servicePayloadDurableContract() })
+    runStoreContractPhase("httpPayloadDurableContract", { => httpPayloadDurableContract() })
+    runStoreContractPhase("httpParentIntentAdmissionContract", { => httpParentIntentAdmissionContract() })
+    runStoreContractPhase("pluginDocumentServiceContracts", { => pluginDocumentServiceContracts() })
+    runStoreContractPhase("pluginDocumentReadContracts", { => pluginDocumentReadContracts() })
+    runStoreContractPhase("pluginDocumentPayloadReadContracts", { => pluginDocumentPayloadReadContracts() })
+    runStoreContractPhase("continuationPayloadHistoryContracts", { => continuationPayloadHistoryContracts() })
+    runStoreContractPhase("readViewParentIntentContract", { => readViewParentIntentContract() })
+    runStoreContractPhase("derivedCallIdentityContract", { => derivedCallIdentityContract() })
+    runStoreContractPhase("totalContinuationCrashContract", { => totalContinuationCrashContract() })
+    runStoreContractPhase("v6ToV16MigrationContract", { => v6ToV16MigrationContract() })
+    runStoreContractPhase("v7ToV16MigrationContract", { => v7ToV16MigrationContract() })
+    runStoreContractPhase("sqliteAppendRestoreBenchmark", { => sqliteAppendRestoreBenchmark() })
     println("agent store contract passed")
     0
+}
+
+// Retained phase diagnostics distinguish slow work from a blocked writer.
+// They neither alter scenario assertions nor supply a timing acceptance gate.
+func runStoreContractPhase(name: String, action: () -> Unit): Unit {
+    println("Store contract phase started: " + name)
+    let started = MonoTime.now()
+    action()
+    println("Store contract phase passed: " + name + " elapsed_ms=" +
+        (MonoTime.now() - started).toMilliseconds().toString())
 }
 
 func databaseBackupRestoreContract(database: SqliteDatabase, root: String): Unit {
@@ -186,7 +198,7 @@ func databaseBackupRestoreContract(database: SqliteDatabase, root: String): Unit
     let restored = SqliteDatabase(backupPath)
     try {
         let thread = SqliteThreadCommitSink(restored).loadThread(ThreadId("durable-thread"))
-        expect(restored.scalarInt("PRAGMA user_version") == 28 &&
+        expect(restored.scalarInt("PRAGMA user_version") == 29 &&
             restored.query("PRAGMA integrity_check")[0].required(0) == "ok" &&
             thread.thread.revision == 5 && thread.items.size == 4 &&
             restored.scalarInt("SELECT COUNT(*) FROM runs WHERE id='durable-run'") == 1 &&
@@ -294,7 +306,7 @@ func typedParameterContract(database: SqliteDatabase): Unit {
 }
 
 func sqliteAppendRestoreBenchmark(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let path = root + "/benchmark.db"
     let database = SqliteDatabase(path)
     let sink = SqliteThreadCommitSink(database)
@@ -336,7 +348,7 @@ func sqliteAppendRestoreBenchmark(): Unit {
 }
 
 func v19ToV20ContinuationColumnContract(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let path = root + "/v19.db"
     let seed = SqliteDatabase(path)
     try {
@@ -357,14 +369,15 @@ func v19ToV20ContinuationColumnContract(): Unit {
                 "1,'legacy-v19-payload')"
         )
         seed.execute("DROP TABLE derived_operation_admissions")
+        removePlanExecutionSchema(seed)
         dropSchema28HistoricalFixtureTable(seed)
         seed.execute("PRAGMA user_version=19")
     } finally { seed.close() }
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 28,
-            "v19 database migrates through schema v28")
+        expect(migrated.scalarInt("PRAGMA user_version") == 29,
+            "v19 database migrates through schema v29")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"
         ) == 0, "v20 removes the legacy continuation column from canonical Runs")
@@ -419,6 +432,7 @@ func v25ToV26TranscriptMigrationContract(): Unit {
         seed.execute("ALTER TABLE derived_operation_admissions DROP COLUMN child_call_id")
         seed.execute("ALTER TABLE derived_operation_admissions DROP COLUMN root_operation_id")
         seed.execute("ALTER TABLE derived_operation_admissions DROP COLUMN depth")
+        removePlanExecutionSchema(seed)
         dropSchema28HistoricalFixtureTable(seed)
         seed.execute("PRAGMA user_version=25")
     } finally { seed.close() }
@@ -430,7 +444,7 @@ func v25ToV26TranscriptMigrationContract(): Unit {
                 "json_extract(app_snapshot,'$.error.code') FROM runs " +
                 "WHERE id='legacy-transcript-run'"
         )[0]
-        expect(migrated.scalarInt("PRAGMA user_version") == 28 &&
+        expect(migrated.scalarInt("PRAGMA user_version") == 29 &&
             row.required(0) == "recovery_required" &&
             row.required(1) == "recovery_required" &&
             row.required(2) == "model.attempt_replay_binding_missing",
@@ -439,11 +453,11 @@ func v25ToV26TranscriptMigrationContract(): Unit {
 }
 
 func futureSchemaVersionContract(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let path = root + "/future-schema.db"
     let seed = SqliteDatabase(path)
     try {
-        seed.execute("PRAGMA user_version=29")
+        seed.execute("PRAGMA user_version=30")
     } finally { seed.close() }
 
     var rejected = false
@@ -451,13 +465,13 @@ func futureSchemaVersionContract(): Unit {
         let unsupported = SqliteDatabase(path)
         unsupported.close()
     } catch (error: IllegalStateException) {
-        rejected = error.message.contains("Unsupported SQLite schema version 29")
+        rejected = error.message.contains("Unsupported SQLite schema version 30")
     }
     expect(rejected, "a newer database schema is rejected before use")
 }
 
 func v23ToV24AdmissionMigrationContract(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let path = root + "/v23-admission.db"
     let seed = SqliteDatabase(path)
     try {
@@ -486,13 +500,14 @@ func v23ToV24AdmissionMigrationContract(): Unit {
             legacyOperation, runId, rootCall.canonicalItemId, legacyPlan
         ).isOk(), "legacy Program Operation exists before admission migration")
         seed.execute("DROP TABLE derived_operation_admissions")
+        removePlanExecutionSchema(seed)
         dropSchema28HistoricalFixtureTable(seed)
         seed.execute("PRAGMA user_version=23")
     } finally { seed.close() }
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 28 &&
+        expect(migrated.scalarInt("PRAGMA user_version") == 29 &&
             migrated.scalarInt(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' " +
                     "AND name='derived_operation_admissions'"
@@ -509,7 +524,7 @@ func v23ToV24AdmissionMigrationContract(): Unit {
 }
 
 func derivedOperationAdmissionContract(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let database = SqliteDatabase(root + "/derived-admission.db")
     try {
         let sink = SqliteThreadCommitSink(database)
@@ -740,10 +755,11 @@ func derivedOperationAdmissionContract(): Unit {
 }
 
 func v6ToV16MigrationContract(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
     try {
+        removePlanExecutionSchema(seed)
         removeV10Schema(seed)
         // Build an exact pre-v7 shape from the preceding schema: the fresh
         // database already contains every v1-v6 object, so remove only v7's
@@ -768,8 +784,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 28,
-            "v6 database migrates through schema v7 to v28")
+        expect(migrated.scalarInt("PRAGMA user_version") == 29,
+            "v6 database migrates through schema v7 to v29")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -781,10 +797,11 @@ func v6ToV16MigrationContract(): Unit {
 }
 
 func v7ToV16MigrationContract(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
     try {
+        removePlanExecutionSchema(seed)
         removeV10Schema(seed)
         seed.execute("DROP TABLE app_run_event_heads")
         seed.execute("ALTER TABLE app_run_events RENAME TO app_run_events_v8")
@@ -806,8 +823,8 @@ func v7ToV16MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 28,
-            "v7 database migrates through schema v8 to v28")
+        expect(migrated.scalarInt("PRAGMA user_version") == 29,
+            "v7 database migrates through schema v8 to v29")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -816,14 +833,14 @@ func v7ToV16MigrationContract(): Unit {
             "SELECT COUNT(*) FROM pragma_table_info('model_attempts') WHERE name IN (" +
                 "'semantic_request_digest','wire_policy_digest','dispatch_state','replay_barrier'," +
                 "'dispatch_started_at_millis','provider_terminal_at_millis','transcript_snapshot')"
-        ) == 7, "v7 to v28 adds model attempt dispatch, replay and transcript metadata")
+        ) == 7, "v7 to v29 adds model attempt dispatch, replay and transcript metadata")
         expect(migrated.query("PRAGMA foreign_key_check").isEmpty(),
             "v7 to v8 migration passes foreign-key validation")
     } finally { migrated.close() }
 }
 
 func modelDecisionDurabilityContract(): Unit {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     let database = SqliteDatabase(root + "/decision.db")
     try {
         let sink = SqliteThreadCommitSink(database)
@@ -2719,7 +2736,7 @@ func totalContinuationCrashContract(): Unit {
     ]
     var index: Int64 = 0
     for (name in names) {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
         let path = root + "/" + name + ".db"
         let seed = SqliteDatabase(path)
         seedContinuationRun(seed, name)

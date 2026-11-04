@@ -8,6 +8,7 @@ import tool_runtime.*
 
 main(): Int64 {
     scriptedModelContract()
+    reviewedFixtureModelContract()
     cancellationContract()
     scriptedToolContract()
     memoryPortsContract()
@@ -65,6 +66,46 @@ func scriptedModelContract(): Unit {
     expect(recorded.snapshot().size == 2, "duplicate deltas remain observable")
     expect(model.execute(request("request-2"), recorded.sink()).isOk(), "the next scripted retry succeeds")
     expect(model.requests().size == 2 && model.calls() == 2, "model requests are deterministic and inspectable")
+}
+
+// Exercise the public alias backed by model_fixture_runtime, including its
+// actual recovery snapshot and the installed frontend's advertised identity.
+func reviewedFixtureModelContract(): Unit {
+    for (qualified in [false, true]) {
+        let planName = if (qualified) { "plugin.axyndra:workflow.plan_write" } else { "plan_write" }
+        let globName = if (qualified) { "plugin.axyndra:workspace.glob" } else { "glob" }
+        let tools = [ModelToolDefinition(planName, "review fixture", objectValue([])),
+            ModelToolDefinition(globName, "workspace fixture", objectValue([]))]
+        let model = FixtureModelPort()
+        let planning = ModelRequest("fixture", [ModelMessage(ModelRole.User,
+            [ModelBlock(ModelBlockKind.Text, text: "fixture plan write")])],
+            system: "workspace_root: /workspace", tools: tools, requestId: "fixture-reviewed-plan")
+        let snapshot = model.transcriptSnapshot(planning).getOrThrow()
+        expect(model.validateTranscriptSnapshot(snapshot), "extracted fixture retains its exact recoverable provider state")
+        let reply = model.execute(planning, { _ => () }).value().getOrThrow()
+        expect(reply.blocks.size == 1 && reply.blocks[0].name == planName,
+            "fixture records its plan through the actually advertised workflow frontend")
+        let contract = parsePlanContract(reply.blocks[0].arguments.field("contract").getOrThrow(),
+            requireToolIdentities: false).value().getOrThrow()
+        expect(contract.targetRoots[0] == "/workspace" && contract.steps.size == 1 &&
+            contract.steps[0].actions[0].toolNames[0] == globName && contract.steps[0].actions[0].maxAttempts == 1,
+            "fixture contract preserves the advertised workspace tool and bounded action")
+        expect(!model.validateTranscriptSnapshot(snapshot), "a prior fixture snapshot cannot hide the provider's consumed call state")
+        let execution = ModelRequest("fixture", [ModelMessage(ModelRole.User,
+            [ModelBlock(ModelBlockKind.Text, text: "[plan-review approved hash=1 source=fixture] fixture-inspect")])],
+            system: "workspace_root: /workspace", tools: tools, requestId: "fixture-approved-plan")
+        let executed = model.execute(execution, { _ => () }).value().getOrThrow()
+        expect(executed.blocks.size == 1 && executed.blocks[0].name == globName &&
+            executed.blocks[0].arguments.field("_plan").getOrThrow().field("action_id").getOrThrow().text == "fixture-glob",
+            "approved fixture action retains the same frontend identity and execution binding")
+        let failure = model.execute(ModelRequest("fixture", [ModelMessage(ModelRole.User,
+            [ModelBlock(ModelBlockKind.Text,
+                text: "[plan-review approved hash=1 source=fixture] FIXTURE-APPROVED-PLAN-EXECUTION-FAILURE")])],
+            system: "workspace_root: /workspace", tools: tools, requestId: "fixture-approved-plan-failure"), { _ => () })
+        expect(failure.isError() && failure.error().getOrThrow().code == "fixture.plan_execution_failed" &&
+            !failure.error().getOrThrow().retryable && !failure.error().getOrThrow().fallbackAllowed,
+            "moving the fixture module preserves its real execution-failure injection")
+    }
 }
 
 func cancellationContract(): Unit {

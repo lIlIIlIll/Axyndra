@@ -342,7 +342,10 @@ public class SqliteRunRepository <: RunRepository & OwnedRunEventRepository & Ow
                             if (encodeContinuation(existing) == encodeContinuation(value)) {
                                 return Result.Ok(())
                             }
-                    case Result.Ok(None) => ()
+                    case Result.Ok(None) =>
+                        if (!retainedApprovalRequestMatches(rows[0], value.runId, 1, value)) {
+                            return operationConflict<Unit>("pending approval continuation binding cannot be changed")
+                        }
                     case Result.Err(error) => return Result.Err(error)
                 }
                 writeRunContinuationSnapshotProjection(
@@ -772,7 +775,11 @@ public class SqliteRunRepository <: RunRepository & OwnedRunEventRepository & Ow
                             if (!exactMatch && !approvedTransition && !retryTransition) {
                                 return sqliteRunConflict<Unit>("model continuation changed concurrently")
                             }
-                    case Result.Ok(None) => ()
+                    case Result.Ok(None) =>
+                        if (expectedBoundary.isNone() &&
+                            !retainedApprovalRequestMatches(rows[0], attempt.runId, 0, continuation)) {
+                            return sqliteRunConflict<Unit>("model continuation changed concurrently")
+                        }
                     case Result.Err(error) => return Result<Unit>.Err(error)
                 }
                 let disposition = runEventDisposition(transaction, event)
@@ -1583,10 +1590,21 @@ func requireBoundaryFreshModelRequest(data: AgentValue, value: RunContinuation):
         system: value.system, thinking: value.thinking, maxOutputTokens: value.budget.maxOutputTokens,
         streaming: true, parallelToolCalls: value.parallelToolCalls, serviceTier: value.serviceTier,
         cachePolicy: value.cachePolicy, structuredOutput: value.structuredOutput, cacheKey: value.cacheKey))
+    // The continuation transport nests facts in toolContextPayload; the
+    // boundary request freezes them separately. Compare both complete data
+    // projections without discarding any other descriptor fields.
+    let descriptorFields = ArrayList<ValueField>()
+    for (field in value.toolContextPayload.fields where field.name != "plan_context_facts") {
+        descriptorFields.add(field)
+    }
+    if (canonicalAgentValue(request.field("plan_context_facts") ?? objectValue([])) !=
+        canonicalAgentValue(value.toolContextPayload.field("plan_context_facts") ?? objectValue([]))) {
+        throw IllegalStateException("context boundary plan facts changed before fresh prepare")
+    }
     if (contextBoundaryText(request, "run_id") != value.runId.value || contextBoundaryText(request, "thread_id") != value.sessionId.value ||
         contextBoundaryText(request, "lane_id") != value.executionLaneId.value ||
         canonicalAgentValue(contextBoundaryField(request, "model_input")) != canonicalAgentValue(model) ||
-        canonicalAgentValue(contextBoundaryField(request, "tool_context")) != canonicalAgentValue(value.toolContextPayload) ||
+        canonicalAgentValue(contextBoundaryField(request, "tool_context")) != canonicalAgentValue(objectValue(descriptorFields.toArray())) ||
         canonicalAgentValue(contextBoundaryField(request, "context_snapshot")) != canonicalAgentValue(value.contextSnapshotPayload) ||
         contextBoundaryText(request, "approval_mode") != value.approvalMode ||
         canonicalAgentValue(contextBoundaryField(request, "auto_retry")) != canonicalAgentValue(boolValue(value.autoRetry)) ||
@@ -1635,6 +1653,29 @@ func requireBoundaryFreshModelRequest(data: AgentValue, value: RunContinuation):
         ValueField("cache_read", optionalIntegerValue(p.cacheReadMicrosPerMillion)), ValueField("cache_write", optionalIntegerValue(p.cacheWriteMicrosPerMillion))]) }
     if (canonicalAgentValue(contextBoundaryField(request, "pricing")) != canonicalAgentValue(pricing)) {
         throw IllegalStateException("context boundary pricing changed") }
+}
+
+// A settled approval has no replay authority. Its retained immutable
+// request remains a data fence for the next ordinary approval/model write.
+// A separately authenticated fresh context boundary validates its own full
+// request and does not derive authority from this old diagnostic snapshot.
+func retainedApprovalRequestMatches(row: SqliteRow, run: RunId, index: Int64,
+    next: RunContinuation): Bool {
+    let source = match (row[index]) { case None => return true; case Some(value) => value }
+    let durable = decodeDurableRunContinuation(source)
+    if (durable.runId.value != run.value) { throw IllegalStateException("retained request Run binding is corrupt") }
+    if (contextBoundaryData(durable).isSome()) { return true }
+    let snapshot = match (optionalRunRequestSnapshotFromDurableContinuation(durable)) {
+        case None => return true
+        case Some(value) => value
+    }
+    if (isInitialContextRequest(snapshot)) { return true }
+    let previous = match (decodeContinuation(encodeAgentValue(snapshot))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException("retained request snapshot is corrupt: " + error.message)
+    }
+    if (previous.runId.value != run.value) { throw IllegalStateException("retained request snapshot Run binding is corrupt") }
+    previous.kind != RunContinuationKind.WaitingApproval || sameContinuationRequestBinding(previous, next)
 }
 
 func canonicalContinuationFromRow(

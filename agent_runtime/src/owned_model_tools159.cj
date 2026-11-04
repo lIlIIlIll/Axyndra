@@ -34,6 +34,14 @@ public class OwnedModelTools159 <: ModelInputToolsLifetime159 {
         } catch (error: Exception) { held = true; throw error }
         finally { lock.unlock() }
     }
+    func installSelectedCopies204(snapshot: ToolSetSnapshot, names: Array<String>): Unit {
+        lock.lock()
+        try {
+            if (definitions.isSome() || payment.isNone()) { throw IllegalStateException("model tool copies already installed") }
+            definitions = Some(copySelectedModelToolDefinitionsFrame204(snapshot, names))
+        } catch (error: Exception) { held = true; throw error }
+        finally { lock.unlock() }
+    }
     // Named typed caller contract: these references belong to the prepared
     // request, not to its source Catalog. Unknown escaping consumers keep this
     // registered owner. No callback-Unit or terminal-run acknowledgment exists.
@@ -42,6 +50,34 @@ public class OwnedModelTools159 <: ModelInputToolsLifetime159 {
         try {
             if (payment.isNone()) { throw IllegalStateException("model tool copies are retired") }
             definitions.getOrThrow()
+        } finally { lock.unlock() }
+    }
+    // A separately invoiced temporary selection phase. The complete original
+    // request-copy invoice remains held; filtering never refunds excluded DATA.
+    public func reserveToolSelection159(): LogicalJsonOwnerReservation {
+        lock.lock()
+        try {
+            if (payment.isNone() || preparedReturned || consumers != 0) {
+                throw IllegalStateException("model tool selection must precede request publication")
+            }
+            let count = definitions.getOrThrow().size
+            if (count > (Int64.Max - 16384) / 4096) { throw LogicalJsonPayloadError("model tool selection invoice overflow") }
+            sharedSnapshotPhase159(payment.getOrThrow(), 16384 + count * 4096)
+        } finally { lock.unlock() }
+    }
+    public func restrictPreparedDefinitions159(names: Array<String>): Unit {
+        lock.lock()
+        try {
+            if (payment.isNone() || preparedReturned || consumers != 0) {
+                throw IllegalStateException("model tool selection must precede request publication")
+            }
+            let selected = ArrayList<ModelToolDefinition>()
+            for (definition in definitions.getOrThrow()) {
+                var included = false
+                for (name in names where name == definition.name) { included = true; break }
+                if (included) { selected.add(definition) }
+            }
+            definitions = Some(selected.toArray())
         } finally { lock.unlock() }
     }
     public func holdUnknownRequestConsumer159(): Unit {
@@ -126,6 +162,15 @@ private func copyModelToolDefinitionsFrame159(snapshot: ToolSetSnapshot): Array<
     for (entry in snapshot.entries where entry.availableAtSnapshot) {
         // Original names/order/availability and full JsonNode deep-copy
         // semantics are preserved. There is no new whole-tree node/depth cap.
+        copied.add(ModelToolDefinition(String.fromUtf8(entry.name.toArray()),
+            String.fromUtf8(entry.description.toArray()), copyModelToolSchema159(entry.inputSchema)))
+    }
+    copied.toArray()
+}
+private func copySelectedModelToolDefinitionsFrame204(snapshot: ToolSetSnapshot,
+    names: Array<String>): Array<ModelToolDefinition> {
+    let copied = ArrayList<ModelToolDefinition>()
+    for (entry in snapshot.entries where entry.availableAtSnapshot && names.contains(entry.name)) {
         copied.add(ModelToolDefinition(String.fromUtf8(entry.name.toArray()),
             String.fromUtf8(entry.description.toArray()), copyModelToolSchema159(entry.inputSchema)))
     }

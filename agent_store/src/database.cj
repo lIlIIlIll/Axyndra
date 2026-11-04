@@ -1054,10 +1054,10 @@ public class SqliteDatabase {
 
     private func requireSupportedSchemaVersionLocked(): Int64 {
         let version = scalarIntLocked("PRAGMA user_version")
-        if (version > 28) {
+        if (version > 29) {
             throw IllegalStateException(
                 "Unsupported SQLite schema version " + version.toString() +
-                "; this binary supports up to version 28"
+                "; this binary supports up to version 29"
             )
         }
         version
@@ -1079,7 +1079,7 @@ public class SqliteDatabase {
 
     private func migrate(): Unit {
         let version = requireSupportedSchemaVersionLocked()
-        if (version == 28) { return }
+        if (version == 29) { return }
         if (version == 0) {
             executeLocked("BEGIN IMMEDIATE")
             try {
@@ -1093,7 +1093,8 @@ public class SqliteDatabase {
                 for (statement in v25Migration()) { executeLocked(statement) }
                 for (statement in v26Migration()) { executeLocked(statement) }
                 for (statement in v27Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=28")
+                for (statement in planExecutionMigration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=29")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -1332,7 +1333,7 @@ public class SqliteDatabase {
             }
         } else if (version != 15 && version != 16 && version != 17 &&
             version != 18 && version != 19 && version != 20 && version != 21 &&
-            version != 22 && version != 23 && version != 24 && version != 25 && version != 26 && version != 27) {
+            version != 22 && version != 23 && version != 24 && version != 25 && version != 26 && version != 27 && version != 28) {
             throw IllegalStateException(
                 "unsupported SQLite schema version " + version.toString()
             )
@@ -1499,6 +1500,20 @@ public class SqliteDatabase {
             try {
                 for (statement in v28Migration()) { executeLocked(statement) }
                 executeLocked("PRAGMA user_version=28")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+
+        // v29 adds approved-plan bindings and reservations. Existing tool facts
+        // remain in the canonical Operations and receipts tables.
+        if (version >= 1 && version <= 28) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in planExecutionMigration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=29")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}

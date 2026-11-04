@@ -7,7 +7,7 @@ import std.collection.*
 import std.sync.*
 
 import tool_runtime.*
-class CoreRunControl <: PaidExecutionFailureSink173 {
+class CoreRunControl <: PaidExecutionFailureSink173 & PlanCopyDataConsumer204 {
     let runId: RunId
     let traceId: TraceId
     let source: CancellationSource
@@ -40,6 +40,14 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
     private let checkpointFailures113 = CoreCheckpointFailureQueue113()
     private var modelInputHead159: ?CoreModelInput159 = None<CoreModelInput159>
     private var modelInputCollectorActive159 = false
+    private var planRequestHead204: ?CorePlanRequestConsumer204 = None<CorePlanRequestConsumer204>
+    private var planRequestCollectorActive204 = false
+    private var planCopyCatalog204: ?ToolCatalog = None<ToolCatalog>
+    private var planCopyPayment204: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var planCopyReadHead204: ?CorePlanCopyAllocation204 = None<CorePlanCopyAllocation204>
+    private var catalogSourceHead204: ?CoreCatalogSource204 = None<CoreCatalogSource204>
+    private var planCopyHeaders204: Int64 = 0
+    private var planCopyClosed204 = false
     private var checkpointReturnWitness113: ?OwnedTaskReturnWitness113 = None<OwnedTaskReturnWitness113>
     private var checkpointProducerQuiet113 = false
     private var contextUpdate: ?ContextReadUpdate = None
@@ -58,7 +66,8 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
         modelRequests!: Int64 = 0,
         parentCancellation!: ?CancellationToken = None,
         callerCancellation180!: ?CancellationToken = None<CancellationToken>,
-        recoveryPolicy180!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy()
+        recoveryPolicy180!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy(),
+        requestCustody204!: ?PlanRequestCustody204 = None<PlanRequestCustody204>
     ) {
         this.runId = runId
         this.traceId = TraceId("trace-" + runId.value)
@@ -70,6 +79,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
         this.turnCounter = turns
         this.requestCounter = modelRequests
         this.recoveryPolicy180 = recoveryPolicy180
+        retainPlanRequestCustody204(requestCustody204)
         let actualSource180 = source
         match (callerCancellation180) { case Some(token) =>
             frontendCancellationRegistration180 = Some(token.onCancelReturning159({ cause => let _ = actualSource180.cancel(reason: Some(cause)) }))
@@ -150,7 +160,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
         lock.lock();try {
             if (closed || currentState!=RunState.Running || source.token.isCancelled() ||
                 expected.work.prepared.operationId.value!=next.work.prepared.operationId.value ||
-                expected.work.prepared.operationPlan.bindingDigest!=next.work.prepared.operationPlan.bindingDigest ||
+                expected.work.operationPlan204().bindingDigest!=next.work.operationPlan204().bindingDigest ||
                 !refEq(expected.work.committed,next.work.committed) || next.work.prepared.source.runId.value!=runId.value) {
                 return Result.Err(coreOwnedLiveBusy()) }
             match (pendingOwnedExecution) {
@@ -198,7 +208,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
                 pendingOwnedExecution.isSome() || pendingContextRead.isSome() ||
                 !refEq(expected.work.committed,next.work.committed) ||
                 expected.work.prepared.operationId.value!=next.work.prepared.operationId.value ||
-                expected.work.prepared.operationPlan.bindingDigest!=next.work.prepared.operationPlan.bindingDigest ||
+                expected.work.operationPlan204().bindingDigest!=next.work.operationPlan204().bindingDigest ||
                 next.work.prepared.source.runId.value!=runId.value) { return Result.Err(coreOwnedLiveBusy()) }
             match (pendingOwnedParent) {
                 case Some(value) => if (!refEq(value,expected)) { return Result.Err(coreOwnedLiveBusy()) }
@@ -383,7 +393,178 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
         } finally {
             lock.lock()
             try { modelInputCollectorActive159 = false } finally { lock.unlock() }
+            collectReturnedPlanRequests204()
         }
+    }
+
+    func retainPlanRequestCustody204(value: ?PlanRequestCustody204): Unit {
+        match (value) { case None => return; case Some(actual) =>
+            lock.lock(); try {
+                var cursor = planRequestHead204
+                while (cursor.isSome()) {
+                    let item = cursor.getOrThrow()
+                    if (item.matches204(actual)) { return }
+                    cursor = item.next204
+                }
+                let consumer = actual.retainControl204(runId)
+                consumer.bindWitness204(checkpointReturnWitness113)
+                consumer.next204 = planRequestHead204; planRequestHead204 = Some(consumer)
+            } finally { lock.unlock() }
+        }
+    }
+    func bindPlanCopyCatalog204(actual: ToolCatalog): Unit {
+        lock.lock(); try {
+            if (closed || planCopyClosed204) { throw IllegalStateException("plan copy control has returned") }
+            match (planCopyCatalog204) {
+                case Some(value) => if (!refEq(value, actual)) { throw IllegalStateException("plan copy Catalog changed") }
+                case None => planCopyCatalog204 = Some(actual) }
+        } finally { lock.unlock() }
+    }
+    private func planCopyPayerLocked204(actualRun: RunId): LogicalJsonOwnerReservation {
+        if (closed || planCopyClosed204 || planRequestCollectorActive204 || actualRun.value != runId.value ||
+            isTerminalRunState(currentState)) {
+            throw IllegalStateException("plan copy DATA consumer is not current") }
+        match (planCopyPayment204) { case Some(value) => value
+            case None =>
+                let value = planCopyCatalog204.getOrThrow().reserveRegistryData180(16384).getOrThrow()
+                planCopyPayment204 = Some(value); value }
+    }
+    public func derivePlanWireAllocation204(actualRun: RunId, invoice: Int64): LogicalJsonOwnerReservation {
+        if (invoice < 1) { throw IllegalArgumentException("plan wire invoice must be positive") }
+        lock.lock(); try {
+            let source = planCopyPayerLocked204(actualRun)
+            let value = source.deriveRetainedLease()
+            try { value.ensureRetainedPeak(invoice); value }
+            catch (error: Exception) { value.close(); throw error }
+        } finally { lock.unlock() }
+    }
+    public func retainPlanReadAllocation204(actualRun: RunId, payment: LogicalJsonOwnerReservation): Unit {
+        lock.lock(); try {
+            let source = planCopyPayerLocked204(actualRun)
+            if (!payment.paysSamePrivateBankData180(source)) {
+                throw IllegalArgumentException("plan copies require their original Catalog bank") }
+            if (planCopyHeaders204 > (Int64.Max - 16384) / 1024 - 1) {
+                throw IllegalArgumentException("plan copy metadata invoice overflow") }
+            source.ensureRetainedPeak(16384 + (planCopyHeaders204 + 1) * 1024)
+            planCopyHeaders204++
+            planCopyReadHead204 = Some(CorePlanCopyAllocation204(payment, planCopyReadHead204))
+        } finally { lock.unlock() }
+    }
+    public func retainCatalogSource204(actualRun: RunId, scope: ToolCatalogCoreDataScope204): Unit {
+        lock.lock(); try {
+            let payer = planCopyPayerLocked204(actualRun)
+            var cursor = catalogSourceHead204
+            while (cursor.isSome()) {
+                let item = cursor.getOrThrow()
+                if (refEq(item.scope, scope)) { return }
+                cursor = item.next204
+            }
+            if (planCopyHeaders204 > (Int64.Max - 16384) / 1024 - 1) {
+                throw IllegalArgumentException("catalog source metadata invoice overflow") }
+            payer.ensureRetainedPeak(16384 + (planCopyHeaders204 + 1) * 1024)
+            planCopyHeaders204++
+            catalogSourceHead204 = Some(CoreCatalogSource204(scope, catalogSourceHead204))
+        } finally { lock.unlock() }
+    }
+    private func takeCatalogSourceFrame204(): ?CoreCatalogSource204 {
+        lock.lock(); try {
+            let result = catalogSourceHead204; catalogSourceHead204 = None<CoreCatalogSource204>
+            result
+        } finally { lock.unlock() }
+    }
+    private func restoreCatalogSourceFrame204(value: ?CoreCatalogSource204): Unit {
+        lock.lock(); try {
+            if (catalogSourceHead204.isSome()) { throw IllegalStateException("catalog source changed during collection") }
+            catalogSourceHead204 = value
+        } finally { lock.unlock() }
+    }
+    private func closeReturnedCatalogSources204(): Bool {
+        var cursor = takeCatalogSourceFrame204()
+        while (cursor.isSome()) {
+            let actual = cursor.getOrThrow()
+            // No control lock spans Pipeline/Catalog source retirement.
+            // A held/unknown source keeps both its node and the copy ledger.
+            let returned = try { actual.scope.returnWholeCoreFrame204() }
+                catch (error: Exception) { restoreCatalogSourceFrame204(cursor); throw error }
+            if (!returned) { restoreCatalogSourceFrame204(cursor); return false }
+            cursor = actual.next204; actual.next204 = None<CoreCatalogSource204>
+        }
+        true
+    }
+    private func allPlanRequestFramesReturned204(): Bool {
+        var cursor = try { lock.lock(); planRequestHead204 } finally { lock.unlock() }
+        if (cursor.isNone()) { return false }
+        while (cursor.isSome()) {
+            let actual = cursor.getOrThrow()
+            if (!actual.coreFramesReturned204() || !actual.tasksReturnedFrame204()) { return false }
+            cursor = actual.next204
+        }
+        true
+    }
+    private func takeReturnedPlanCopyData204(): (?CorePlanCopyAllocation204, ?LogicalJsonOwnerReservation) {
+        lock.lock(); try {
+            let copies = planCopyReadHead204; let payer = planCopyPayment204
+            planCopyReadHead204 = None<CorePlanCopyAllocation204>; planCopyPayment204 = None<LogicalJsonOwnerReservation>
+            planCopyCatalog204 = None<ToolCatalog>; planCopyClosed204 = true
+            (copies, payer)
+        } finally { lock.unlock() }
+    }
+    private func closeReturnedPlanCopyData204(): Unit {
+        let actual = takeReturnedPlanCopyData204()
+        var cursor = actual[0]
+        while (cursor.isSome()) {
+            let value = cursor.getOrThrow(); cursor = value.next204
+            value.next204 = None<CorePlanCopyAllocation204>; value.payment.close()
+        }
+        match (actual[1]) { case Some(value) => value.close(); case None => () }
+    }
+    // Only the newly constructed control whose Registry.add was rejected
+    // reaches this entry. No runtime admission, task or durable Run was tried.
+    func rejectBeforeRuntimeInvocation204(): Unit {
+        let selected = try { lock.lock(); let value = planRequestHead204
+            planRequestHead204 = None<CorePlanRequestConsumer204>; value
+        } finally { lock.unlock() }
+        var cursor = selected
+        while (cursor.isSome()) {
+            let actual = cursor.getOrThrow(); cursor = actual.next204
+            actual.returnConsumerFrame204(acceptedReturned: false)
+        }
+    }
+    private func planRequestOtherConsumersReturned204(): Bool {
+        lock.lock(); try {
+            isTerminalRunState(currentState) && activeRequestId == "" && activeBatchId.isNone() &&
+                preparationInputs.isEmpty() && pendingContextRead.isNone() && pendingOwnedExecution.isNone() &&
+                pendingOwnedParent.isNone() && contextUpdate.isNone() && scheduledToolSlots.isEmpty() &&
+                retainedResultAckDebts.isEmpty() && retainedFailureCleanupDebts.isEmpty() && canonicalDeliveryDebts.isEmpty() &&
+                !checkpointFailures113.hasDebt() && modelInputHead159.isNone()
+        } finally { lock.unlock() }
+    }
+    private func collectReturnedPlanRequests204(): Unit {
+        lock.lock(); try {
+            if (planRequestCollectorActive204) { return }
+            planRequestCollectorActive204 = true
+        } finally { lock.unlock() }
+        try {
+            // The real Run task witness alone can become quiet inside
+            // finish(). The complete Core callback must ALSO have returned
+            // before copies in its prepared/local frames can be refunded.
+            if (!planRequestOtherConsumersReturned204() || !allPlanRequestFramesReturned204()) { return }
+            if (!closeReturnedCatalogSources204()) { return }
+            closeReturnedPlanCopyData204()
+            while (planRequestOtherConsumersReturned204()) {
+                let selected = try { lock.lock(); planRequestHead204 } finally { lock.unlock() }
+                let actual = match (selected) { case Some(value) => value; case None => return }
+                // Query the real settlement witness without holding the
+                // control lock. Terminal/control.close is not return proof.
+                if (!actual.coreFramesReturned204() || !actual.tasksReturnedFrame204()) { return }
+                lock.lock(); try {
+                    if (planRequestHead204.isNone() || !refEq(planRequestHead204.getOrThrow(), actual)) {
+                        throw IllegalStateException("request custody consumer changed during collection") }
+                    planRequestHead204 = actual.next204
+                } finally { lock.unlock() }
+                actual.returnConsumerFrame204()
+            }
+        } finally { lock.lock(); try { planRequestCollectorActive204 = false } finally { lock.unlock() } }
     }
     private func bindModelInputTaskWitness180(settlement: RuntimeSettlement): Unit {
         let actual = settlement.ownedTaskReturnWitness113()
@@ -393,6 +574,10 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
             var cursor = modelInputHead159
             while (cursor.isSome()) {
                 let owner = cursor.getOrThrow(); owner.bindOriginalTaskWitness180(actual); cursor = owner.next159
+            }
+            var requests = planRequestHead204
+            while (requests.isSome()) {
+                let consumer = requests.getOrThrow(); consumer.bindWitness204(actual); requests = consumer.next204
             }
         } finally { lock.unlock() }
         // This is the Run's actual settlement. The original collector checks
@@ -421,7 +606,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
     }
 
     func hasResultAckDebt():Bool{lock.lock();try{
-        !retainedResultAckDebts.isEmpty() || !retainedFailureCleanupDebts.isEmpty() || !canonicalDeliveryDebts.isEmpty() || checkpointFailures113.hasDebt() || modelInputHead159.isSome()
+        !retainedResultAckDebts.isEmpty() || !retainedFailureCleanupDebts.isEmpty() || !canonicalDeliveryDebts.isEmpty() || checkpointFailures113.hasDebt() || modelInputHead159.isSome() || planRequestHead204.isSome() || planCopyPayment204.isSome() || planCopyReadHead204.isSome() || catalogSourceHead204.isSome()
     }finally{lock.unlock()}}
     func retryResultAckDebt():Result<Unit>{
         let values=try{lock.lock();retainedResultAckDebts.toArray()}finally{lock.unlock()}

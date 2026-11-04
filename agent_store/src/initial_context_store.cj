@@ -3,12 +3,20 @@ package agent_store
 import agent_domain.*
 import agent_runtime.*
 import std.convert.*
+import std.collection.*
 import yjson.*
 import yjson_support.*
 
 public func isInitialContextRequest(value: AgentValue): Bool {
-    if (!httpIntentExactFields(value, ["schema", "run_id", "session_id", "epoch", "model", "prompt", "system",
-        "skill_stack", "lane_id", "budget", "tool_context", "capabilities"]) ||
+    let fields = ArrayList<String>(["schema", "run_id", "session_id", "epoch", "model", "prompt", "system",
+        "skill_stack", "lane_id", "budget", "tool_context", "capabilities"])
+    match (value.field("plan_context_facts")) {
+        case Some(facts) =>
+            if (facts.unifiedKind != ValueKind.Object || facts.fields.isEmpty()) { return false }
+            fields.add("plan_context_facts")
+        case None => ()
+    }
+    if (!httpIntentExactFields(value, fields.toArray()) ||
         httpIntentText(value, "schema") != "axyndra.accepted-context-request/v1") { return false }
     for (key in ["run_id", "session_id", "model", "prompt", "system", "lane_id"]) {
         if (value.field(key).getOrThrow().unifiedKind != ValueKind.Text) { return false } }
@@ -68,7 +76,8 @@ public func bindAcceptedContextRequestInTransaction(tx: SqliteTransaction, run: 
             model.system != httpIntentText(frozen, "system") || model.model != httpIntentText(frozen, "model") ||
             encodeStoredValue(original.field("context").getOrThrow()) != encodeStoredValue(frozen.field("skill_stack").getOrThrow()) ||
             encodeStoredValue(original.field("tool_context").getOrThrow()) != encodeStoredValue(frozen.field("tool_context").getOrThrow()) ||
-            encodeStoredValue(original.field("capabilities").getOrThrow()) != encodeStoredValue(frozen.field("capabilities").getOrThrow())) {
+            encodeStoredValue(original.field("capabilities").getOrThrow()) != encodeStoredValue(frozen.field("capabilities").getOrThrow()) ||
+            canonicalAgentValue(initialContextPlanFacts(original)) != canonicalAgentValue(initialContextPlanFacts(frozen))) {
             throw IllegalStateException("continuation context request differs from its consumed frozen input") }
     }
     let current = decodeDurableRunContinuation(rows[0].required(5))
@@ -103,4 +112,18 @@ public func bindAcceptedContextRequestInTransaction(tx: SqliteTransaction, run: 
                 ValueField("request_digest", textValue(modelPolicySha256Text(encoded))),
                 ValueField("continuation_digest", textValue(next.digest))]))),
             SqlParameter.Int64Value(observedAtMillis), SqlParameter.Int64Value(sequence)])
+}
+
+// Missing facts preserve the historical request. A present field is closed to
+// a nonempty Object, matching the Core's frozen boundary schema. This is data
+// equality against the consumed request, never new execution authority.
+func initialContextPlanFacts(request: AgentValue): AgentValue {
+    match (request.field("plan_context_facts")) {
+        case None => objectValue([])
+        case Some(value) =>
+            if (value.unifiedKind != ValueKind.Object || value.fields.isEmpty()) {
+                throw IllegalStateException("initial context plan facts have an invalid shape")
+            }
+            value
+    }
 }

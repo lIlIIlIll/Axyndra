@@ -9,7 +9,7 @@ import std.sync.*
 
 // Product/debug fixture behavior is deliberately independent of provider wire
 // codecs and transports. Extracted unchanged from model_adapters.
-public class FixtureModelPort <: ports.ModelPort {
+public class FixtureModelPort <: ports.ModelPort & ports.ReturningModelInputPort159 & ports.ReturningModelTranscriptPort159 {
     private let failFirst: Bool
     private var calls: Int64 = 0
     // Last request's thinking level, for contract probes (e.g. plan mode
@@ -17,13 +17,48 @@ public class FixtureModelPort <: ports.ModelPort {
     public var lastThinking: domain.ThinkingLevel = domain.ThinkingLevel.Medium
     // Fixture-only observation point for end-to-end Product request contracts.
     // Production transports never read or populate this field.
-    public var lastRequest: ?domain.ModelRequest = None
+    private let lastRequestLock159 = Mutex()
+    private var lastRequestCopy159: ?FixtureRequestSnapshot159 = None<FixtureRequestSnapshot159>
+    private var unmanagedLastRequest159: ?domain.ModelRequest = None<domain.ModelRequest>
+    // Compatibility observation exports its own independently paid copy.
+    // It can outlive this port, so replacement/close never refunds that copy.
+    public prop lastRequest: ?domain.ModelRequest {
+        get() {
+            lastRequestLock159.lock()
+            try { match (lastRequestCopy159) {
+                case Some(value) => Some(value.export159())
+                case None => unmanagedLastRequest159 }
+            } finally { lastRequestLock159.unlock() }
+        }
+    }
     private let scriptedLock = Mutex()
     private let scriptedReplies = ArrayList<domain.ModelReply>()
     private var scriptedReplySequence: Int64 = 0
 
     public init(failFirst!: Bool = false) {
         this.failFirst = failFirst
+    }
+    public func withLastRequest159(consume: (FixtureRequestObservation159) -> Bool): Bool {
+        let selected = try { lastRequestLock159.lock(); match (lastRequestCopy159) {
+            case Some(value) => Some(value.beginObservation159())
+            case None => None<FixtureRequestObservation159> }
+        } finally { lastRequestLock159.unlock() }
+        match (selected) { case None => false; case Some(view) =>
+            try { observeLastRequestFrame159(view, consume) } finally { view.returnFrame159() } }
+    }
+    private func observeLastRequestFrame159(view: FixtureRequestObservation159,
+        consume: (FixtureRequestObservation159) -> Bool): Bool { consume(view) }
+    public func retireLastRequest159(): Unit {
+        let previous = try { lastRequestLock159.lock(); let value = lastRequestCopy159
+            lastRequestCopy159 = None<FixtureRequestSnapshot159>; unmanagedLastRequest159 = None<domain.ModelRequest>; value
+        } finally { lastRequestLock159.unlock() }
+        match (previous) { case Some(value) => value.retireUnexported159(); case None => () }
+    }
+    private func installLastRequest159(value: ?FixtureRequestSnapshot159, unmanaged: ?domain.ModelRequest): Unit {
+        let previous = try { lastRequestLock159.lock(); let old = lastRequestCopy159
+            lastRequestCopy159 = value; unmanagedLastRequest159 = unmanaged; old
+        } finally { lastRequestLock159.unlock() }
+        match (previous) { case Some(old) => old.retireUnexported159(); case None => () }
     }
 
     // A fixture transcript describes this actual local provider, not a wire
@@ -32,6 +67,14 @@ public class FixtureModelPort <: ports.ModelPort {
     public func transcriptSnapshot(request: domain.ModelRequest): ?String {
         try { Some(recoverableFixtureSnapshot11318(request)) }
         catch (_: Exception) { None }
+    }
+    public func transcriptSnapshotReturning159(request: domain.ModelRequest,
+        loan: domain.ModelInputToolsBorrow159): ?String {
+        // transcriptSnapshot's complete private codec/query frame has
+        // returned. Its result is encoded text, never a request/schema alias.
+        let answer = transcriptSnapshot(request)
+        loan.returnModelToolsFrame159()
+        answer
     }
 
     public func validateTranscriptSnapshot(snapshot: String): Bool {
@@ -67,7 +110,7 @@ public class FixtureModelPort <: ports.ModelPort {
             }
             let encoded = domain.objectValue([
                 domain.ValueField("schema", domain.textValue("axyndra.fixture-model-transcript/v1")),
-                domain.ValueField("adapter_version", domain.textValue("fixture-v1")),
+                domain.ValueField("adapter_version", domain.textValue("fixture-plan-contract-v2")),
                 domain.ValueField("fail_first", domain.boolValue(failFirst)),
                 domain.ValueField("calls", domain.integerValue(calls)),
                 domain.ValueField("script_sequence", domain.integerValue(scriptedReplySequence)),
@@ -129,7 +172,37 @@ public class FixtureModelPort <: ports.ModelPort {
         request: domain.ModelRequest,
         events: domain.ModelEventSink
     ): domain.Result<domain.ModelReply> {
-        lastRequest = Some(request)
+        installLastRequest159(None<FixtureRequestSnapshot159>, Some(request))
+        executeFixtureFrame159(request, events)
+    }
+    public func executeReturningInput159(request: domain.ModelRequest, events: domain.ModelEventSink,
+        funding: domain.ModelInputDataBudget159): domain.ModelInputReturn159 {
+        let prepared = try { prepareFixtureInput159(request, funding) }
+            catch (_: FixtureRequestCapacity159) {
+                // The entire PRE-execute preparation frame has returned;
+                // neither cache nor events nor execution received the input.
+                return domain.ModelInputReturn159.Returned(domain.Result<domain.ModelReply>.Err(
+                    domain.AgentError(domain.AgentErrorKind.BudgetExceeded, "fixture.input_copy_capacity",
+                        "fixture input copy capacity is unavailable")))
+            }
+        let copied = prepared[0]
+        // Each actual producer has its own paid active cache lease. Another
+        // root/child request may replace lastRequest while this helper runs.
+        let producer = prepared[1]
+        let result = try { executeCopiedFixtureFrame159(copied, request, events) }
+            finally { producer.returnFrame159() }
+        domain.ModelInputReturn159.Returned(result)
+    }
+    private func executeCopiedFixtureFrame159(copied: FixtureRequestSnapshot159,
+        request: domain.ModelRequest, events: domain.ModelEventSink): domain.Result<domain.ModelReply> {
+        installLastRequest159(Some(copied), None<domain.ModelRequest>)
+        // Unexpected exceptions still cross the original Core held-input
+        // path. Only this concrete complete helper return certifies no source
+        // request alias escapes into the independently copied observation.
+        executeFixtureFrame159(request, events)
+    }
+    private func executeFixtureFrame159(request: domain.ModelRequest,
+        events: domain.ModelEventSink): domain.Result<domain.ModelReply> {
         lastThinking = request.thinking
         calls += 1
         if (failFirst && calls == 1) {
@@ -409,7 +482,7 @@ public class FixtureModelPort <: ports.ModelPort {
         var fixturePlanTool = ""
         for (tool in request.tools where tool.name == "plan_write" || tool.name == "plugin.axyndra:workflow.plan_write") {
             if (fixturePlanTool != "") { throw IllegalStateException("fixture plan catalogue is ambiguous") }
-            fixturePlanTool = tool.name
+            fixturePlanTool = String.fromUtf8(tool.name.toArray())
         }
         if ((lastText == "fixture plan write" || lastText.startsWith("Plan mode protocol correction:")) && fixturePlanTool != "") {
             let block = domain.ModelBlock(
@@ -423,7 +496,8 @@ public class FixtureModelPort <: ports.ModelPort {
                             domain.textValue(
                                 "Goal: ship a plan\nConstraints: read-only\n" +
                                     "Approach: inspect then write\nAcceptance: contract passes\n" + "Unresolved: none")
-                        )
+                        ),
+                        domain.ValueField("contract", fixtureReviewPlanContract(request))
                     ]
                 )
             )
@@ -442,6 +516,16 @@ public class FixtureModelPort <: ports.ModelPort {
                     responseId: "fixture-plan"
                 )
             )
+        }
+        let approvedGlobTool = fixtureReviewGlobTool(request)
+        if (lastText.startsWith("[plan-review approved ") && approvedGlobTool != "" &&
+            lastText.contains("fixture-inspect")) {
+            return domain.Result.Ok(fixtureTerminalReply([
+                domain.ModelBlock(domain.ModelBlockKind.ToolCall,
+                    callId: "fixture-approved-plan-inspect", name: approvedGlobTool,
+                    arguments: fixtureReviewGlobArguments(request, approvedGlobTool))
+            ], stopReason: "tool_use", inputTokens: request.messages.size,
+                outputTokens: 1, providerId: "fixture", responseId: "fixture-approved-plan-inspect"))
         }
         if (lastText == "fixture task batch" && hasTool(request.tools, "plugin.axyndra:workflow.task")) {
             if (request.streaming) {
@@ -1333,6 +1417,64 @@ public class FixtureModelPort <: ports.ModelPort {
 // Fixture responses still cross the same strict provider-terminal boundary as
 // real adapters. Keeping the evidence here prevents tests and local product
 // modes from reviving the removed "HTTP success implies complete" shortcut.
+// The fixture uses the currently advertised workspace frontend. Qualified
+// plugin tools retain their actual identity; no removed Host tool is revived.
+func fixtureReviewGlobTool(request: domain.ModelRequest): String {
+    for (name in ["glob", "plugin.axyndra:workspace.glob"]) {
+        if (hasTool(request.tools, name)) { return name }
+    }
+    ""
+}
+
+func fixtureReviewGlobArguments(request: domain.ModelRequest, name: String): domain.AgentValue {
+    let arguments = domain.objectValue([
+        domain.ValueField("pattern", domain.textValue("**/*")),
+        domain.ValueField("limit", domain.integerValue(1))
+    ])
+    // The Native frontend advertises only business arguments and uses the
+    // Pipeline's unique approved-action inference. A compiled frontend that
+    // actually advertises the binding keeps its explicit protocol field.
+    var explicitBinding = true
+    if (name == "plugin.axyndra:workspace.glob") {
+        for (tool in request.tools where tool.name == name) {
+            explicitBinding = match (tool.inputSchema.field("properties")) {
+                case Some(properties) => properties.field("_plan").isSome()
+                case None => false
+            }
+        }
+    }
+    if (explicitBinding) {
+        arguments.put("_plan", domain.objectValue([
+            domain.ValueField("step_id", domain.textValue("fixture-inspect")),
+            domain.ValueField("action_id", domain.textValue("fixture-glob"))
+        ]))
+    }
+    arguments
+}
+
+func fixtureReviewPlanContract(request: domain.ModelRequest): domain.AgentValue {
+    var root = ""
+    for (line in request.system.split("\n")) {
+        if (line.trimAscii().startsWith("workspace_root: ")) {
+            root = String.fromUtf8(line.trimAscii()[16..].toArray())
+            break
+        }
+    }
+    let tool = fixtureReviewGlobTool(request)
+    if (root == "" || tool == "") {
+        throw IllegalArgumentException("Fixture plan requires explicit workspace context and an advertised glob tool")
+    }
+    domain.planContractValue(domain.PlanContract([root], [domain.PlanExecutionStep(
+        domain.PlanStepId("fixture-inspect"), [], true, [domain.PlanAction(
+            "fixture-glob", [tool], ["denied"], domain.OperationEffectClass.ReadOnly,
+            domain.objectValue([
+                domain.ValueField("pattern", domain.textValue("**/*")),
+                domain.ValueField("limit", domain.integerValue(1))
+            ]), 1, exactArguments: true
+        )]
+    )]))
+}
+
 func fixtureTerminalReply(
     blocks: Array<domain.ModelBlock>,
     stopReason!: String = "end_turn",
@@ -1360,7 +1502,7 @@ func fixtureTerminalReply(
         terminalEvidence: Some(domain.TerminalEvidence(
             "fixture", "fixture_terminal", rawStopReason: stopReason,
             messageTerminalObserved: true, streamEofObserved: true,
-            adapterVersion: "fixture-v1"
+            adapterVersion: "fixture-plan-contract-v2"
         )),
         completionDisposition: if (hasTool) {
             domain.CompletionDisposition.ToolUse
@@ -1606,6 +1748,5 @@ func messageText(message: domain.ModelMessage): String {
             case _ => ()
         }
     }
-    result
+    String.fromUtf8(result.toArray())
 }
-

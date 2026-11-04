@@ -24,10 +24,20 @@ public func coreContextBoundaryRequestFromValue(
     callerCancellation180!: ?CancellationToken = None<CancellationToken>
 ): AgentRunRequest {
     let frozen = contextBoundaryRequestFreeze(value)
-    contextBoundaryRequestFields(frozen, ["schema", "run_id", "thread_id", "lane_id", "model_input",
+    let requestFields = ArrayList<String>()
+    for (name in ["schema", "run_id", "thread_id", "lane_id", "model_input",
         "requested_policy", "model_capabilities", "resolver_version", "capabilities", "budget",
         "pricing", "approval_mode", "auto_retry", "tool_context", "context_snapshot", "initialize_context",
-        "context_window", "provider_margin"])
+        "context_window", "provider_margin"]) { requestFields.add(name) }
+    if (frozen.field("plan_context_facts").isSome()) { requestFields.add("plan_context_facts") }
+    contextBoundaryRequestFields(frozen, requestFields.toArray())
+    let planFacts = match (frozen.field("plan_context_facts")) {
+        case Some(raw) =>
+            contextBoundaryRequestRequire(raw.unifiedKind == ValueKind.Object && !raw.fields.isEmpty(),
+                "plan context facts must be a nonempty object when present")
+            raw
+        case None => objectValue([])
+    }
     contextBoundaryRequestRequire(requiredCoreTextField(frozen, "schema") ==
         "axyndra.core-context-boundary-request/v1", "unsupported schema")
     let budget = contextBoundaryRequestBudgetFromValue(requiredCoreValueField(frozen, "budget"))
@@ -88,7 +98,8 @@ public func coreContextBoundaryRequestFromValue(
         contextWindow: contextBoundaryRequestInteger(frozen, "context_window"),
         providerSafetyMargin: contextBoundaryRequestInteger(frozen, "provider_margin"),
         executionLaneId: LaneId(requiredCoreTextField(frozen, "lane_id")),
-        initializeContext: requiredCoreBoolField(frozen, "initialize_context"), ownedEvents: ownedEvents)
+        initializeContext: requiredCoreBoolField(frozen, "initialize_context"), ownedEvents: ownedEvents,
+        planContextFacts: planFacts)
     // Also rejects constructor normalization, ignored fields, duplicate semantic
     // descriptors, or model blocks not expressible by an AgentRunRequest.
     let encoded = contextBoundaryRequestFreeze(contextBoundaryRequestSnapshot(request))
@@ -102,7 +113,9 @@ func contextBoundaryRequestSnapshot(request: AgentRunRequest): AgentValue {
     blocks.add(ModelBlock(ModelBlockKind.Text, text: request.prompt))
     for (image in request.imageInputs) { blocks.add(ModelBlock(ModelBlockKind.Image, image: Some(image))) }
     let policy = request.requestedPolicy
-    objectValue([
+    contextBoundaryRequestRequire(request.planContextFacts.unifiedKind == ValueKind.Object,
+        "plan context facts must be an object")
+    let snapshot = objectValue([
         ValueField("schema", textValue("axyndra.core-context-boundary-request/v1")),
         ValueField("run_id", textValue(request.runId.value)), ValueField("thread_id", textValue(request.sessionId.value)),
         ValueField("lane_id", textValue(request.executionLaneId.value)),
@@ -115,7 +128,7 @@ func contextBoundaryRequestSnapshot(request: AgentRunRequest): AgentValue {
             ValueField("policy_requested_thinking", textValue(thinkingLevelName(policy.policyRequestedThinking))),
             ValueField("user_requested_thinking", match (policy.userRequestedThinking) {
                 case Some(level) => textValue(thinkingLevelName(level)); case None => nullValue() }),
-            ValueField("thinking_source", textValue(thinkingPreferenceSourceName(policy.thinkingSource))),
+            ValueField("thinking_source", textValue(contextBoundaryRequestThinkingSourceName(policy.thinkingSource))),
             ValueField("request_output_budget", contextBoundaryRequestOutputValue(policy.requestOutputBudget))])),
         ValueField("model_capabilities", contextBoundaryRequestCapsValue(request.modelCapabilitiesSnapshot)),
         ValueField("resolver_version", integerValue(Int64(request.resolverVersion))),
@@ -130,6 +143,28 @@ func contextBoundaryRequestSnapshot(request: AgentRunRequest): AgentValue {
         ValueField("initialize_context", boolValue(request.initializeContext)),
         ValueField("context_window", integerValue(request.contextWindow)),
         ValueField("provider_margin", integerValue(request.providerSafetyMargin))])
+    if (!request.planContextFacts.fields.isEmpty()) {
+        snapshot.put("plan_context_facts", request.planContextFacts)
+    }
+    snapshot
+}
+
+func contextBoundaryRequestThinkingSourceName(source: ThinkingPreferenceSource): String {
+    match (source) {
+        case ThinkingPreferenceSource.ExplicitUser => "explicit_user"
+        case ThinkingPreferenceSource.ModePreference => "mode_preference"
+        case ThinkingPreferenceSource.ModelDefault => "model_default"
+    }
+}
+
+func contextBoundaryRequestThinkingModeName(mode: ThinkingControlMode): String {
+    match (mode) {
+        case ThinkingControlMode.NoThinking => "none"
+        case ThinkingControlMode.Toggle => "toggle"
+        case ThinkingControlMode.Effort => "effort"
+        case ThinkingControlMode.Budget => "budget"
+        case ThinkingControlMode.Adaptive => "adaptive"
+    }
 }
 
 func contextBoundaryRequestCapsValue(caps: ModelExecutionCapabilitiesSnapshot): AgentValue {
@@ -137,7 +172,7 @@ func contextBoundaryRequestCapsValue(caps: ModelExecutionCapabilitiesSnapshot): 
         ValueField("schema_version", integerValue(Int64(caps.snapshotSchemaVersion))),
         ValueField("model_id", textValue(caps.modelId)),
         ValueField("thinking", objectValue([
-            ValueField("mode", textValue(thinkingControlModeName(caps.thinking.mode))),
+            ValueField("mode", textValue(contextBoundaryRequestThinkingModeName(caps.thinking.mode))),
             ValueField("supported_levels", listValue(caps.thinking.supportedLevels.map { level => textValue(thinkingLevelName(level)) })),
             ValueField("budget_tiers", listValue(caps.thinking.budgetTiers.map { tier => objectValue([
                 ValueField("level", textValue(thinkingLevelName(tier.level))), ValueField("budget_tokens", integerValue(tier.budgetTokens))]) }))])),
@@ -288,9 +323,17 @@ func contextBoundaryRequestModelFields(value: AgentValue): Unit {
 }
 
 func contextBoundaryRequestToolFields(value: AgentValue): Unit {
-    if (value.field("execution_settings").isSome()) {
-        contextBoundaryRequestFields(value, ["workspace_root", "cwd", "environment", "services", "execution_settings"])
-    } else { contextBoundaryRequestFields(value, ["workspace_root", "cwd", "environment", "services"]) }
+    let names = ArrayList<String>()
+    for (name in ["workspace_root", "cwd", "environment", "services"]) { names.add(name) }
+    if (value.field("execution_settings").isSome()) { names.add("execution_settings") }
+    match (value.field("plan_review_control")) {
+        case Some(raw) =>
+            contextBoundaryRequestRequire(raw.unifiedKind == ValueKind.Boolean && raw.asBool(),
+                "plan review control must be true when present")
+            names.add("plan_review_control")
+        case None => ()
+    }
+    contextBoundaryRequestFields(value, names.toArray())
     for (entry in requiredCoreListField(value, "environment")) { contextBoundaryRequestFields(entry, ["name", "value"]) }
     for (entry in requiredCoreListField(value, "services")) { contextBoundaryRequestFields(entry, ["kind", "name", "version"]) }
 }

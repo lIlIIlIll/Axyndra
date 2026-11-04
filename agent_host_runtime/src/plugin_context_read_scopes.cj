@@ -35,6 +35,14 @@ public class HostContextReadScopes {
         for (root in roots where hostPathComponentsContain(root, source)) { return "outside-workspace.read" }
         "sensitive-path.read"
     }
+    // Only existing operator settings data and installed component roots are
+    // exempt from repository participation. A workspace path stays subject to
+    // the approved task scope even if an installed package is located there.
+    public func explicitNonWorkspaceData(source: String, workspaceRoot: String): Bool {
+        if (hostPathComponentsContain(workspaceRoot, source)) { return false }
+        for (root in roots where hostPathComponentsContain(root, source)) { return true }
+        false
+    }
     public func validate(host: HostJavaScriptPluginHost): Result<Unit> {
         let current = match (host.captureContextReadScopes()) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }

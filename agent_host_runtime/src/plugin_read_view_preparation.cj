@@ -162,6 +162,18 @@ public class HostReadViewCollector {
             } else { 0 }
             let absolute = if (Path(source).isAbsolute()) { Path(source).normalize().toString() }
                 else { Path(context.workspaceRoot).join(source).normalize().toString() }
+            if (contextSelection && !context.planReviewControl) {
+                let explicitData = match (scopes) {
+                    case Some(value) => value.explicitNonWorkspaceData(absolute, context.workspaceRoot)
+                    case None => false
+                }
+                if (!explicitData) {
+                    match (host.validateTaskContextResource(context.runId, absolute)) {
+                        case Result.Err(error) => return Result.Err(error)
+                        case Result.Ok(_) => ()
+                    }
+                }
+            }
             if (!context.capabilities.allows(CapabilityKind.WorkspaceRead, resource: absolute)) {
                 return hostPluginResourceError("read_view.capability_denied", "resource metadata exceeds the actual Run capability ceiling")
             }

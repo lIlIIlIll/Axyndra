@@ -523,6 +523,9 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
     private var constructionReturned159 = false
     private let producerReturned159 = HostRegistryCatalogProducer159()
     private var catalogAliases159 = false
+    private var actualLegacyAliasRefusal204 = false
+    private var originalConfigurationAliases204 = false
+    private var otherAliases204 = false
     private var catalogShares159: Int64 = 0
     private var canonical186: ?HostOwnedCanonicalProjectionSelection186 = None<HostOwnedCanonicalProjectionSelection186>
     private var primitive191: ?HostOwnedPrimitiveConfiguration191 = None<HostOwnedPrimitiveConfiguration191>
@@ -615,9 +618,26 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
     }
     func canReturnCatalogShare159(): Bool {
         paymentLock159.lock()
-        try { constructionReturned159 && constructionFrames159 == 0 &&
-            catalogShares159 > 0 && !catalogAliases159 && !hasUnknownTemporary159() && payment.isSome() && canonicalFramesReturned186() && primitiveFramesReturned191() }
-        finally { paymentLock159.unlock() }
+        try {
+            // Record only the alias branch of this actual retirement check.
+            // This scalar is observation, never a return receipt or authority.
+            actualLegacyAliasRefusal204 = constructionReturned159 && constructionFrames159 == 0 &&
+                catalogShares159 > 0 && catalogAliases159
+            constructionReturned159 && constructionFrames159 == 0 &&
+                catalogShares159 > 0 && !catalogAliases159 && !hasUnknownTemporary159() && payment.isSome() &&
+                canonicalFramesReturned186() && primitiveFramesReturned191()
+        } finally { paymentLock159.unlock() }
+    }
+    func originalLegacyAliasPaymentHeld204(): Bool {
+        paymentLock159.lock()
+        try {
+            // These are private read-only scalar/view predicates. The actual
+            // Catalog producer callback is not invoked a second time.
+            actualLegacyAliasRefusal204 && originalConfigurationAliases204 && !otherAliases204 &&
+                constructionReturned159 && constructionFrames159 == 0 &&
+                catalogShares159 > 0 && catalogAliases159 && payment.isSome() &&
+                !hasUnknownTemporary159() && canonicalFramesReturned186() && primitiveFramesReturned191()
+        } finally { paymentLock159.unlock() }
     }
     func returnedCatalogShare159(): ?LogicalJsonOwnerReservation {
         paymentLock159.lock()
@@ -781,7 +801,14 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
     }
     func retainCatalogAliases159(): Unit {
         paymentLock159.lock()
-        try { catalogAliases159 = true } finally { paymentLock159.unlock() }
+        try { catalogAliases159 = true; otherAliases204 = true } finally { paymentLock159.unlock() }
+    }
+    // The existing successful legacy configuration callback branch records
+    // its fixed cause without weakening the original permanent-alias guard.
+    func retainOriginalConfigurationAliases204(): Unit {
+        paymentLock159.lock()
+        try { catalogAliases159 = true; originalConfigurationAliases204 = true }
+        finally { paymentLock159.unlock() }
     }
     // Called only under paymentLock159, preserving lock order parent->phase.
     private func hasUnknownTemporary159(): Bool {
@@ -1176,12 +1203,17 @@ private class HostRegistryCatalogTemporary159 <: ToolCatalogTemporaryData159 {
 class HostRegistryCatalogProducer159 { let returned159 = AtomicBool(false) }
 // Independently funded share. Catalog clears all of its actual containers and
 // its link helper returns before calling this private producer-owned receipt.
-class HostRegistryCatalogDataLease159 <: ToolCatalogDataLease159 {
+class HostRegistryCatalogDataLease159 <: ToolCatalogDataLease159 & ToolCatalogOriginalLegacyAliasPayment204 {
     private let lock = Mutex()
     private var owner: ?HostRegistryCatalogIdentity159
     private var payment: ?LogicalJsonOwnerReservation
     init(owner: HostRegistryCatalogIdentity159, payment: LogicalJsonOwnerReservation) {
         this.owner = Some(owner); this.payment = Some(payment)
+    }
+    public func originalLegacyAliasPaymentHeld204(): Bool {
+        lock.lock()
+        try { match (owner) { case Some(value) => value.originalLegacyAliasPaymentHeld204(); case None => false } }
+        finally { lock.unlock() }
     }
     public func catalogProducerReturned159(): Bool {
         lock.lock()

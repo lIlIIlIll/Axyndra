@@ -17,7 +17,7 @@ class ChannelPreparationCanonicalizer {
         calls += 1
         if (canonicalAgentValue(call.arguments) != canonicalAgentValue(channelPreparationInput())) {
             return Result.Err(AgentError(AgentErrorKind.InvalidInput, "fixture.channel_raw_input_required",
-                "channel approval must reprepare original input"))
+                "channel preparation must receive original input"))
         }
         let binding = objectValue([
             ValueField("plugin", textValue("axyndra:channel-prepare")),
@@ -85,6 +85,21 @@ func channelPreparationPending(result: Result<ToolPreparation>): PreparedToolInv
     }
 }
 
+func channelPreparationFrozenCopy(plan: NormalizedOperationPlan,
+    bindingDigest!: ?String = None): NormalizedOperationPlan {
+    NormalizedOperationPlan(plan.toolName, parseUnifiedJson(stringifyUnifiedJson(plan.canonicalArguments)),
+        plan.requiredCapabilities, plan.effectClass, plan.retryDisposition,
+        match (bindingDigest) { case Some(value) => value; case None => plan.bindingDigest },
+        resolvedPaths: plan.resolvedPaths, resolvedHosts: plan.resolvedHosts,
+        networkPolicy: Some(plan.networkPolicy), cwd: plan.cwd, relevantEnvironment: plan.relevantEnvironment,
+        approvalMetadata: Some(plan.approvalMetadata), idempotencyKey: plan.idempotencyKey,
+        replayDisposition: Some(plan.replayDisposition), toolVersion: plan.implementation.toolVersion,
+        implementationFingerprint: plan.implementation.implementationFingerprint,
+        schemaDigest: plan.implementation.schemaDigest, effectiveArgumentsDigest: plan.implementation.effectiveArgumentsDigest,
+        replayContractVersion: plan.implementation.replayContractVersion, contextReadFacts: plan.contextReadFacts,
+        policyVersion: plan.policyVersion, approvedWriteRoots: plan.approvedWriteRoots)
+}
+
 func channelParentIntentPreparationFor(committed: Bool): Unit {
     let label = if (committed) { "Committed channel" } else { "Direct channel" }
     let catalog = ToolCatalog()
@@ -115,7 +130,7 @@ func channelParentIntentPreparationFor(committed: Bool): Unit {
         1000, 100, 20, "estimator", "retry", "cache", snapshot, "system")
     runtime.startTurn(SemanticTurnId("http-prepare-turn"), context.runId, ItemId("channel-prepare-user"),
         ThreadItemContent.UserMessage(textMessageParts("channel prepare")), lane, InvocationContextProjection()).value().getOrThrow()
-    let operations = MemoryOperations()
+    let operations = HttpApprovalRecordingOperations()
     let audit = MemoryAudit()
     let pipeline = ToolPipeline(catalog, operations, audit, FixedIds(), policy: ChannelPreparationPolicy())
     let rootCall = ToolCall("channel-root-call", rootName, channelPreparationInput())
@@ -149,19 +164,60 @@ func channelParentIntentPreparationFor(committed: Bool): Unit {
         label + " JavaScript service keys cannot resolve the channel-only hidden port")
     expect(channelPreparationPending(pipeline.prepareDerived(context, childCall, pending, key)).authorization == PreparedAuthorization.ApprovalRequired,
         label + " a parent still awaiting approval cannot authorize child bytes")
+    // The production approval path reloads the immutable persisted plan. Keep
+    // an independent durable view here so mutating an exported pending payload
+    // cannot also mutate this in-memory port's otherwise shared plan object.
+    let frozenPlan = channelPreparationFrozenCopy(pending.operationPlan)
+    operations.frozenPlan = Some(frozenPlan)
+    let frozenArguments = canonicalAgentValue(frozenPlan.canonicalArguments)
+    let frozenArgumentsJson = stringifyUnifiedJson(frozenPlan.canonicalArguments)
+    let originalOperationId = pending.operationId.value
+    let originalSource = pending.source
+    let preparationCalls = canonicalizer.calls
     for (change in ["bytes", "lease_id", "directory_revision", "directory_digest", "implementation_version", "implementation_fingerprint"]) {
-        canonicalizer.changed = change
+        let changed = parseUnifiedJson(frozenArgumentsJson)
+        let hostPlan = changed.field("host_plan").getOrThrow()
+        channelPreparationChange(hostPlan.field("binding").getOrThrow(),
+            hostPlan.field("intents").getOrThrow().asArray().get(0).getOrThrow(), change)
+        pending.operationPlan.canonicalArguments.put("host_plan", hostPlan)
+        expect(pending.operationPlan.bindingDigest == frozenPlan.bindingDigest &&
+            pending.operationId.value == originalOperationId && refEq(pending.source, originalSource),
+            label + " tampering preserves the original digest, operation and authentic source")
         expect(match (pipeline.authorize(context, pending, ApprovalDecision.Approve, decisionSource: ApprovalDecisionSource.User)) {
             case Result.Err(error) => error.code == "tool.approval_context_changed"
             case _ => false
-        }, label + " changed " + change + " invalidates the pending approval before any grant")
+        }, label + " changed frozen " + change + " invalidates pending approval before any grant")
+        expect(operations.approvals == 0 && observed.calls == 0,
+            label + " changed frozen " + change + " records no approval and performs no IO")
     }
-    canonicalizer.changed = ""
+    pending.operationPlan.canonicalArguments.put("host_plan",
+        parseUnifiedJson(frozenArgumentsJson).field("host_plan").getOrThrow())
+    let changedDigest = channelPreparationFrozenCopy(frozenPlan,
+        bindingDigest: Some("fixture-changed-binding-digest"))
+    expect(canonicalAgentValue(changedDigest.canonicalArguments) == frozenArguments &&
+        changedDigest.bindingDigest != pending.operationPlan.bindingDigest,
+        label + " digest drift case preserves the complete canonical payload")
+    operations.frozenPlan = Some(changedDigest)
+    expect(match (pipeline.authorize(context, pending, ApprovalDecision.Approve,
+        decisionSource: ApprovalDecisionSource.User)) {
+        case Result.Err(error) => error.code == "tool.approval_context_changed"
+        case _ => false
+    }, label + " digest-only drift invalidates pending approval")
+    expect(operations.approvals == 0 && observed.calls == 0,
+        label + " digest-only drift records no approval and performs no IO")
+    operations.frozenPlan = Some(frozenPlan)
+    // A mutable preparer's later state is not a new authoritative payload.
+    canonicalizer.changed = "bytes"
     let approved = match (pipeline.authorize(context, pending, ApprovalDecision.Approve, decisionSource: ApprovalDecisionSource.User)) {
         case Result.Ok(ToolAuthorization.Ready(value)) => value
         case Result.Err(error) => throw IllegalStateException(error.describe())
         case _ => throw IllegalStateException("channel root approval did not return Ready")
     }
+    expect(approved.authorization == PreparedAuthorization.Approved && operations.approvals == 1 &&
+        operations.approved && operations.approvedOperation == approved.operationId.value &&
+        operations.approvedSource == "user" && canonicalizer.calls == preparationCalls &&
+        canonicalAgentValue(approved.operationPlan.canonicalArguments) == frozenArguments,
+        label + " approves only the exact persisted bytes without rerunning preparation")
     let auditBefore = audit.events.size
     let child = sourceReady(pipeline.prepareDerived(context, childCall, approved, key))
     expect(child.authorization == PreparedAuthorization.ParentIntent && child.approval.isNone() &&
@@ -213,6 +269,6 @@ func channelParentIntentPreparationFor(committed: Bool): Unit {
         label + " channel parent does not grant unrelated ordinary read-only children")
     // InMemoryOperations is intentionally not an adapter for durable startup
     // proof. This suite stops at policy preparation; Store tests own that proof.
-    expect(!pipeline.executePrepared(context, child).isOk() && observed.calls == 0 && canonicalizer.calls >= 8,
+    expect(!pipeline.executePrepared(context, child).isOk() && observed.calls == 0 && canonicalizer.calls == preparationCalls,
         label + " every preparation and approval check remains before byte IO or durable admission")
 }

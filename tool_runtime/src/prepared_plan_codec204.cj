@@ -36,6 +36,8 @@ func storedOperationPlanValue204(plan: NormalizedOperationPlan): AgentValue {
             Int64(plan.implementation.replayContractVersion)
         ))
     ])
+    if (plan.policyVersion != "tool-policy-v1") { value.put("policy_version", textValue(plan.policyVersion)) }
+    if (!plan.approvedWriteRoots.isEmpty()) { value.put("approved_write_roots", stringValues204(plan.approvedWriteRoots)) }
     if (!plan.contextReadFacts.isEmpty()) { value.put("context_reads", contextReadFactLinksValue(plan.contextReadFacts)) }
     value
 }

@@ -90,7 +90,7 @@ arbitrary Codex JavaScript, vendor apps, hosted execution, or MCP activation.
 
 ## Persisted state and inspection
 
-The current SQLite format is **schema v28**. It is independent of the Native
+The current SQLite format is **schema v29**. It is independent of the Native
 wire SDK version and author-source package versions above. Migration v28 moves
 nonempty legacy Todo/Goal bytes into namespaced `plugin_documents` in the same
 transaction as the schema version change; unsupported historical payloads

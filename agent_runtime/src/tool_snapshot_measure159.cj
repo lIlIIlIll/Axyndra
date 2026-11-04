@@ -12,9 +12,24 @@ public class ToolSnapshotMeasure159 {
     private let payment: LogicalJsonOwnerReservation
     private var invoice: Int64 = 131072
     private var pathPeak: Int64 = 0
+    private let markModelCopyRefusal204: Bool
+    private let prepayStatus204: ?ToolCopyPrepayStatus204
     public init(payment: LogicalJsonOwnerReservation, priorInvoice!: Int64 = 131072) {
         if (priorInvoice < 131072) { throw LogicalJsonPayloadError("invalid prior snapshot invoice") }
         this.payment = payment; this.invoice = priorInvoice
+        this.markModelCopyRefusal204 = false
+        this.prepayStatus204 = None<ToolCopyPrepayStatus204>
+    }
+    // Only the closed Runtime copy producer selects the refusal protocol.
+    init(payment: LogicalJsonOwnerReservation, markModelCopyRefusal204: Bool) {
+        this.payment = payment; this.markModelCopyRefusal204 = markModelCopyRefusal204
+        this.prepayStatus204 = None<ToolCopyPrepayStatus204>
+    }
+    public init(payment: LogicalJsonOwnerReservation, prepayStatus204: ToolCopyPrepayStatus204,
+        priorInvoice!: Int64 = 131072) {
+        if (priorInvoice < 131072) { throw LogicalJsonPayloadError("invalid prior snapshot invoice") }
+        this.payment = payment; this.invoice = priorInvoice
+        this.markModelCopyRefusal204 = false; this.prepayStatus204 = Some(prepayStatus204)
     }
     public func retainedInvoice159(): Int64 { add(invoice, pathPeak) }
     private func add(left: Int64, right: Int64): Int64 {
@@ -59,7 +74,7 @@ public class ToolSnapshotMeasure159 {
             // buffer, copies and headers before calling it, then charge the
             // actual UTF8 spelling below before any canonical/copy producer.
             // This invoice is not the unchanged one-MiB text/codec bound.
-            payment.ensureRetainedPeak(add(add(invoice, pathPeak), 4096 + 512 * 16))
+            fundPeak159(add(add(invoice, pathPeak), 4096 + 512 * 16))
             let text = value.asNumberText()
             invoice = add(invoice, mul(text.size, 16))
             return add(1, frame159(text.size))
@@ -75,7 +90,7 @@ public class ToolSnapshotMeasure159 {
     private func prepayPath159(depth: Int64): Unit {
         let extent = mul(depth, 1024)
         if (extent > pathPeak) { pathPeak = extent }
-        payment.ensureRetainedPeak(add(invoice, pathPeak))
+        fundPeak159(add(invoice, pathPeak))
     }
     private func rejectAncestor159(value: AgentValue, head: ?ToolSnapshotPath159): Unit {
         var cursor = head
@@ -159,6 +174,8 @@ public class ToolSnapshotMeasure159 {
         match (value.threadId) { case Some(thread) => addText159(thread.value); case None => () }
         addSlots159(value.entries.size); addSlots159(value.hookHandlers.size)
         for (entry in value.entries) {
+            // New host review flag is fixed DATA, never invocation authority.
+            addSlots159(2)
             addText159(entry.name); addText159(entry.description); addValue159(entry.inputSchema)
             addText159(entry.executorVersion); addText159(entry.implementationFingerprint); addText159(entry.schemaDigest)
             addSlots159(entry.requiredCapabilities.size)
@@ -204,8 +221,27 @@ public class ToolSnapshotMeasure159 {
             case None => ()
         }
     }
-    public func fund159(): Unit { payment.ensureRetainedPeak(add(invoice, pathPeak)) }
+    public func fund159(): Unit { fundPeak159(add(invoice, pathPeak)) }
+    private func fundPeak159(bytes: Int64): Unit {
+        // Only the exact original-bank funding call may produce this marker.
+        // Traversal, shape, arithmetic and copy exceptions remain unchanged.
+        try {
+            match (prepayStatus204) { case Some(value) => value.fundRetainedPeak204(payment, bytes)
+                case None => payment.ensureRetainedPeak(bytes) }
+        }
+        catch (error: LogicalJsonPayloadError) {
+            if (markModelCopyRefusal204) { throw ModelToolCopyInvoiceRefused204() }
+            throw error
+        }
+    }
 }
+
+// Fixed DATA-only refusal before a selected request-copy carrier exists.
+// It contains no borrowed error/message, schema, Source or return witness.
+public class ModelToolCopyInvoiceRefused204 <: Exception {
+    init() { super("selected model-tool copy could not fund its original-bank invoice") }
+}
+
 private class ToolSnapshotPath159 {
     var value: ?AgentValue
     var previous: ?ToolSnapshotPath159
@@ -214,4 +250,20 @@ private class ToolSnapshotPath159 {
     init(value: AgentValue, previous: ?ToolSnapshotPath159) {
         this.value = Some(value); this.previous = previous
     }
+}
+
+// Pure DATA evidence of one exact original-bank funding refusal. Only this
+// closed fund helper writes the exception reference; traversal/copy errors
+// cannot set it and equal messages/types/hashes are never acceptance proof.
+public class ToolCopyPrepayStatus204 {
+    private var refusal: ?Exception = None<Exception>
+    public init() {}
+    public func fundRetainedPeak204(payment: LogicalJsonOwnerReservation, invoice: Int64): Unit {
+        try { payment.ensureRetainedPeak(invoice) }
+        catch (error: LogicalJsonPayloadError) { refusal = Some(error); throw error }
+    }
+    public func isExactRefusal204(error: Exception): Bool {
+        match (refusal) { case Some(actual) => refEq(actual, error); case None => false }
+    }
+    public func clearReturnedFrame204(): Unit { refusal = None<Exception> }
 }

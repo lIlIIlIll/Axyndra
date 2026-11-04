@@ -134,7 +134,7 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
             // lack that complete-consumer contract; preserve their marker
             // before any of the original validation/error branches below.
             if (httpRequested || readViewRequested || delegationRequested || documentRequested) {
-                identity.retainCatalogAliases159()
+                identity.retainOriginalConfigurationAliases204()
             }
             let primitiveCapabilities:Array<Capability>=match(primitiveSelection) {
                 case Some(value)=>value.additionalCapabilities(toolData.name);case None=>[] }
@@ -195,8 +195,15 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                 Some({ context, call => hostManager.prepareHttp(context, call,
                     identity.namespace, toolData.name, generation) })
             } else { None }
+            let supervisedTask = descriptor.entryKind == PluginEntryKind.NativeExecutable &&
+                identity.namespace == "axyndra:workflow" && toolData.name == "task" &&
+                (match (primitiveSelection) { case Some(value) => value.supervisedTaskServices191(toolData.name); case None => false }) &&
+                catalog.publishedHostServiceMatches191(HOST_PLUGIN_CHILD_TOOL111, HOST_PLUGIN_CHILD_FINGERPRINT111)
+            let supervisedRead = readViewRequested && serviceRuntime.isSome() &&
+                catalog.publishedHostServiceMatches191(HOST_READ_VIEW_TOOL, HOST_READ_VIEW_FINGERPRINT)
             let legacyExecutor=HostJavaScriptPluginToolExecutor(hostManager,identity.namespace,toolData.name,
-                serviceRuntime:serviceRuntime,expectedInstanceGeneration:generation)
+                serviceRuntime:serviceRuntime,expectedInstanceGeneration:generation,
+                closedPlainDataOnly204: dataOnly && canonicalSelection173.isNone())
             let actualExecutor:ToolExecutor=if(canonicalSelection173.isSome()) {
                 let selection = canonicalSelection173.getOrThrow()
                 let route = match (serviceRuntime.getOrThrow().canonicalProjectionRouteOwned186(hostManager, selection)) {
@@ -214,6 +221,15 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                     if (dataOnly) { Capability(CapabilityKind.WorkspaceRead) } else if(primitiveSelected) { primitiveInvocation } else {
                         Capability(CapabilityKind.ExtensionInvoke, resource: if (documentRequested || primitiveSelected) { identity.namespace } else if (readViewRequested || delegationRequested) { toolName } else { "" }) },
                     sideEffecting: !dataOnly && !delegationRequested,
+                    supervisedExecutionSafe: dataOnly || supervisedRead || supervisedTask,
+                    planReviewSafe: dataOnly || supervisedRead,
+                    planBindingInArguments: false,
+                    // The exact Task profile uses the paid producer protocol.
+                    // Unselected data-only preparation only validates its
+                    // current profile and returns caller-owned arguments; it
+                    // invokes no plugin and retains no producer graph. The
+                    // selected projection and other callbacks stay conservative.
+                    coreMetadataResolverClosed204: supervisedTask || (dataOnly && canonicalSelection173.isNone()),
                     neverReplay: dataOnly || readViewRequested || documentRequested || delegationRequested || primitiveSelected,
                     preparationReadMayBeAbsent: primitiveSelected,
                     preparationReadResolver: if (primitiveSelected) { Some({ context, call =>
@@ -234,6 +250,9 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                     implementationVersion: executorVersion,
                     implementationFingerprint: identity.namespace + ":" + identity.contentDigest,
                     canonicalArgumentsResolver: canonicalizer,
+                    ownedCanonicalArgumentsResolver204: if (supervisedTask) { Some({ context, call =>
+                        serviceRuntime.getOrThrow().childCanonicalizeOwned204(hostManager, identity.namespace, toolData.name,
+                            generation, documentImplementation, documentSchema, context, call) }) } else { None },
                     networkPolicyResolver: Some({ call => if (httpRequested) {
                         hostPluginHttpRootNetworkPolicy(call, identity.namespace, identity.contentDigest)
                     } else { Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) } })

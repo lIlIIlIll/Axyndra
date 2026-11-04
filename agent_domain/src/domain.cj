@@ -1867,6 +1867,7 @@ public class ProcessRequest {
     public let arguments: Array<String>
     public let workingDirectory: String
     public let timeoutMillis: Int64
+    public let approvedWriteRoots: Array<String>
     public let sandboxMode: ProcessSandboxMode
     // IsolatedReadOnly replaces the product workspace with this filesystem root.
     // Additional content roots require explicit read-only grants.
@@ -1905,7 +1906,8 @@ public class ProcessRequest {
         secretEnvironmentAllowlist!: Array<String> = [],
         redactedValues!: Array<String> = [],
         displayServerAccess!: Bool = false,
-        processLimits!: ExecutionResourceLimits = ExecutionResourceLimits()
+        processLimits!: ExecutionResourceLimits = ExecutionResourceLimits(),
+        approvedWriteRoots!: Array<String> = []
     ) {
         if (executable.trimAscii() == "") {
             throw IllegalArgumentException("process executable must not be empty")
@@ -1941,6 +1943,7 @@ public class ProcessRequest {
         this.arguments = arguments
         this.workingDirectory = workingDirectory
         this.timeoutMillis = timeoutMillis
+        this.approvedWriteRoots = approvedWriteRoots.clone()
         this.sandboxMode = sandboxMode
         this.filesystemRoot = filesystemRoot
         this.readOnlyMounts = readOnlyMounts
@@ -1957,6 +1960,9 @@ public class ProcessRequest {
 }
 
 public class ProcessResult {
+    public let started: Bool
+    public let completed: Bool
+    public let launchErrno: Int64
     public let exitCode: Int64
     public let stdout: String
     public let stderr: String
@@ -1970,8 +1976,14 @@ public class ProcessResult {
         stderr!: String = "",
         timedOut!: Bool = false,
         workingDirectory!: String = "",
-        truncated!: Bool = false
+        truncated!: Bool = false,
+        started!: Bool = true,
+        completed!: Bool = true,
+        launchErrno!: Int64 = 0
     ) {
+        this.started = started
+        this.completed = completed && !timedOut
+        this.launchErrno = launchErrno
         this.exitCode = exitCode
         this.stdout = stdout
         this.stderr = stderr

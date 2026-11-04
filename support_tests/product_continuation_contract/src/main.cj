@@ -14,6 +14,7 @@ import tool_runtime.*
 import std.fs.*
 
 main(): Int64 {
+    match (childPlanWorkerMode204()) { case Some(mode) => return childPlanWorkerMain204(mode); case None => () }
     if (!exists(Path("target"))) { Directory.create("target", recursive: true) }
     let root = Directory.createTemp("target").toString()
     try {
@@ -227,7 +228,25 @@ main(): Int64 {
             "public Product continuation decoder returns a typed unsupported context error")
         let corrupted = SqliteDatabase(root + "/state/state.db")
         let stored = SqliteRunRepository(corrupted)
-        stored.saveContinuation(continuation).value().getOrThrow()
+        let originalPending = corrupted.query(
+            "SELECT payload,digest FROM run_continuations WHERE run_id='product-restart-run'")[0]
+        match (stored.saveContinuation(continuation)) {
+            case Result.Err(error) => expect(error.kind == AgentErrorKind.Conflict && error.code == "persistence.conflict",
+                "public continuation writer rejects trusted context drift with typed Conflict: " + error.describe())
+            case Result.Ok(_) => throw IllegalStateException("public writer accepted changed pending context")
+        }
+        expect(corrupted.query("SELECT payload FROM run_continuations WHERE run_id='product-restart-run'")[0].required(0) ==
+            originalPending.required(0), "rejected pending context mutation preserves exact canonical bytes")
+        // This existing recovery fixture deliberately corrupts the stored
+        // projection. It cannot use the public writer to bypass its immutable
+        // request binding. Keep the durable envelope checksums valid so the
+        // intended unsupported context decoder is the boundary under test.
+        let invalidDurable = decodeDurableRunContinuation(originalPending.required(0))
+        let invalidSnapshot = optionalRunRequestSnapshotFromDurableContinuation(invalidDurable).getOrThrow()
+        invalidSnapshot.field("skill_stack").getOrThrow().put("schema", textValue("axyndra.run-context/unsupported"))
+        let invalidProjection = withRunRequestSnapshotProjection(invalidDurable, invalidSnapshot)
+        corrupted.execute("UPDATE run_continuations SET payload=" + sqliteText(encodeDurableRunContinuation(invalidProjection)) +
+            ",digest=" + sqliteText(invalidProjection.digest) + " WHERE run_id='product-restart-run'")
         let preserved = corrupted.query("SELECT payload FROM run_continuations WHERE run_id='product-restart-run'")[0].required(0)
         let approvalCount = corrupted.scalarInt("SELECT COUNT(*) FROM approvals")
         let application = rebuilt.applicationSession(sessionId: Some(sessionId))
@@ -240,10 +259,17 @@ main(): Int64 {
             corrupted.query("SELECT payload FROM run_continuations WHERE run_id='product-restart-run'")[0].required(0) == preserved,
             "repeated startup preserves pending approval and exact historical bytes")
         continuation.contextSnapshotPayload.put("schema", textValue(oldSchema))
-        stored.saveContinuation(continuation).value().getOrThrow()
+        corrupted.execute("UPDATE run_continuations SET payload=" + sqliteText(originalPending.required(0)) +
+            ",digest=" + sqliteText(originalPending.required(1)) + " WHERE run_id='product-restart-run'")
+        match (stored.saveContinuation(continuation)) {
+            case Result.Err(error) => throw IllegalStateException("restored original pending request is not idempotent: " + error.describe())
+            case Result.Ok(_) => ()
+        }
         corrupted.close()
         rebuilt.close().value().getOrThrow()
         startupRecoveryNeverFallsBackToStartContract(root)
+        planChildInheritanceContract(root)
+        planUnadmittedControlContract(root)
         println("product continuation contract passed")
         0
     } finally {

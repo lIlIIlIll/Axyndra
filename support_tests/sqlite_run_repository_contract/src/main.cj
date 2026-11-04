@@ -51,6 +51,7 @@ main(): Int64 {
         outputLimitRetryBoundaryContract(database)
         restartAttemptAtomicityContract(database)
         continuationCasIdempotencyContract(database)
+        planContextBindingContract(database)
         telemetryRetentionContract(database, repository, runId)
         expect(repository.save(RunSnapshot(
             RunId("ownerless"),
@@ -725,6 +726,12 @@ func v24SnapshotMigrationContract(): Unit {
         expect(seed.scalarInt("SELECT COUNT(*) FROM plugin_documents") == 0,
             "owned v24 fixture has no current plugin document data to discard")
         seed.execute("DROP TABLE plugin_documents")
+        expect(seed.scalarInt("SELECT COUNT(*) FROM plan_executions") == 0,
+            "owned v24 fixture has no approved plan history to discard")
+        for (table in ["plan_step_decisions", "plan_action_admissions", "plan_execution_runs",
+            "plan_execution_sessions", "plan_execution_members", "plan_executions"]) {
+            seed.execute("DROP TABLE " + table)
+        }
         seed.execute("PRAGMA user_version=24")
     } finally { seed.close() }
 
@@ -732,12 +739,12 @@ func v24SnapshotMigrationContract(): Unit {
     try {
         let restored = SqliteRunRepository(migrated)
             .find(RunId("run-1")).value().getOrThrow()
-        expect(migrated.scalarInt("PRAGMA user_version") == 28 &&
+        expect(migrated.scalarInt("PRAGMA user_version") == 29 &&
             migrated.scalarInt(
                 "SELECT json_extract(app_snapshot,'$.format_version') " +
                     "FROM runs WHERE id='run-1'"
             ) == 3 && restored.summary == "version-two snapshot",
-            "v24 migration rewrites version-two snapshots before repository decode at v28")
+            "v24 migration rewrites version-two snapshots before repository decode at v29")
     } finally {
         migrated.close()
         let _ = removeIfExists(root, recursive: true)

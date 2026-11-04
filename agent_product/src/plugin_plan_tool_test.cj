@@ -26,6 +26,28 @@ func workflowPlanTestSelect(f: WorkflowRolesFixture): String {
     name
 }
 
+// Explicit legal future action for the real installed plan contribution.
+// These planning fixtures do not infer tools from an unavailable glob schema.
+func workflowPlanTestContract205(product: ProductRuntime): PlanContract {
+    let root = product.workspace.rootPath()
+    let arguments = objectValue([ValueField("executable", textValue("/bin/true")),
+        ValueField("argv", listValue([])), ValueField("cwd", textValue(root)),
+        ValueField("timeout", integerValue(30)), ValueField("readonly_workspace", boolValue(true)),
+        ValueField("network", objectValue([ValueField("mode", textValue("denied"))]))])
+    PlanContract([root], [PlanExecutionStep(PlanStepId("view-verify"), [], true,
+        [PlanAction("view-readonly", ["command_probe"], ["denied"], OperationEffectClass.ReadOnly,
+            arguments, 1, exactArguments: true)])])
+}
+func workflowPlanTestArguments205(product: ProductRuntime, content: String): AgentValue {
+    objectValue([ValueField("content", textValue(content)),
+        ValueField("contract", planContractValue(workflowPlanTestContract205(product)))])
+}
+func workflowPlanTestEnqueue205(f: WorkflowRolesFixture, name: String): Unit {
+    f.product.fixtureProbe.getOrThrow().enqueueToolCallReply("installed-plan-contract", name,
+        workflowPlanTestArguments205(f.product, "Goal: ship a plan\nConstraints: read-only\n" +
+            "Approach: controlled offline verification\nAcceptance: contract passes\nUnresolved: none"))
+}
+
 func planDataOnlyFixtureSource(root: String, manifestProfile!: String = "data_only", readyProfile!: String = "data_only"): String {
     let source=root+"/data-only-plugin";Directory.create(source)
     let script=String.fromUtf8(File.readFrom(getVariable("AXYNDRA_DATA_ONLY_PLUGIN_FIXTURE").getOrThrow()))
@@ -84,13 +106,23 @@ class InstalledPlanToolTests {
             var published=false
             for(tool in f.product.tools() where tool.name==name){
                 published=true;@Expect(tool.inputSchema.field("properties").getOrThrow().field("content").getOrThrow().field("type").getOrThrow().text,"string")
-                @Expect(tool.inputSchema.field("required").getOrThrow().items.size,1)
+                @Expect(tool.inputSchema.field("properties").getOrThrow().field("contract").getOrThrow().field("type").getOrThrow().text,"object")
+                let required = tool.inputSchema.field("required").getOrThrow().items
+                @Expect(required.size,2)
+                var requiresContent = false
+                var requiresContract = false
+                for (field in required) {
+                    if (field.text == "content") { requiresContent = true }
+                    if (field.text == "contract") { requiresContract = true }
+                }
+                @Expect(requiresContent)
+                @Expect(requiresContract)
                 @Expect(!tool.inputSchema.field("additionalProperties").getOrThrow().asBool())
             }
             @Expect(published)
             let result=hostServiceEntryCompleted(f.product.vnext.executeCanonicalTool(SessionId("plan-direct"),
                 CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)]),
-                ToolCall("actual-plan",name,objectValue([ValueField("content",textValue("  Goal: native plan 雪\nAcceptance: exact receipt  "))])),budget:budget))
+                ToolCall("actual-plan",name,workflowPlanTestArguments205(f.product,"  Goal: native plan 雪\nAcceptance: exact receipt  ")),budget:budget))
             try {
                 @Expect(!result.isError)
                 @Expect(result.output.text,"Plan recorded for review. The user reviews it via /plan-review before execution.")
@@ -104,6 +136,8 @@ class InstalledPlanToolTests {
                 @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_effect_records WHERE tool_id='host.context.read'"),0)
                 let args=lifecycleTestRequire(f.product.vnext.completedDataToolHistoryArguments(ThreadId("plan-direct"),result.receiptId,"actual-plan",name))
                 @Expect(httpIntentText(args,"content"),"  Goal: native plan 雪\nAcceptance: exact receipt  ")
+                @Expect(canonicalAgentValuesEqual(args.field("contract").getOrThrow(),
+                    planContractValue(workflowPlanTestContract205(f.product))))
                 @Expect(f.product.vnext.completedDataToolHistoryArguments(ThreadId("different-plan-thread"),
                     result.receiptId,"actual-plan",name).isError())
                 @Expect(f.product.vnext.completedDataToolHistoryArguments(ThreadId("plan-direct"),
@@ -125,6 +159,7 @@ class InstalledPlanToolTests {
         let events=ArrayList<AgentEvent>();let session=f.product.applicationSession(sessionId:Some(SessionId("plan-ui")))
         session.subscribe({event=>events.add(event)})
         try {
+            workflowPlanTestEnqueue205(f, name)
             let result=lifecycleTestRequire(session.handle("/plan fixture plan write"))
             let route = match (result.action) {
                 case ApplicationAction.OpenPluginView(value) => value

@@ -170,6 +170,7 @@ public class ToolContextDescriptor {
     public let cwd: String
     public let environment: ToolEnvironmentView
     public let services: ToolServiceView
+    public let planReviewControl: Bool
     // Frozen request configuration, not execution authority. Permissions still
     // evaluate the invocation capabilities against its one normalized plan.
     private let frozenExecutionSettings180: AgentValue
@@ -187,6 +188,7 @@ public class ToolContextDescriptor {
         environment = base.environment; services = base.services
         frozenExecutionSettings180 = base.frozenExecutionSettings180
         modelFaultCounters180 = base.modelFaultCounters180
+        planReviewControl = base.planReviewControl
     }
 
 
@@ -196,7 +198,8 @@ public class ToolContextDescriptor {
         environment!: ToolEnvironmentView = ToolEnvironmentView(),
         services!: ToolServiceView = ToolServiceView(),
         executionSettings180!: AgentValue = nullValue(),
-        modelFaultCounters180!: ?ModelStreamFaultCounters180 = None<ModelStreamFaultCounters180>
+        modelFaultCounters180!: ?ModelStreamFaultCounters180 = None<ModelStreamFaultCounters180>,
+        planReviewControl!: Bool = false
     ) {
         if (workspaceRoot.contains("\u{0000}") || cwd.contains("\u{0000}")) {
             throw IllegalArgumentException("tool context paths must not contain NUL")
@@ -210,6 +213,7 @@ public class ToolContextDescriptor {
         }
         this.frozenExecutionSettings180 = if (executionSettings180.unifiedKind == ValueKind.Null) { executionSettings180 } else { executionSettings180.deepCopy() }
         this.modelFaultCounters180 = modelFaultCounters180
+        this.planReviewControl = planReviewControl
     }
     // The base has already frozen its immutable environment and service views.
     // Adding request configuration must not duplicate those paid snapshots.
@@ -221,6 +225,7 @@ public class ToolContextDescriptor {
         workspaceRoot = base.workspaceRoot; cwd = base.cwd; environment = base.environment; services = base.services
         this.frozenExecutionSettings180 = if (executionSettings180.unifiedKind == ValueKind.Null) { executionSettings180 } else { executionSettings180.deepCopy() }
         this.modelFaultCounters180 = modelFaultCounters180
+        this.planReviewControl = base.planReviewControl
     }
 }
 
@@ -517,6 +522,19 @@ public class ToolInvocationContext {
             } finally { toolSnapshotLock159.unlock() }
         }
     }
+    private var invocationData_planReviewControl159: Option<Bool> = None<Bool>
+    public prop planReviewControl: Bool {
+        get() {
+            toolSnapshotLock159.lock()
+            try {
+                requireToolSnapshotFrame159()
+                match (invocationParent159) {
+                    case Some(parent) => if (invocationRetained159) { parent.retainedData_planReviewControl159() } else { parent.planReviewControl }
+                    case None => invocationData_planReviewControl159.getOrThrow()
+                }
+            } finally { toolSnapshotLock159.unlock() }
+        }
+    }
     // A live actual-user participant, never decoded from Tool arguments. New
     // derived/read contexts and snapshot views intentionally do not inherit it.
     private var invocationData_hostDocumentCommitParticipant159: Option<InvocationValue_hostDocumentCommitParticipant159> = None<InvocationValue_hostDocumentCommitParticipant159>
@@ -587,6 +605,7 @@ public class ToolInvocationContext {
         this.rawToolSnapshot159 = toolSetSnapshot
         this.ownedToolSnapshot159 = ownedToolSetSnapshot159
         this.invocationData_trustedControl159 = Some(trustedControl)
+        this.invocationData_planReviewControl159 = Some(toolContext.planReviewControl)
         this.invocationData_hostDocumentCommitParticipant159 = Some(hostDocumentCommitParticipant)
     }
 
@@ -791,6 +810,13 @@ public class ToolInvocationContext {
             invocationData_trustedControl159.getOrThrow()
         } finally { toolSnapshotLock159.unlock() }
     }
+    private func retainedData_planReviewControl159(): Bool {
+        toolSnapshotLock159.lock()
+        try {
+            if (retainedInvocationChildren159 <= 0) { throw IllegalStateException("no retained invocation data owner") }
+            invocationData_planReviewControl159.getOrThrow()
+        } finally { toolSnapshotLock159.unlock() }
+    }
     private func retainedData_hostDocumentCommitParticipant159(): InvocationValue_hostDocumentCommitParticipant159 {
         toolSnapshotLock159.lock()
         try {
@@ -977,6 +1003,7 @@ public class ToolInvocationContext {
         invocationData_budgetModeFn159 = None<InvocationValue_budgetModeFn159>
         invocationData_contextProjection159 = None<InvocationContextProjection>
         invocationData_trustedControl159 = None<Bool>
+        invocationData_planReviewControl159 = None<Bool>
         invocationData_hostDocumentCommitParticipant159 = None<InvocationValue_hostDocumentCommitParticipant159>
         executionControlLock.lock()
         try {
@@ -1479,6 +1506,7 @@ public class ToolInvocationContext {
         this.rawToolSnapshot159 = rawSnapshot
         this.ownedToolSnapshot159 = ownedSnapshot
         this.invocationData_trustedControl159 = Some(previous.trustedControl)
+        this.invocationData_planReviewControl159 = Some(previous.planReviewControl)
         this.invocationData_hostDocumentCommitParticipant159 = Some(None)
         this.sequence = 0
         this.sequenceOwner = match (previous.sequenceOwner) {

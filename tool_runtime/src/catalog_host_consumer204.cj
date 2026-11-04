@@ -33,6 +33,7 @@ public class ToolCatalogHostConsumer204 {
     private var actionHeaders204: Int64 = 0
     private var firstPrepared204: ?PreparedToolInvocation = None<PreparedToolInvocation>
     private var preparedHeaders204: Int64 = 0
+    private var planReadCopies204: ?CatalogPlanReadAllocation204 = None<CatalogPlanReadAllocation204>
     private var pendingWirePayment204: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     private var firstAction204: ?ToolCatalogHostConsumerAction204 = None<ToolCatalogHostConsumerAction204>
     private var pendingActionPayment204: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
@@ -148,6 +149,24 @@ public class ToolCatalogHostConsumer204 {
             }
         } finally { lock.unlock() }
     }
+    // New plan projection copies have their own original-bank allocation.
+    // They follow the actual prepared metadata consumer, not the read helper.
+    func retainPlanReadAllocation204(value: LogicalJsonOwnerReservation): Unit {
+        lock.lock()
+        try {
+            if (returned || collecting || frames == 0 || callerReturned) {
+                throw IllegalStateException("plan copies require an active Catalog consumer") }
+            planReadCopies204 = Some(CatalogPlanReadAllocation204(value, planReadCopies204))
+        } finally { lock.unlock() }
+    }
+    private func closeReturnedPlanReadCopies204(): Unit {
+        while (planReadCopies204.isSome()) {
+            let value = planReadCopies204.getOrThrow()
+            value.payment.close()
+            planReadCopies204 = value.next
+            value.next = None<CatalogPlanReadAllocation204>
+        }
+    }
     func copyPreparedPlanUtf8204(prepared: PreparedToolInvocation): OwnedPreparedPlanUtf8204 {
         requirePreparedBorrow204(prepared)
         let owner = constructWireOwnerFrame204()
@@ -200,6 +219,7 @@ public class ToolCatalogHostConsumer204 {
         // whole consumers. Clear the private carrier in another full helper.
         try {
             clearReturnedPreparedViewsFrame204()
+            closeReturnedPlanReadCopies204()
             unlinkReturnedConsumerFrame204()
             // The complete unlink/capture helper has returned. The actual
             // reservation remains in this carrier field until its concrete
@@ -336,5 +356,14 @@ private class ToolCatalogConsumerDebts204 {
             }
             throw IllegalStateException("actual Catalog consumer debt is missing")
         } finally { lock.unlock() }
+    }
+}
+
+// DATA-only node, prepaid by the independent allocation it retains.
+private class CatalogPlanReadAllocation204 {
+    let payment: LogicalJsonOwnerReservation
+    var next: ?CatalogPlanReadAllocation204
+    init(payment: LogicalJsonOwnerReservation, next: ?CatalogPlanReadAllocation204) {
+        this.payment = payment; this.next = next
     }
 }

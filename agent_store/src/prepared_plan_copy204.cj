@@ -149,6 +149,12 @@ class PreparedPlanCopyPhase204 {
         }
         store.prepareDirectOperation(source, plan.getOrThrow())
     }
+    func admitFrame204(store: DurablePlanExecutionStore, runId: RunId, operationId: OperationId,
+        stepId: String, actionId: String): Result<Unit> {
+        // The concrete store persists only canonical identifiers and scalar
+        // digests. Its whole local call returns before this copy is retired.
+        store.admit(runId, operationId, stepId, actionId, plan.getOrThrow())
+    }
     func resolveFrame204(runtime: AgentThreadRuntime, itemId: ItemId,
         operationId: OperationId, callId: CanonicalToolCallId, stage: OperationAttemptStage,
         attempt: Result<ToolInvocationResult>, receiptId: String, observedAtMillis: Int64,
@@ -321,6 +327,9 @@ func decodePreparedOperationPlan204(encoded: String): NormalizedOperationPlan {
         ),
         replayContractVersion: storedReplayContractVersion(value),
         contextReadFacts: match (value.field("context_reads")) {
-            case Some(raw) => contextReadFactLinksFromValue(raw); case None => [] }
+            case Some(raw) => contextReadFactLinksFromValue(raw); case None => [] },
+        policyVersion: optionalStoreText(value, "policy_version", "tool-policy-v1"),
+        approvedWriteRoots: match (value.field("approved_write_roots")) {
+            case Some(roots) => storeStringItems(roots); case None => [] }
     )
 }

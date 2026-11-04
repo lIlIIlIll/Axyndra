@@ -1,5 +1,7 @@
 package agent_product
 
+import agent_history
+
 import agent_plugin_registry.*
 
 import agent_host_runtime
@@ -240,6 +242,7 @@ public class ProductRuntime {
     private var managedPluginServicesStopping = false
     private let escapedCopyDebtLock = Mutex()
     private var escapedCopyDebtClosed = false
+    private let closedCatalogDataReturned204Flag = AtomicBool(false)
     private var fixtureManagedCleanupObserver:?agent_host_runtime.HostManagedChannelCleanupObserver=None
     private let compactionSummarizer: CompactionSummarizer
     private let approvalReviewer: ApprovalReviewer
@@ -272,8 +275,8 @@ public class ProductRuntime {
                     modelFaultCounters180: Some(counters)))
     }
     }
-    private func requestToolContext180(options: ?ProductOperatorOptions180, inherited: ?ToolContextDescriptor): ToolContextDescriptor {
-        let base = productToolContext(workspace.rootPath(), operatorOptions180: options)
+    private func requestToolContext180(options: ?ProductOperatorOptions180, inherited: ?ToolContextDescriptor, planReviewControl!: Bool = false): ToolContextDescriptor {
+        let base = productToolContext(workspace.rootPath(), operatorOptions180: options, planReviewControl: planReviewControl)
         let source = if (inherited.isSome()) { inherited }
             else if (options.isSome()) { None<ToolContextDescriptor> } else { configuredModelSettings180 }
         match (source) { case Some(value) => ToolContextDescriptor(base, value.executionSettings180,
@@ -391,6 +394,57 @@ public class ProductRuntime {
         Result.Ok(())
     }
 
+    public func reviewExecutionPlan(document: String, sessionId!: ?SessionId = None<SessionId>): Result<String> {
+        let thread = match (sessionId) { case Some(value) => Some(ThreadId(value.value)); case None => None<ThreadId> }
+        pinPlanReviewDocument(document, catalog, workspace, threadId: thread)
+    }
+    func reviewedExecutionPlanHash204(document: String, sessionId: SessionId): Result<String> {
+        pinPlanReviewHash204(document, catalog, workspace, threadId: Some(ThreadId(sessionId.value)))
+    }
+
+    public func activateExecutionPlan(hash: String, sessionId: SessionId, contract: PlanContract): Result<Unit> {
+        match (pipeline.planExecutionRuntime()) {
+            case Some(plans) => plans.activate("plan-" + hash + "-" + ids.nextOperationId().value,
+                sessionId.value, contract)
+            case None => planExecutionError("plan.runtime_missing", "The supervised execution runtime is unavailable")
+        }
+    }
+
+    public func planExecutionInspectionForSession(sessionId: SessionId): Result<AgentValue> {
+        let _ = sessionId
+        planExecutionError("plan.inspection_owned_consumer_required",
+            "Use the closed paid plan inspection consumer")
+    }
+
+    public func withPlanExecutionInspectionForSession204(sessionId: SessionId,
+        consume: (AgentValue) -> Result<Unit>): Result<Unit> {
+        let runtime = match (pipeline.planExecutionRuntime()) {
+            case Some(value) => value
+            case None => return consume(objectValue([]))
+        }
+        let data = match (runtime as PlanExecutionReadDataPort204) {
+            case Some(value) => value
+            case None => return planExecutionError("plan.read_owner_required", "The plan runtime has no paid read interface")
+        }
+        let anchor = match (catalog.reserveRegistryData180(4096)) {
+            case Some(value) => value
+            case None => return planExecutionError("plan.inspection_owner_required", "The original Registry DATA budget is unavailable")
+        }
+        let source = data.openSessionInspection204(sessionId.value, anchor)
+        let copied = match (source) {
+            case Result.Ok(owner) => agent_history.copyRedactedPlanInspection204(owner)
+            case Result.Err(error) => anchor.close(); return Result.Err(error)
+        }
+        anchor.close()
+        match (copied) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(value) =>
+                let result = value.withView204(consume)
+                value.closeAfterConsumer204()
+                result
+        }
+    }
+
     public func request(
         prompt: String,
         sessionId!: ?SessionId = None,
@@ -402,10 +456,11 @@ public class ProductRuntime {
         modeSystem!: String = "",
         guide!: String = "",
         readOnly!: Bool = false,
+        planReviewControl!: Bool = false,
         contextSnapshot!: ?InvocationContextProjection = None,
         executionLaneId!: LaneId = LaneId("main")
     ): AgentRunRequest {
-        match (prepareRequest(prompt, sessionId: sessionId, modelOverride: modelOverride, thinking: thinking, userRequestedThinking: userRequestedThinking, thinkingSource: thinkingSource, interactions: interactions, modeSystem: modeSystem, guide: guide, readOnly: readOnly, contextSnapshot: contextSnapshot, executionLaneId: executionLaneId)) {
+        match (prepareRequest(prompt, sessionId: sessionId, modelOverride: modelOverride, thinking: thinking, userRequestedThinking: userRequestedThinking, thinkingSource: thinkingSource, interactions: interactions, modeSystem: modeSystem, guide: guide, readOnly: readOnly, contextSnapshot: contextSnapshot, planReviewControl: planReviewControl, executionLaneId: executionLaneId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => throw ProductRequestPreparationError(error)
         }
@@ -422,6 +477,7 @@ public class ProductRuntime {
         modeSystem!: String = "",
         guide!: String = "",
         readOnly!: Bool = false,
+        planReviewControl!: Bool = false,
         contextSnapshot!: ?InvocationContextProjection = None,
         executionLaneId!: LaneId = LaneId("main"),
         queuedInitiator113!: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>,
@@ -442,12 +498,38 @@ public class ProductRuntime {
             match (preflightInitialContextSelections(vnext.javascriptPlugins, selections, prompt)) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         }
-        let promptBuild = match (requestPromptBuildResult(
+        let scopedPrompt = match (requestScopedPromptBuildResult(
             targetSession,
             guide,
             modeSystem,
-            memoryQuery: prompt
+            memoryQuery: prompt, reviewControl204: planReviewControl
         )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let prepared = try { prepareRequestScopeFrame204(targetSession, prompt, scopedPrompt, initializeContext,
+            modelOverride, thinking, userRequestedThinking, thinkingSource, interactions, contextSnapshot,
+            executionLaneId, queuedInitiator113, queuedInputPayment113, operatorOptions180,
+            callerCancellation180, inheritedModelSettings180, planReviewControl, readOnly) }
+        catch (error: Exception) {
+            // The complete private construction frame has unwound; no request
+            // was published or submitted. Never counterfeit a Core return.
+            scopedPrompt.closeUnsubmittedAfterRequestBuilder204()
+            throw error
+        }
+        match (prepared) {
+            case Result.Ok(_) => scopedPrompt.deliveredRequestAfterBuilder204()
+            case Result.Err(_) => scopedPrompt.closeUnsubmittedAfterRequestBuilder204()
+        }
+        prepared
+    }
+
+    private func prepareRequestScopeFrame204(targetSession: SessionId, prompt: String,
+        scopedPrompt: ProductScopedPrompt, initializeContext: Bool, modelOverride: String,
+        thinking: ThinkingLevel, userRequestedThinking: ?ThinkingLevel,
+        thinkingSource: ThinkingPreferenceSource, interactions: ?AgentInteractionSource,
+        contextSnapshot: ?InvocationContextProjection, executionLaneId: LaneId,
+        queuedInitiator113: ?QueuedRunInitiatorData113, queuedInputPayment113: ?LogicalJsonOwnerReservation,
+        operatorOptions180: ?ProductOperatorOptions180, callerCancellation180: ?domain.CancellationToken,
+        inheritedModelSettings180: ?ToolContextDescriptor, planReviewControl: Bool, readOnly: Bool): Result<AgentRunRequest> {
+        let promptBuild = scopedPrompt.prompt
         let resolvedContext = match (contextSnapshot) {
             case Some(value) => validatedContextSnapshot(value)
             case None => InvocationContextProjection()
@@ -492,10 +574,7 @@ public class ProductRuntime {
             case None => requestCompaction.maxInputTokens
         } } else { min(requestCompaction.maxInputTokens,
             max(1, providerContextWindow - selectedCapabilities.maxOutputTokens - providerSafetyMargin)) }
-        let outputLimit = if (fixtureProbe.isSome()) { match (metadata) {
-            case Some(_) => selectedCapabilities.maxOutputTokens
-            case None => 100000
-        } } else { selectedCapabilities.maxOutputTokens }
+        let outputLimit = selectedCapabilities.maxOutputTokens
         let endpointOutputLimit: ?Int64 = if (fixtureProbe.isSome()) { match (metadata) {
             case Some(value) => match (profileById(value.providerProfile)) {
                 case Some(profile) => profile.endpointMaxOutputTokens
@@ -545,12 +624,13 @@ public class ProductRuntime {
                 ""
             },
             parallelToolCalls: selectedCapabilities.parallelToolCalling,
-            toolContext: requestToolContext180(operatorOptions180, inheritedModelSettings180),
+            toolContext: requestToolContext180(operatorOptions180, inheritedModelSettings180, planReviewControl: planReviewControl),
             contextSnapshot: resolvedContext,
             initializeContext: initializeContext,
             contextWindow: providerContextWindow,
             providerSafetyMargin: providerSafetyMargin,
             executionLaneId: executionLaneId, queuedInitiator113: queuedInitiator113, queuedInputPayment113: queuedInputPayment113,
+            planContextFacts: scopedPrompt.contextFacts, planRequestCustody204: scopedPrompt.takeRequestCustody204(),
             budget: ResourceBudget(
                 maxInputTokens: contextLimit,
                 maxOutputTokens: outputLimit,
@@ -561,39 +641,100 @@ public class ProductRuntime {
     }
 
 
+    // Called at a genuine complete Application request boundary, outside its
+    // Session lock. This only collects already-proven returned DATA consumers.
+    func collectReturnedApplicationRequestData204(): Unit {
+        contextReadCore.collectReturnedModelInputs159()
+    }
+
     func directProcessSandboxEnabled(): Bool {
         processes.sandboxEnabled()
     }
 
-    private func requestPromptBuildResult(
+    private func requestUnscopedPromptBuildResult204(guide: String, modeSystem: String,
+        requestText: String): Result<ProductScopedPrompt> {
+        let root = workspace.rootPath()
+        let payment = match (catalog.reserveRegistryData180(4096)) {
+            case Some(value) => value
+            // A bare SDK Product has no Registry DATA producer to borrow.
+            // Preserve that original compatibility path without inventing a
+            // bank or claiming a Core consumer has returned.
+            case None => return Result.Ok(ProductScopedPrompt(buildProductPrompt(root, "",
+                guide, modeSystem), objectValue([])))
+        }
+        // The complete private builder returns before this failure cleanup.
+        // No request or borrowed prompt is published on either fixed error.
+        let result = try {
+            let invoice = productUnscopedPromptInvoice204(root, guide, modeSystem, requestText)
+            payment.ensureRetainedPeak(invoice)
+            buildProductUnscopedPromptPaid204(root, guide, modeSystem, payment, invoice)
+        }
+        catch (_: LogicalJsonPayloadError) {
+            payment.close()
+            return planExecutionError("plan.prompt_copy_capacity", "Request context exceeds its original caller DATA budget")
+        } catch (_: Exception) {
+            payment.close()
+            return planExecutionError("plan.prompt_copy_failed", "Request context could not be prepared")
+        }
+        Result.Ok(result)
+    }
+
+    private func requestScopedPromptBuildResult(
         sessionId: SessionId,
         guide: String,
         modeSystem: String,
-        memoryQuery!: String = ""
-    ): Result<PromptBuild> {
-        // Request-time business context is contributed by the configured
-        // Native ContextProvider through canonical InitialContextPreparation.
-        // The initial ContextRead integration delta supplies its typed data.
-        let _=memoryQuery
-        let memoryContext=""
-        Result.Ok(buildProductPrompt(
-            workspace.rootPath(),
-            "",
-            guide,
-            modeSystem,
-            memoryContext: memoryContext
-        ))
+        memoryQuery!: String = "", reviewControl204!: Bool = false
+    ): Result<ProductScopedPrompt> {
+        // Business context remains owned by the configured Native ContextProvider.
+        let _ = memoryQuery
+        if (reviewControl204) { return requestUnscopedPromptBuildResult204(guide, modeSystem, memoryQuery) }
+        let plans = match (pipeline.planExecutionRuntime()) {
+            case Some(value) => value
+            case None => return requestUnscopedPromptBuildResult204(guide, modeSystem, memoryQuery)
+        }
+        let reads = match (plans as PlanExecutionReadDataPort204) {
+            case Some(value) => value
+            case None => return planExecutionError("plan.read_owner_required", "Approved scope has no paid DATA read interface")
+        }
+        let anchor = match (catalog.reserveRegistryData180(4096)) {
+            case Some(value) => value
+            case None =>
+                // Only a closed scalar absence check may select the original
+                // bare Product path. An active or unknown scope must never be
+                // discarded because its real DATA payer is unavailable.
+                let presence = match (plans as PlanExecutionSessionPresence204) {
+                    case Some(value) => value
+                    case None => return planExecutionError("plan.scope_owner_required",
+                        "Approved scope requires the original Registry DATA budget")
+                }
+                match (presence.sessionHasExecution204(sessionId.value)) {
+                    case Result.Err(error) => return Result.Err(error)
+                    case Result.Ok(active) =>
+                        if (active) { return planExecutionError("plan.scope_owner_required",
+                            "Approved scope requires the original Registry DATA budget") }
+                        return requestUnscopedPromptBuildResult204(guide, modeSystem, memoryQuery)
+                }
+        }
+        let source = reads.openSessionScope204(sessionId.value, anchor)
+        let result = match (source) {
+            case Result.Err(error) => Result<ProductScopedPrompt>.Err(error)
+            case Result.Ok(None) => requestUnscopedPromptBuildResult204(guide, modeSystem, memoryQuery)
+            case Result.Ok(Some(owner)) => buildProductScopedPromptFromRead204(workspace.rootPath(), guide,
+                modeSystem, memoryQuery, owner)
+        }
+        anchor.close()
+        result
     }
 
-    private func requestSystem(
-        sessionId: SessionId,
-        guide: String,
-        modeSystem: String
-    ): String {
-        match (requestPromptBuildResult(sessionId, guide, modeSystem)) {
-            case Result.Ok(value) => value.text
-            case Result.Err(error) => throw ProductRequestPreparationError(error)
+    func workflowToolIdentities204(sessionId: SessionId, capabilities: ?CapabilitySet): ?ToolCatalogIdentityOwner204 {
+        match (capabilities) {
+            case Some(value) => catalog.openToolIdentitiesFor204(value, Some(ThreadId(sessionId.value)))
+            case None => catalog.openPlanIdentityCopy204(Some(ThreadId(sessionId.value)))
         }
+    }
+    func workflowPublishedIdentityMatches204(sessionId: SessionId, name: String,
+        version: String, fingerprint: String): Bool {
+        catalog.publishedToolIdentityMatches204(name, version, fingerprint, Some(ThreadId(sessionId.value)))
     }
 
     func readonlyToolCapabilities(sessionId: SessionId): CapabilitySet {
@@ -717,6 +858,12 @@ public class ProductRuntime {
 
     public func tools(threadId!: ?ThreadId = None): Array<ModelToolDefinition> {
         catalog.definitions(threadId: threadId)
+    }
+
+    // Closed publication observation: no descriptor, schema, callback, array
+    // or String is exported from the mounted Catalog's actual visibility.
+    public func hasPublishedTool159e(name: String, threadId!: ?ThreadId = None): Bool {
+        catalog.isPublishedOrdinaryTool159e(name, threadId: threadId)
     }
 
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
@@ -1884,6 +2031,21 @@ public class ProductRuntime {
         } finally { managedPluginServiceLock.unlock() }
     }
 
+    // Pure DATA observation of the actual guarded Catalog retirement result.
+    // OS-resource closure and retained external metadata imply no such proof.
+    public func closedCatalogDataReturned204(): Bool {
+        closedCatalogDataReturned204Flag.load()
+    }
+
+    // Read-only evidence for this Product's actual Catalog. These observers
+    // neither acknowledge callers nor alter retained legacy DATA custody.
+    public func actualCatalogTransientConsumersReturned204(): Bool {
+        catalog.actualTransientConsumersReturned204()
+    }
+    public func originalCatalogLegacyAliasPaymentHeld204(): Bool {
+        catalog.originalLegacyAliasPaymentHeld204()
+    }
+
     public func close(): Result<Unit> {
         if (taskRuntime.hasPluginChildDebt111()) {
             // This exact live continuation still needs the mounted Native
@@ -1914,7 +2076,16 @@ public class ProductRuntime {
         // to have returned and clears its own private caches before payment.
         match (installedModelInputOwner159) { case None => (); case Some(owner) =>
             match (owner.closeModelInputData159()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () } }
+        // Business producers and installed input owners have returned above.
+        // Retire only the fixture's independent, never-exported observation
+        // cache; a raw exported snapshot remains conservatively paid.
+        match (fixtureProbe) { case Some(probe) => probe.retireLastRequest159(); case None => () }
         contextReadCore.collectReturnedModelInputs159()
+        // Resource closure above is not proof that externally exported DATA
+        // returned. This guarded attempt retires only concrete Catalog owners
+        // whose existing producer/consumer proofs are complete. A legitimate
+        // raw export remains Held and paid; OS close keeps its old contract.
+        if (catalog.retireCatalogData159()) { closedCatalogDataReturned204Flag.store(true) }
         try {
             vnextDatabase.close()
         } catch (error: Exception) {
@@ -2170,6 +2341,23 @@ public class ProductRuntime {
 
     public func allSubagents(sessionId: SessionId): Array<ProductSubagentSnapshot> {
         taskRuntime.allSubagents(sessionId)
+    }
+
+    public func planChildRequestDataReturned204(id: String): Bool {
+        taskRuntime.planChildRequestDataReturned204(id)
+    }
+
+    // In-process DATA validation only. These scalar reads perform no ACK,
+    // cleanup, execution authorization, or business completion transition.
+    // Read-only actual DATA payment evidence; no cleanup, ACK or authority.
+    public func planChildRequestDataPaid204(id: String): Bool {
+        taskRuntime.planChildRequestDataPaid204(id)
+    }
+    public func planChildTransientDataReturned204(id: String): Bool {
+        taskRuntime.planChildTransientDataReturned204(id)
+    }
+    public func planChildDescriptionHeaderPaid204(id: String): Bool {
+        taskRuntime.planChildDescriptionHeaderPaid204(id)
     }
 
     public func asyncJobs(sessionId: SessionId): Array<ProductAsyncJobSnapshot> {
@@ -2545,9 +2733,12 @@ public class ProductRuntime {
         beforeCursor!: Int64 = 0,
         limit!: Int64 = 25
     ): Result<AppRunInspectionPage> {
-        ProductRunInspectionProjection(vnextDatabase).inspect(
-            threadId, runId, beforeCursor, limit
-        )
+        ProductRunInspectionProjection(vnextDatabase, knownParentAllocation204: Some({ invoice =>
+            match (catalog.reserveRegistryData180(invoice)) {
+                case Some(value) => value
+                case None => throw LogicalJsonPayloadError("plan inspection has no original Registry DATA owner")
+            }
+        })).inspect(threadId, runId, beforeCursor, limit)
     }
 
     // Stable process-local App Protocol read boundary. Frontends do not reach
@@ -2677,7 +2868,8 @@ public class ProductRuntime {
         value: RunContinuation,
         interactions: ?AgentInteractionSource,
         toolContext!: ?ToolContextDescriptor = None,
-        ownedEvents!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>
+        ownedEvents!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>,
+        planRequestCustody204!: ?PlanRequestCustody204 = None
     ): Result<AgentRunRequest> {
         try { Result.Ok(AgentRunRequest(
             value.runId,
@@ -2709,14 +2901,17 @@ public class ProductRuntime {
             cacheKey: value.cacheKey,
             parallelToolCalls: value.parallelToolCalls,
             toolContext: match (toolContext) { case Some(value) => value
-                case None => productToolContext(workspace.rootPath()) },
+                case None => productToolContext(workspace.rootPath(), planReviewControl:
+                    value.toolContextPayload.field("plan_review_control").getOrDefault({ => boolValue(false) }).asBool()) },
             contextSnapshot: if (value.contextSnapshotPayload.unifiedKind == ValueKind.Object && value.contextSnapshotPayload.fields.isEmpty()) {
                 InvocationContextProjection()
             } else { contextSnapshotFromValue(value.contextSnapshotPayload) },
             contextWindow: value.contextWindow,
             providerSafetyMargin: value.providerSafetyMargin,
             executionLaneId: value.executionLaneId,
-            ownedEvents: ownedEvents
+            ownedEvents: ownedEvents,
+            planContextFacts: value.toolContextPayload.field("plan_context_facts").getOrDefault({ => objectValue([]) }),
+            planRequestCustody204: planRequestCustody204
         )) } catch (_: Exception) {
             Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                 "context.snapshot_unsupported_or_invalid",
@@ -2749,7 +2944,7 @@ public class ProductRuntime {
             continuation.approval.operationId.value != approval.operationId.value ||
             continuation.approval.sessionId != approval.sessionId || continuation.approval.callId != approval.callId ||
             continuation.approval.argumentHash != approval.argumentHash || continuation.approval.toolName != approval.toolName ||
-            canonicalAgentValue(continuation.toolContextPayload) != canonicalAgentValue(productToolContextValue(previous.toolContext))) {
+            canonicalAgentValue(continuation.toolContextPayload) != canonicalAgentValue(productToolContextValue(previous.toolContext, planContextFacts: previous.planContextFacts))) {
             return pluginProcessError("application.approval_request_stale", "approval differs from its canonical request") }
         try {
             let rows = vnextDatabase.query("SELECT c.payload,r.skill_snapshot FROM runs r " +
@@ -2778,7 +2973,8 @@ public class ProductRuntime {
             case Result.Ok(current) => match (current.check()) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         }
-        continuationRequest(continuation, previous.interactions, toolContext: Some(previous.toolContext))
+        continuationRequest(continuation, previous.interactions, toolContext: Some(previous.toolContext),
+            planRequestCustody204: previous.planRequestCustody204)
     }
 
     public func persistPendingApproval(
@@ -2810,7 +3006,7 @@ public class ProductRuntime {
             contextSnapshotPayload: contextSnapshotValue(request.contextSnapshot),
             contextWindow: request.contextWindow,
             providerSafetyMargin: request.providerSafetyMargin,
-            toolContextPayload: productToolContextValue(request.toolContext),
+            toolContextPayload: productToolContextValue(request.toolContext, planContextFacts: request.planContextFacts),
             executionLaneId: request.executionLaneId
         ))
     }
@@ -2943,6 +3139,26 @@ public class ProductRuntime {
         readOnly!: Bool = false,
         workMode!: String = "none"
     ): Result<String> {
+        let scope = match (requestScopedPromptBuildResult(sessionId, guide, modeSystem,
+            reviewControl204: workMode == "plan")) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let result = dumpLlmRequestFrame204(sessionId, selectedModel, thinkingLevel, scope,
+            modeSystem: modeSystem, guide: guide, readOnly: readOnly, workMode: workMode)
+        scope.closeAfterPromptConsumer204()
+        result
+    }
+    private func dumpLlmRequestFrame204(
+        sessionId: SessionId,
+        selectedModel: String,
+        thinkingLevel: ThinkingLevel,
+        scope: ProductScopedPrompt,
+        modeSystem!: String = "",
+        guide!: String = "",
+        readOnly!: Bool = false,
+        workMode!: String = "none"
+    ): Result<String> {
         let messages = match (modelContext(sessionId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2967,7 +3183,7 @@ public class ProductRuntime {
                 )
             )
         }
-        let system = requestSystem(sessionId, guide, modeSystem)
+        let system = scope.prompt.text
         let request = objectValue(
             [
                 ValueField("kind", textValue("reconstructed_current_request")),
@@ -3382,8 +3598,8 @@ public class ProductRuntime {
             maxInputTokens: settings.maxInputTokens,
             maxContextMessages: settings.requestMaxMessages
         )
-        let tools = catalog.definitionsFor(productCapabilities(), threadId: Some(ThreadId(sessionId.value)))
-        let estimated = estimateContextTokens(messages, tools: tools)
+        let toolTokens = catalog.estimateDefinitionsTokens204(productCapabilities(), Some(ThreadId(sessionId.value)))
+        let estimated = estimateContextTokensWithToolTokens204(messages, toolTokens)
         let tokenTriggered = estimated >= compactionTriggerTokens(budget, policy)
         let messageTriggered = messages.size >= policy.emergencyMessageLimit
         if ((!force && !tokenTriggered && !messageTriggered) ||
@@ -3394,7 +3610,7 @@ public class ProductRuntime {
             case Result.Err(error) => return Result<Int64>.Err(error); case Result.Ok(value) => value }
 
         let target = compactionTargetTokens(budget, policy)
-        let fixed = estimateContextTokens([], tools: tools)
+        let fixed = estimateContextTokensWithToolTokens204([], toolTokens)
         // Hybrid overview is optional and must fit the same reserve; enabling
         // it must never move the deterministic history cut point.
         let summaryReserve = min(2048, max(128, target / 10))
@@ -3425,7 +3641,7 @@ public class ProductRuntime {
         var compacted = match (compactedMessages(messages, removed, sessionId, cancellation)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         try {
-        while (removed < messages.size && estimateContextTokens(compacted.messages, tools: tools) > target) {
+        while (removed < messages.size && estimateContextTokensWithToolTokens204(compacted.messages, toolTokens) > target) {
             let next = findSafeCutPoint(messages, removed + 1)
             if (next <= removed ||
                 (checkpointRetainIndex >= 0 && next > checkpointRetainIndex)) {
@@ -3437,7 +3653,7 @@ public class ProductRuntime {
             compacted.close(); compacted = nextValue
         }
         if (checkpointRetainIndex >= 0 &&
-            estimateContextTokens(compacted.messages, tools: tools) > target) {
+            estimateContextTokensWithToolTokens204(compacted.messages, toolTokens) > target) {
             return canonicalCheckpointRetentionFailure173<Int64>(compactionSummarizer.checkpointRetentionFailure173(sessionId, cancellation))
         }
         if (!isToolProtocolComplete(compacted.messages)) {
@@ -3456,7 +3672,7 @@ public class ProductRuntime {
             sessionId,
             policy.keepRecentMessages,
             target,
-            tools,
+            toolTokens,
             settings,
             sessionModel,
             cancellation, operatorOptions180
@@ -3539,14 +3755,14 @@ public class ProductRuntime {
             case Result.Ok(value) => value
             case Result.Err(_) => return 0
         }
-        let tools = catalog.definitionsFor(productCapabilities(), threadId: Some(ThreadId(sessionId.value)))
-        estimateContextTokens(messages, tools: tools)
+        let toolTokens = catalog.estimateDefinitionsTokens204(productCapabilities(), Some(ThreadId(sessionId.value)))
+        estimateContextTokensWithToolTokens204(messages, toolTokens)
     }
     private func saveCanonicalCheckpoint(
         sessionId: SessionId,
         keepRecentItems: Int64,
         targetTokens: Int64,
-        tools: Array<ModelToolDefinition>,
+        toolTokens: Int64,
         settings: ProductCompactionSettings,
         sessionModel: String,
         cancellation: domain.CancellationToken, operatorOptions180: ?ProductOperatorOptions180
@@ -3662,7 +3878,7 @@ public class ProductRuntime {
                 0,
                 false
             ))
-            let projectedTokens = estimateContextTokens(projected, tools: tools)
+            let projectedTokens = estimateContextTokensWithToolTokens204(projected, toolTokens)
             if (projectedTokens <= settings.maxInputTokens) {
                 match (fallbackPolicy) { case Some(old) => old.close(); case None => () }
                 inputLimitFallback = Some(candidate)
@@ -3689,7 +3905,7 @@ public class ProductRuntime {
             deterministicCheckpoint.coversThroughItemOrdinal) {
             deterministicRecent.add(item)
         }
-        let deterministicTokens = estimateContextTokens(
+        let deterministicTokens = estimateContextTokensWithToolTokens204(
             modelMessagesFromProjection(ModelContextProjection(
                 thread.thread.revision,
                 Some(deterministicCheckpoint),
@@ -3698,7 +3914,7 @@ public class ProductRuntime {
                 0,
                 false
             )),
-            tools: tools
+            toolTokens
         )
         let checkpointLimit = if (deterministicTokens <= targetTokens) {
             targetTokens
@@ -3766,7 +3982,7 @@ public class ProductRuntime {
                         0,
                         false
                     ))
-                    if (estimateContextTokens(projected, tools: tools) <= checkpointLimit) {
+                    if (estimateContextTokensWithToolTokens204(projected, toolTokens) <= checkpointLimit) {
                         checkpoint = candidate; combinedOwner = Some(combined); keepCombined = true
                     }
                     } finally { if (!keepCombined) { combined.close(); overview.close(); overviewOwner = None } }
@@ -4135,6 +4351,14 @@ public class ProductRuntime {
             }
             vnextDatabase.backupTo(archiveRoot + ".state.db")
             vnextDatabase.transaction<Unit>({ transaction =>
+                // The archive above retains plan history. Remove its references
+                // before thread cascades delete the underlying Operations.
+                transaction.execute("DELETE FROM plan_step_decisions")
+                transaction.execute("DELETE FROM plan_action_admissions")
+                transaction.execute("DELETE FROM plan_execution_runs")
+                transaction.execute("DELETE FROM plan_execution_sessions")
+                transaction.execute("DELETE FROM plan_execution_members")
+                transaction.execute("DELETE FROM plan_executions")
                 transaction.execute("DELETE FROM session_permission_grants")
                 transaction.execute("DELETE FROM thread_metadata")
                 // Metadata-backed plugin documents deliberately have no
@@ -4680,14 +4904,27 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
     }
     let sessionMetadata = SqliteSessionMetadataRepository(vnextDatabase)
     let runs = SqliteRunRepository(vnextDatabase)
+    let catalog = ToolCatalog()
     let operations = productOperationStore(vnextDatabase,
-        derivedSettlementFailureObserver: config.fixtureDerivedSettlementFailureObserver)
+        derivedSettlementFailureObserver: config.fixtureDerivedSettlementFailureObserver,
+        planExecutionAllocation: Some({ bytes =>
+            match (catalog.reserveRegistryData180(bytes)) {
+                case Some(owner) => owner
+                case None => throw LogicalJsonPayloadError("approved plan admission has no original Registry DATA owner")
+            }
+        }))
     let audit = SqliteAuditRepository(vnextDatabase)
     let permissions = SqlitePermissionRepository(vnextDatabase)
     let threadRuntimes = SqliteThreadRuntimeRegistry(
         vnextDatabase,
         ContextProjector("agent-product-v1", ConservativeThreadTokenEstimator()),
         { => agentUtcMillis() },
+        knownParentAllocation: Some({ bytes =>
+            match (catalog.reserveRegistryData180(bytes)) {
+                case Some(owner) => owner
+                case None => throw LogicalJsonPayloadError("canonical plan settlement has no original Registry DATA owner")
+            }
+        }),
         continuationVerifier: Some(SqliteContinuationRunVerifier(ContinuationAllowanceRepository(runs), requireDocumentPin: true,
             documentAllocation: Some({ bytes => reserveNativeDocumentPayload(bytes) })))
     )
@@ -4705,7 +4942,6 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
         config.stateRoot,
         database: Some(vnextDatabase), operations: Some(operations)
     )
-    let catalog = ToolCatalog()
     let uriRouter = InternalUriRouter()
     let taskRuntime = ProductTaskRuntime(
         asyncEnabled: settings.asyncEnabled,
@@ -4743,6 +4979,13 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
         case Result.Err(error) => return Result.Err(error)
     }
 
+    let plans = DurablePlanExecutionStore(vnextDatabase, knownParentAllocation: Some({ bytes =>
+        match (catalog.reserveRegistryData180(bytes)) {
+            case Some(owner) => owner
+            case None => throw LogicalJsonPayloadError("approved plan read has no original Registry DATA owner")
+        }
+    }))
+    taskRuntime.bindPlanExecutionRuntime(plans)
     let pipeline = ToolPipeline(
         catalog,
         operations,
@@ -4753,7 +4996,8 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
             allowWorkspaceWrites: settings.approval.allowWorkspaceWrites,
             askOnNetwork: settings.approval.askOnNetwork
         ),
-        permissions: permissions
+        permissions: permissions,
+        plans: Some(plans)
     )
     match (catalog.register(
         ToolDescriptor(
@@ -4829,6 +5073,10 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
     var fixtureProbe: ?FixtureModelPort = None
     let javascriptPlugins = ProductJavaScriptPluginHost(settingsRoot: config.settingsRoot, readViewStateRoot: config.stateRoot,
         documentBackends:{selected=>bindProductDocumentStorage(vnextDatabase,selected,workspace.rootPath(),config.settingsRoot,config.stateRoot)})
+    match (javascriptPlugins.ownTaskContextReadBoundary({ runId, source => plans.validateContextResource(runId, source) })) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
+    }
     match (javascriptPlugins.ownRegistry(pluginRuntime)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     match (javascriptPlugins.ownContextReadComponents({ => pluginRuntime.contextComponentSnapshot(
@@ -5340,7 +5588,7 @@ func findProviderProfile(
     None
 }
 
-func productToolContextValue(value: ToolContextDescriptor): AgentValue {
+func productToolContextValue(value: ToolContextDescriptor, planContextFacts!: AgentValue = objectValue([])): AgentValue {
     let environment = ArrayList<AgentValue>()
     for (entry in value.environment.entries()) {
         environment.add(objectValue([
@@ -5371,6 +5619,10 @@ func productToolContextValue(value: ToolContextDescriptor): AgentValue {
         ValueField("environment", listValue(environment.toArray())),
         ValueField("services", listValue(services.toArray()))])
     if (value.executionSettings180.unifiedKind != ValueKind.Null) { fields.add(ValueField("execution_settings", value.executionSettings180)) }
+    if (value.planReviewControl) { fields.add(ValueField("plan_review_control", boolValue(true))) }
+    if (planContextFacts.unifiedKind != ValueKind.Object || !planContextFacts.fields.isEmpty()) {
+        fields.add(ValueField("plan_context_facts", planContextFacts))
+    }
     objectValue(fields.toArray())
 }
 
@@ -5632,12 +5884,13 @@ func envOr(name: String, fallback: String): String {
     }
 }
 
-func productToolContext(workspaceRoot: String, operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>): ToolContextDescriptor {
+func productToolContext(workspaceRoot: String, planReviewControl!: Bool = false, operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>): ToolContextDescriptor {
     ToolContextDescriptor(
         workspaceRoot: workspaceRoot,
         cwd: workspaceRoot,
         executionSettings180: match (operatorOptions180) { case Some(options) => options.executionSettingsValue180(); case None => nullValue() },
         modelFaultCounters180: match (operatorOptions180) { case Some(options) => options.modelFaultCounters180; case None => None<ModelStreamFaultCounters180> },
+        planReviewControl: planReviewControl,
         environment: productToolEnvironment(),
         services: ToolServiceView(descriptors: [
             ToolServiceDescriptor(ToolServiceKind.Workspace, "local-workspace"),

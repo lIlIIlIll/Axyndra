@@ -1,6 +1,8 @@
 package agent_product
 
 import agent_app_protocol.*
+import yjson.*
+import yjson_support.*
 
 public func renderRunInspection(page: AppRunInspectionPage): String {
     var output = "Run " + page.runId.value + "\n"
@@ -15,6 +17,9 @@ public func renderRunInspection(page: AppRunInspectionPage): String {
     output += "  prompt_graph_digest: " + inspectionDisplay(page.promptGraphDigest) + "\n"
     output += "  components: " + inspectionJoin(page.componentInstances) + "\n"
     output += "  active_skills: " + inspectionJoin(page.activeSkillIds) + "\n"
+    if (!page.planExecution.fields.isEmpty()) {
+        output += "\n" + renderPlanExecutionInspection(page.planExecution) + "\n"
+    }
 
     output += "\nContexts\n"
     if (page.contexts.isEmpty()) {
@@ -26,6 +31,12 @@ public func renderRunInspection(page: AppRunInspectionPage): String {
             " estimated_tokens=" + context.estimatedTokens.toString() +
             " budget=" + context.tokenBudget.toString() + "\n"
         output += "    skills: " + inspectionJoin(context.activeSkillIds) + "\n"
+        output += "    request_visible_tools: " + inspectionJoin(context.requestVisibleToolNames) + "\n"
+        for (source in context.instructionSources) {
+            output += "    instruction hash=" + inspectionDisplay(source.sourceHash) +
+                " scope_hash=" + source.scopeHash + " selected=" + source.selected.toString() +
+                " reason=" + source.reason + "\n"
+        }
         for (prompt in context.promptContributions) {
             output += "    prompt owner=" + prompt.owner + " scope=" + prompt.scope +
                 " order=" + prompt.order + " visibility=" + prompt.visibility +

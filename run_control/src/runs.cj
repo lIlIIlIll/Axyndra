@@ -11,6 +11,11 @@ public interface RunService {
     func startOwnedCheckpointFailure113(request: AgentRunRequest, sink: AgentEventSink): OwnedAgentRunResult113 {
         OwnedAgentRunResult113.Existing(start(request, sink))
     }
+    func startRestrictedOwnedCheckpointFailure113(request: AgentRunRequest,
+        restriction: AgentRunStartRestriction111, events: AgentEventSink): OwnedAgentRunResult113 {
+        OwnedAgentRunResult113.Existing(Result<AgentRunOutcome>.Err(AgentError(AgentErrorKind.PermissionDenied,
+            "child.start_restriction_unsupported", "this transport cannot carry the original live start restriction")))
+    }
     func resumeContextBoundaryOwnedCheckpointFailure113(request: AgentRunRequest, sink: AgentEventSink): OwnedAgentRunResult113 {
         OwnedAgentRunResult113.Existing(resumeContextBoundary(request, sink))
     }
@@ -65,6 +70,10 @@ public class CoreRunService <: RunService {
 
     public func startOwnedCheckpointFailure113(request: AgentRunRequest, sink: AgentEventSink): OwnedAgentRunResult113 {
         runner.startOwnedCheckpointFailure113(request, sink)
+    }
+    public func startRestrictedOwnedCheckpointFailure113(request: AgentRunRequest,
+        restriction: AgentRunStartRestriction111, events: AgentEventSink): OwnedAgentRunResult113 {
+        runner.startRestrictedOwnedCheckpointFailure113(request, restriction, events)
     }
     public func resumeContextBoundaryOwnedCheckpointFailure113(request: AgentRunRequest, sink: AgentEventSink): OwnedAgentRunResult113 {
         runner.resumeContextBoundaryOwnedCheckpointFailure113(request, sink)

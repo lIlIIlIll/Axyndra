@@ -20,9 +20,12 @@ let RUN_INSPECTION_NESTED_LIMIT: Int64 = 100
 // values, receipt detail, or artifact content.
 public class RunInspectionProjection {
     private let database: SqliteDatabase
+    private let knownParentAllocation204: ?((Int64) -> LogicalJsonOwnerReservation)
 
-    public init(database: SqliteDatabase) {
+    public init(database: SqliteDatabase,
+        knownParentAllocation204!: ?((Int64) -> LogicalJsonOwnerReservation) = None) {
         this.database = database
+        this.knownParentAllocation204 = knownParentAllocation204
     }
 
     public func latestRunId(threadId: ThreadId): Result<RunId> {
@@ -151,6 +154,37 @@ public class RunInspectionProjection {
                     transaction, runId, beforeCursor, limit, warnings
                 )
 
+                var planExecution = objectValue([])
+                var planPayment204: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+                let hasPlan = !transaction.query("SELECT execution_id FROM plan_execution_runs WHERE run_id=" + sqliteText(runId.value)).isEmpty()
+                if (hasPlan) {
+                    let allocate = match (knownParentAllocation204) {
+                        case Some(value) => value
+                        case None => return Result<AppRunInspectionPage>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                            "plan.inspection_owner_required", "Plan inspection requires the original caller DATA budget"))
+                    }
+                    let anchor = allocate(4096)
+                    let source = DurablePlanExecutionStore(database).inspectSnapshot204(transaction, runId, anchor)
+                    let copied = match (source) {
+                        case Result.Ok(Some(owner)) => copyRedactedPlanInspection204(owner)
+                        case Result.Ok(None) =>
+                            anchor.close()
+                            return Result<AppRunInspectionPage>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                                "plan.inspection_binding_changed", "The canonical plan binding changed inside inspection"))
+                        case Result.Err(error) =>
+                            anchor.close()
+                            return Result<AppRunInspectionPage>.Err(error)
+                    }
+                    anchor.close()
+                    match (copied) {
+                        case Result.Ok(value) =>
+                            let detached = value.takeForPage204()
+                            planExecution = detached[0]
+                            planPayment204 = Some(detached[1])
+                        case Result.Err(error) => return Result<AppRunInspectionPage>.Err(error)
+                    }
+                }
+
                 Result.Ok(AppRunInspectionPage(
                     threadId,
                     runId,
@@ -170,7 +204,8 @@ public class RunInspectionProjection {
                     requests,
                     operationPage.operations,
                     warnings.toArray(),
-                    operationPage.nextBeforeCursor
+                    operationPage.nextBeforeCursor,
+                    planExecution: planExecution, planProjectionPayment204: planPayment204
                 ))
             }
         } catch (error: Exception) {
@@ -292,7 +327,9 @@ public class RunInspectionProjection {
                         warnings
                     ),
                     prompts.toArray(),
-                    tools
+                    tools,
+                    requestVisibleToolNames: inspectionRequestToolNames(manifest.namedFactVersions, manifest.renderedRequest),
+                    instructionSources: inspectionInstructionSources(manifest.namedFactVersions)
                 ))
             } catch (_: Exception) {
                 warnings.add("context.manifest_unreadable")
@@ -654,4 +691,109 @@ func operationRecoveryGuidance(state: String, outcome: String): String {
     } else {
         ""
     }
+}
+
+func inspectionRequestToolNames(facts: AgentValue, renderedRequest: AgentValue): Array<String> {
+    let result = ArrayList<String>()
+    let source = match (facts.field("request_tool_view")) {
+        case Some(view) => view
+        case None => renderedRequest
+    }
+    match (source.field("tools")) {
+        case Some(tools) => if (tools.unifiedKind == ValueKind.List) {
+            for (tool in tools.items where result.size < RUN_INSPECTION_NESTED_LIMIT) {
+                let name = inspectionValueText(tool, "name")
+                if (name != "") { result.add(name) }
+            }
+        }
+        case None => ()
+    }
+    result.toArray()
+}
+
+// Internal supervision projections also carry the approved executable
+// contract. App/RPC inspection must expose only decision/evidence metadata,
+// never source, normalized arguments, paths, or tool implementation bodies.
+
+public func redactProductPlanInspection(state: AgentValue): AgentValue {
+    if (state.unifiedKind != ValueKind.Object) { return objectValue([]) }
+    let fields = inspectionPlanScalars(state, ["execution_id", "active", "complete", "sealed", "recovery_required"])
+    let steps = ArrayList<AgentValue>()
+    match (state.field("steps")) {
+        case Some(values) => if (values.unifiedKind == ValueKind.List) {
+            for (step in values.items where steps.size < 128) {
+                let selected = inspectionPlanScalars(step, ["step_id", "state", "required",
+                    "decision", "reason", "receipt_id", "fallback_step_id"])
+                let actions = ArrayList<AgentValue>()
+                match (step.field("actions")) {
+                    case Some(items) => if (items.unifiedKind == ValueKind.List) {
+                        for (action in items.items where actions.size < 256) {
+                            let details = inspectionPlanScalars(action, ["action_id", "state", "attempts",
+                                "remaining_attempts", "decision", "reason", "receipt_id"])
+                            inspectionPlanReceiptReferences(action, details)
+                            actions.add(objectValue(details.toArray()))
+                        }
+                    }
+                    case None => ()
+                }
+                inspectionPlanReceiptReferences(step, selected)
+                selected.add(ValueField("actions", listValue(actions.toArray())))
+                steps.add(objectValue(selected.toArray()))
+            }
+        }
+        case None => ()
+    }
+    fields.add(ValueField("steps", listValue(steps.toArray())))
+    objectValue(fields.toArray())
+}
+
+func inspectionPlanScalars(value: AgentValue, names: Array<String>): ArrayList<ValueField> {
+    let fields = ArrayList<ValueField>()
+    for (name in names) {
+        match (value.field(name)) {
+            case Some(item) => if ((item.unifiedKind == ValueKind.Text && item.text.size <= 2048) ||
+                item.unifiedKind == ValueKind.Number || item.unifiedKind == ValueKind.Boolean ||
+                item.unifiedKind == ValueKind.Null) {
+                fields.add(ValueField(name, inspectionPlanScalarCopy204(item)))
+            }
+            case None => ()
+        }
+    }
+    fields
+}
+
+func inspectionPlanReceiptReferences(value: AgentValue, fields: ArrayList<ValueField>): Unit {
+    match (value.field("receipt_ids")) {
+        case Some(items) => if (items.unifiedKind == ValueKind.List) {
+            let selected = ArrayList<AgentValue>()
+            for (item in items.items where selected.size < 256) {
+                if (item.unifiedKind == ValueKind.Text && item.text.size <= 2048) {
+                    selected.add(textValue(String.fromUtf8(item.text.toArray())))
+                }
+            }
+            fields.add(ValueField("receipt_ids", listValue(selected.toArray())))
+        }
+        case None => ()
+    }
+}
+
+func inspectionInstructionSources(facts: AgentValue): Array<AppRunContextSourceEvidence> {
+    let result = ArrayList<AppRunContextSourceEvidence>()
+    match (facts.field("task_context")) {
+        case Some(context) => match (context.field("instruction_sources")) {
+            case Some(sources) => if (sources.unifiedKind == ValueKind.List) {
+                for (source in sources.items where result.size < RUN_INSPECTION_NESTED_LIMIT) {
+                    result.add(AppRunContextSourceEvidence(
+                        inspectionValueText(source, "hash"),
+                        modelPolicySha256Text(inspectionValueText(source, "scope")),
+                        inspectionValueBool(source, "selected"),
+                        inspectionValueText(source, "reason")
+                    ))
+                }
+            }
+            case None => ()
+        }
+        case None => ()
+    }
+    result.toArray()
 }

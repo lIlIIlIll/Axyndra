@@ -46,12 +46,41 @@ func contractPlanReviewView(application: ApplicationSession, response: Applicati
 }
 
 main(): Int64 {
+    match (planProductWorkerMode204()) {
+        case Some(mode) => return planProductWorkerMain204(mode)
+        case None => ()
+    }
     if (!exists(Path("target"))) {
         Directory.create("target", recursive: true)
     }
     let root = Directory.createTemp("target").toString()
     try {
         runProductIdContracts()
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("plan-process-scope")) {
+            planProductRunCaseProcess204("process-scope", root)
+            println("product approved BashTool process scope contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("plan-revision-control")) {
+            planProductRunCaseProcess204("revision", root)
+            println("product approved plan review control contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("plan-hard-budget-drain")) {
+            planProductRunCaseProcess204("drain", root)
+            println("product approved plan hard-budget drain contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("plan-unknown-mutation")) {
+            planProductRunCaseProcess204("unknown", root)
+            println("product approved plan unknown-mutation contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("plan-execution")) {
+            runPlanExecutionProductContracts(root)
+            println("product approved plan execution contract passed")
+            return 0
+        }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-runtime-config")) {
             prepareContractFiles(root)
             runToolContracts(root)
@@ -182,6 +211,7 @@ main(): Int64 {
         runWriteApprovalClassificationContracts(root)
         runReadApprovalClassificationContracts(root)
         runApplicationContracts(root)
+        runPlanExecutionProductContracts(root)
         runNetworkApprovalProductContracts(root)
         runSessionCatalogContracts(root)
         runAiApprovalContracts(root)
@@ -6055,8 +6085,13 @@ func runSessionLifecycleContracts(
         root + "/state",
         database: Some(archiveDatabase)
     ).persistText("archive-artifact-body").value().getOrThrow()
+    let archivedPlanCount = archiveDatabase.query("SELECT COUNT(*) FROM plan_executions")[0].required(0)
+    expect(archivedPlanCount != "0", "archive/reset fixture includes approved plan history")
     archiveDatabase.close()
-    let reset = application.handle("/reset contract-reset").value().getOrThrow()
+    let reset = match (application.handle("/reset contract-reset")) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw Exception("archive/reset failed: " + error.describe())
+    }
     expect(
         reset.text.startsWith("state archived and reset") && exists(
             Path(root + "/state/archives/contract-reset.state.db")) && exists(Path(
@@ -6064,6 +6099,17 @@ func runSessionLifecycleContracts(
         )),
         "archive/reset snapshots SQLite and every referenced artifact body before clearing state"
     )
+    let resetArchive = SqliteDatabase(root + "/state/archives/contract-reset.state.db")
+    expect(resetArchive.query("SELECT COUNT(*) FROM plan_executions")[0].required(0) == archivedPlanCount,
+        "archive retains approved plan history before reset")
+    resetArchive.close()
+    let resetDatabase = SqliteDatabase(root + "/state/state.db")
+    for (table in ["plan_executions", "plan_execution_members", "plan_execution_sessions",
+        "plan_execution_runs", "plan_action_admissions", "plan_step_decisions"]) {
+        expect(resetDatabase.query("SELECT COUNT(*) FROM " + table)[0].required(0) == "0",
+            "reset clears archived plan bindings and evidence references: " + table)
+    }
+    resetDatabase.close()
     expect(
         application.handle("after reset").value().getOrThrow().agentInvoked,
         "the current process remains usable after archive/reset"
@@ -6625,7 +6671,8 @@ func expectToolSchema(
         let properties = definition.inputSchema.field("properties").getOrThrow()
         let required = definition.inputSchema.field("required").getOrThrow()
         let propertyNames = ArrayList<String>()
-        for (field in properties.fields) {
+        expectPlanBindingSchema(properties)
+        for (field in properties.fields where field.name != "_plan") {
             propertyNames.add(field.name)
         }
         let requiredNames = ArrayList<String>()
@@ -6683,7 +6730,8 @@ func expectToolSchemaWithOptionalExtensions(
         let properties = definition.inputSchema.field("properties").getOrThrow()
         let required = definition.inputSchema.field("required").getOrThrow()
         let propertyNames = ArrayList<String>()
-        for (field in properties.fields) {
+        expectPlanBindingSchema(properties)
+        for (field in properties.fields where field.name != "_plan") {
             propertyNames.add(field.name)
         }
         let requiredNames = ArrayList<String>()
@@ -6698,6 +6746,25 @@ func expectToolSchemaWithOptionalExtensions(
         return
     }
     throw IllegalStateException("missing tool schema: " + toolName)
+}
+
+// The supervision envelope is optional outside approved executions. Verify
+// its complete contract separately from each tool's canonical arguments.
+func expectPlanBindingSchema(properties: AgentValue): Unit {
+    match (properties.field("_plan")) {
+        case Some(binding) =>
+            let required = binding.field("required").getOrThrow()
+            let names = ArrayList<String>()
+            for (name in required.items) { names.add(name.text) }
+            let fields = binding.field("properties").getOrThrow()
+            expect(binding.field("type").getOrThrow().text == "object" &&
+                !binding.field("additionalProperties").getOrThrow().asBool() &&
+                sameStrings(names.toArray(), ["step_id", "action_id"]) && fields.fields.size == 2 &&
+                fields.field("step_id").getOrThrow().field("type").getOrThrow().text == "string" &&
+                fields.field("action_id").getOrThrow().field("type").getOrThrow().text == "string",
+                "supervised request envelope exposes only the exact step/action binding")
+        case None => ()
+    }
 }
 
 func sameStrings(left: Array<String>, right: Array<String>): Bool {

@@ -186,6 +186,57 @@ class ContextBoundaryFullRequestCodecTests {
     }
 
     @TestCase
+    func optionalPlanFactsAndReviewControlStayFrozenDataWithLegacyDefaults(): Unit {
+        let legacy = AgentRunRequest(RunId("codec-plan"), SessionId("codec-plan"), "codec-model", "prompt")
+        let encodedLegacy = coreContextBoundaryRequestValue(legacy)
+        @Expect(encodedLegacy.field("plan_context_facts").isNone())
+        @Expect(encodedLegacy.field("tool_context").getOrThrow().field("plan_review_control").isNone())
+        @Expect(stringifyUnifiedJson(coreContextBoundaryRequestValue(coreContextBoundaryRequestFromValue(encodedLegacy))),
+            stringifyUnifiedJson(encodedLegacy))
+        @Expect(initialContextRequestValue(legacy, 1).field("plan_context_facts").isNone())
+        let facts = objectValue([ValueField("execution_id", textValue("approved-plan")),
+            ValueField("claimed_capabilities", listValue([textValue("network.access")]))])
+        let request = AgentRunRequest(RunId("codec-plan"), SessionId("codec-plan"), "codec-model", "prompt",
+            toolContext: ToolContextDescriptor(planReviewControl: true), planContextFacts: facts)
+        let encoded = coreContextBoundaryRequestValue(request)
+        let initial = initialContextRequestValue(request, 1)
+        let before = stringifyUnifiedJson(encoded)
+        facts.put("execution_id", textValue("caller-mutated"))
+        @Expect(stringifyUnifiedJson(encoded), before)
+        @Expect(initial.field("plan_context_facts").getOrThrow().field("execution_id").getOrThrow().text, "approved-plan")
+        let restored = coreContextBoundaryRequestFromValue(encoded)
+        @Expect(restored.toolContext.planReviewControl)
+        @Expect(restored.capabilities.values.isEmpty())
+        @Expect(restored.planContextFacts.field("execution_id").getOrThrow().text, "approved-plan")
+        encoded.field("plan_context_facts").getOrThrow().put("execution_id", textValue("encoded-mutated"))
+        @Expect(restored.planContextFacts.field("execution_id").getOrThrow().text, "approved-plan")
+        @Expect(coreContextBoundaryRequestValue(restored).field("tool_context").getOrThrow().field("plan_review_control").getOrThrow().asBool())
+    }
+
+    @TestCase
+    func optionalPlanFieldsRemainCanonicalAndUnknownFieldsStillFailClosed(): Unit {
+        let legacy = coreContextBoundaryRequestValue(AgentRunRequest(RunId("codec-optional"),
+            SessionId("codec-optional"), "codec-model", "prompt"))
+        for (invalid in [boolValue(false), textValue("true"), nullValue()]) {
+            let changed = parseUnifiedJson(stringifyUnifiedJson(legacy), maxBytes: 8388608)
+            changed.field("tool_context").getOrThrow().put("plan_review_control", invalid)
+            @Expect(contextBoundaryRequestTestRejects(changed))
+        }
+        for (invalid in [objectValue([]), listValue([]), textValue("facts"), nullValue()]) {
+            let changed = parseUnifiedJson(stringifyUnifiedJson(legacy), maxBytes: 8388608)
+            changed.put("plan_context_facts", invalid)
+            @Expect(contextBoundaryRequestTestRejects(changed))
+        }
+        let unknown = parseUnifiedJson(stringifyUnifiedJson(legacy), maxBytes: 8388608)
+        unknown.put("unrecognized_plan_field", objectValue([]))
+        @Expect(contextBoundaryRequestTestRejects(unknown))
+        let nested = parseUnifiedJson(stringifyUnifiedJson(legacy), maxBytes: 8388608)
+        nested.field("tool_context").getOrThrow().put("plan_review_control", boolValue(true))
+        nested.field("tool_context").getOrThrow().put("unrecognized", nullValue())
+        @Expect(contextBoundaryRequestTestRejects(nested))
+    }
+
+    @TestCase
     func originalJsonDuplicatesAndOriginalEightMiBBoundAreEnforced(): Unit {
         let value = coreContextBoundaryRequestValue(contextBoundaryRequestTestRequest())
         let encoded = stringifyUnifiedJson(value)

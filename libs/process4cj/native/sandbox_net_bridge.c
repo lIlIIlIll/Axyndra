@@ -20,6 +20,7 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <time.h>
 
 #define MAX_RULES 128
 #define MAX_BRIDGE_WORKERS 128
@@ -897,7 +898,164 @@ static bool parse_policy(int argc, char **argv, int start, policy_t *policy) {
     return true;
 }
 
+/* A runtime-owned status frame. The target only inherits capture pipes, never
+ * this helper's output descriptor. PR_SET_DUMPABLE also prevents same-uid
+ * target code from reopening the helper/bridge parent's output via /proc. */
+static long long probe_millis(void) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    return (long long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static bool probe_number(const char *text, long long minimum, long long maximum,
+                         long long *value) {
+    char *end = NULL;
+    errno = 0;
+    long long parsed = strtoll(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || parsed < minimum || parsed > maximum) return false;
+    *value = parsed;
+    return true;
+}
+
+static void probe_capture(int *fd, unsigned char *buffer, size_t *used,
+                          size_t *remaining, bool *truncated, bool *failed) {
+    if (*fd < 0) return;
+    unsigned char incoming[BUFFER_SIZE];
+    /* Drain only one bounded chunk per poll round: a noisy stdout must not
+     * starve stderr, exec acknowledgement, or the monotonic deadline. */
+    ssize_t count = read(*fd, incoming, sizeof(incoming));
+    if (count > 0) {
+        size_t accepted = (size_t)count < *remaining ? (size_t)count : *remaining;
+        if (accepted > 0) memcpy(buffer + *used, incoming, accepted);
+        *used += accepted;
+        *remaining -= accepted;
+        if (accepted < (size_t)count) *truncated = true;
+    } else if (count == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+        if (count < 0) *failed = true;
+        close(*fd);
+        *fd = -1;
+    }
+}
+
+static int run_command_probe(int argc, char **argv) {
+    long long timeout_ms = 0, maximum = 0;
+    if (argc < 6 || strcmp(argv[4], "--") != 0 || argv[5][0] != '/' ||
+        !probe_number(argv[2], 1, 600000, &timeout_ms) ||
+        !probe_number(argv[3], 1, 67108864, &maximum)) return 2;
+    int output[2], errors[2], acknowledgement[2];
+    if (pipe2(output, O_CLOEXEC) != 0) return 125;
+    if (pipe2(errors, O_CLOEXEC) != 0) { close(output[0]); close(output[1]); return 125; }
+    if (pipe2(acknowledgement, O_CLOEXEC) != 0) {
+        close(output[0]); close(output[1]); close(errors[0]); close(errors[1]); return 125;
+    }
+    unsigned char *stdout_bytes = malloc((size_t)maximum);
+    unsigned char *stderr_bytes = malloc((size_t)maximum);
+    if (stdout_bytes == NULL || stderr_bytes == NULL) {
+        free(stdout_bytes); free(stderr_bytes);
+        close(output[0]); close(output[1]); close(errors[0]); close(errors[1]);
+        close(acknowledgement[0]); close(acknowledgement[1]); return 125;
+    }
+    signal(SIGCHLD, SIG_DFL);
+    pid_t child = fork();
+    if (child == 0) {
+        close(output[0]); close(errors[0]); close(acknowledgement[0]);
+        int failure = 0;
+        if (setsid() < 0 || dup2(output[1], STDOUT_FILENO) < 0 || dup2(errors[1], STDERR_FILENO) < 0) {
+            failure = errno;
+        }
+        close(output[1]); close(errors[1]);
+        if (failure == 0) {
+            execv(argv[5], &argv[5]);
+            failure = errno;
+        }
+        (void)write_all(acknowledgement[1], &failure, sizeof(failure));
+        _exit(127);
+    }
+    close(output[1]); close(errors[1]); close(acknowledgement[1]);
+    if (child < 0) {
+        close(output[0]); close(errors[0]); close(acknowledgement[0]);
+        free(stdout_bytes); free(stderr_bytes); return 125;
+    }
+    (void)fcntl(output[0], F_SETFL, O_NONBLOCK);
+    (void)fcntl(errors[0], F_SETFL, O_NONBLOCK);
+    (void)fcntl(acknowledgement[0], F_SETFL, O_NONBLOCK);
+    size_t output_size = 0, error_size = 0, remaining = (size_t)maximum;
+    bool truncated = false, timed_out = false, reaped = false, acknowledged = false, wait_failed = false, pipe_failed = false;
+    int status = 0, launch_errno = 0;
+    long long start = probe_millis();
+    long long deadline = start < 0 ? 0 : start + timeout_ms;
+    wait_failed = start < 0;
+    while (!reaped || output[0] >= 0 || errors[0] >= 0 || acknowledgement[0] >= 0) {
+        if (wait_failed) break;
+        if (acknowledgement[0] >= 0) {
+            int failure = 0;
+            ssize_t count = read(acknowledgement[0], &failure, sizeof(failure));
+            if (count == 0 || count == (ssize_t)sizeof(failure)) {
+                acknowledged = count == 0;
+                launch_errno = count > 0 ? failure : 0;
+                close(acknowledgement[0]); acknowledgement[0] = -1;
+            } else if (count > 0 || (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+                wait_failed = true;
+                break;
+            }
+        }
+        probe_capture(&output[0], stdout_bytes, &output_size, &remaining, &truncated, &pipe_failed);
+        probe_capture(&errors[0], stderr_bytes, &error_size, &remaining, &truncated, &pipe_failed);
+        if (pipe_failed) { wait_failed = true; break; }
+        if (!reaped) {
+            pid_t result = waitpid(child, &status, WNOHANG);
+            if (result == child) reaped = true;
+            else if (result < 0 && errno != EINTR) { wait_failed = true; break; }
+        }
+        if (reaped && output[0] < 0 && errors[0] < 0 && acknowledgement[0] < 0) break;
+        long long now = probe_millis();
+        if (now < 0) { wait_failed = true; break; }
+        if (now >= deadline) {
+            timed_out = true;
+            (void)kill(-child, SIGKILL);
+            (void)kill(child, SIGKILL);
+            if (!reaped) {
+                while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+                reaped = true;
+            }
+            /* The kernel pipe buffer is finite after group termination.
+             * Bound the final drain even if an escaped writer retains it. */
+            for (int round = 0; round < 32; ++round) {
+                probe_capture(&output[0], stdout_bytes, &output_size, &remaining, &truncated, &pipe_failed);
+                probe_capture(&errors[0], stderr_bytes, &error_size, &remaining, &truncated, &pipe_failed);
+            }
+            break;
+        }
+        struct pollfd fds[3] = {
+            {.fd = output[0], .events = POLLIN}, {.fd = errors[0], .events = POLLIN},
+            {.fd = acknowledgement[0], .events = POLLIN}
+        };
+        (void)poll(fds, 3, (int)((deadline - now) < 20 ? deadline - now : 20));
+    }
+    if (!reaped) {
+        (void)kill(-child, SIGKILL); (void)kill(child, SIGKILL);
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    }
+    if (output[0] >= 0) close(output[0]);
+    if (errors[0] >= 0) close(errors[0]);
+    if (acknowledgement[0] >= 0) close(acknowledgement[0]);
+    if (wait_failed || pipe_failed) { free(stdout_bytes); free(stderr_bytes); return 125; }
+    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    bool started = acknowledged && launch_errno == 0;
+    char header[256];
+    int header_size = snprintf(header, sizeof(header), "AXYNDRA-PROBE/1 %d %d %d %d %d %d %zu %zu\n",
+        started, started && !timed_out, exit_code, timed_out, truncated, launch_errno, output_size, error_size);
+    int result = write_all(STDOUT_FILENO, header, (size_t)header_size);
+    if (result == 0) result = write_all(STDOUT_FILENO, stdout_bytes, output_size);
+    if (result == 0) result = write_all(STDOUT_FILENO, stderr_bytes, error_size);
+    free(stdout_bytes); free(stderr_bytes);
+    return result == 0 ? 0 : 125;
+}
+
 int main(int argc, char **argv) {
+    // No descendant may reopen a runtime protocol/output descriptor via proc.
+    if (prctl(PR_SET_DUMPABLE, 0) != 0) return 125;
+    if (argc > 1 && strcmp(argv[1], "--command-probe") == 0) return run_command_probe(argc, argv);
     if (argc < 4) {
         fprintf(stderr, "usage: %s --gateway --socket PATH --proxy-port-file PATH [--rule HOST PORT PRIVATE,...]\n", argv[0]);
         fprintf(stderr, "       %s --bridge --socket PATH -- COMMAND [ARGS...]\n", argv[0]);

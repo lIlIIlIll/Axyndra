@@ -6,6 +6,7 @@ import agent_ports.*
 import tool_runtime.*
 import std.collection.*
 import std.convert.*
+import yjson.*
 import yjson_support.*
 
 public class CoreContinuationPreparation {
@@ -64,7 +65,9 @@ func freezeContinuationRequest(value: AgentRunRequest): AgentRunRequest {
         toolContext: toolContextDescriptorFromValue(parseUnifiedJson(stringifyUnifiedJson(toolContextDescriptorValue(value.toolContext)), maxBytes: 8388608)),
         contextSnapshot: contextSnapshotFromValue(parseUnifiedJson(stringifyUnifiedJson(contextSnapshotValue(value.contextSnapshot)), maxBytes: 8388608)),
         contextWindow: value.contextWindow, providerSafetyMargin: value.providerSafetyMargin,
-        executionLaneId: value.executionLaneId, initializeContext: value.initializeContext)
+        executionLaneId: value.executionLaneId, initializeContext: value.initializeContext,
+        planContextFacts: contextBoundaryRequestFreeze(value.planContextFacts),
+        planRequestCustody204: value.planRequestCustody204)
 }
 
 func continuationRequestSnapshot(request: AgentRunRequest, lane: ModelLane): AgentValue {
@@ -95,7 +98,9 @@ func continuationRequestSnapshot(request: AgentRunRequest, lane: ModelLane): Age
     let pricing = match (request.pricing) { case None => nullValue(); case Some(p) => objectValue([
         ValueField("input", continuationOptionalInt(p.inputMicrosPerMillion)), ValueField("output", continuationOptionalInt(p.outputMicrosPerMillion)),
         ValueField("cache_read", continuationOptionalInt(p.cacheReadMicrosPerMillion)), ValueField("cache_write", continuationOptionalInt(p.cacheWriteMicrosPerMillion))]) }
-    objectValue([ValueField("schema", textValue("axyndra.host-continuation-request/v1")),
+    contextBoundaryRequestRequire(request.planContextFacts.unifiedKind == ValueKind.Object,
+        "plan context facts must be an object")
+    let snapshot = objectValue([ValueField("schema", textValue("axyndra.host-continuation-request/v1")),
         ValueField("run_id", textValue(request.runId.value)), ValueField("thread_id", textValue(request.sessionId.value)),
         ValueField("lane_id", textValue(request.executionLaneId.value)),
         ValueField("model_input", modelRequestSnapshotValue(ModelRequest(request.model, [ModelMessage(ModelRole.User, blocks.toArray())],
@@ -113,6 +118,10 @@ func continuationRequestSnapshot(request: AgentRunRequest, lane: ModelLane): Age
         ValueField("tool_context", toolContextDescriptorValue(request.toolContext)), ValueField("context", contextSnapshotValue(request.contextSnapshot)),
         ValueField("initialize_context", boolValue(request.initializeContext)), ValueField("context_window", integerValue(request.contextWindow)),
         ValueField("provider_margin", integerValue(request.providerSafetyMargin))])
+    if (!request.planContextFacts.fields.isEmpty()) {
+        snapshot.put("plan_context_facts", contextBoundaryRequestFreeze(request.planContextFacts))
+    }
+    snapshot
 }
 func continuationOptionalInt(value: ?Int64): AgentValue { match (value) { case Some(n) => integerValue(n); case None => nullValue() } }
 

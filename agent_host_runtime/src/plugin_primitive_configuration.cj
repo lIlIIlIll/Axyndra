@@ -77,6 +77,21 @@ class HostPrimitiveConfiguration111 {
         }
         false
     }
+    // Closed host-owned Task selection: no process/network/other service may
+    // acquire the supervisor contract through a same-named contribution.
+    func supervisedTaskServices191(localTool: String): Bool {
+        let entry = selectedEntry(localTool)
+        let services = entry.field("services").getOrThrow()
+        if (services.unifiedKind != ValueKind.List || services.items.isEmpty() || services.items.size > 2) { return false }
+        var starts = false
+        for (service in services.items) {
+            if (service.unifiedKind != ValueKind.Text ||
+                (service.text != "child.start" && service.text != "child.wait") ||
+                invocationName(localTool, service: service.text) != "delegate") { return false }
+            if (service.text == "child.start") { starts = true }
+        }
+        starts
+    }
     private func selectedEntry(localTool:String):AgentValue {
         for(entry in selections.items where httpIntentText(entry,"name")==localTool){return entry}
         throw IllegalStateException("no actual selected primitive contribution")
@@ -344,7 +359,7 @@ class HostPrimitiveConfigurationCache111 {
                 if (!witness.startsWith("f:") || bytes < 1 || bytes > 65536) {
                     return hostPluginResourceError("plugin.primitive_selection_invalid", "primitive selection must be a bounded regular file") }
                 payment.ensureRetainedPeak(bytes * 16 + 1048576)
-                let temporary = Directory.createTemp("/tmp")
+                let temporary = hostConfigurationTemporaryDirectory204()
                 let encoded: String
                 try {
                     let target = temporary.join("primitive-selection")
@@ -454,7 +469,7 @@ class HostPrimitiveConfigurationCache111 {
                 if (!witness.startsWith("f:") || bytes < 1 || bytes > 65536) {
                     return hostPluginResourceError("plugin.primitive_selection_invalid", "primitive selection must be a bounded regular file") }
                 payment.ensureRetainedPeak(bytes * 16 + 1048576)
-                let temporary = Directory.createTemp("/tmp")
+                let temporary = hostConfigurationTemporaryDirectory204()
                 let encoded: String
                 try {
                     let target = temporary.join("primitive-selection")

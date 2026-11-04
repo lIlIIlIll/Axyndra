@@ -2,6 +2,7 @@ package agent_history
 
 import agent_app_protocol.*
 import agent_domain.*
+import std.collection.*
 import yjson.*
 import yjson_support.*
 
@@ -27,6 +28,15 @@ func inspectionPromptEvidenceValue(value: AppRunPromptEvidence): AgentValue {
     ])
 }
 
+func inspectionContextSourceEvidenceValue(value: AppRunContextSourceEvidence): AgentValue {
+    objectValue([
+        ValueField("source_hash", textValue(value.sourceHash)),
+        ValueField("scope_hash", textValue(value.scopeHash)),
+        ValueField("selected", boolValue(value.selected)),
+        ValueField("reason", textValue(value.reason))
+    ])
+}
+
 func inspectionContextEvidenceValue(value: AppRunContextEvidence): AgentValue {
     objectValue([
         ValueField("manifest_id", textValue(value.manifestId)),
@@ -37,7 +47,9 @@ func inspectionContextEvidenceValue(value: AppRunContextEvidence): AgentValue {
         ValueField("token_budget", integerValue(value.tokenBudget)),
         ValueField("active_skill_ids", listValue(value.activeSkillIds.map { item => textValue(item) })),
         ValueField("prompt_contributions", listValue(value.promptContributions.map { item => inspectionPromptEvidenceValue(item) })),
-        ValueField("tools", listValue(value.tools.map { item => inspectionToolEvidenceValue(item) }))
+        ValueField("tools", listValue(value.tools.map { item => inspectionToolEvidenceValue(item) })),
+        ValueField("request_visible_tool_names", listValue(value.requestVisibleToolNames.map { item => textValue(item) })),
+        ValueField("instruction_sources", listValue(value.instructionSources.map { item => inspectionContextSourceEvidenceValue(item) }))
     ])
 }
 
@@ -106,7 +118,7 @@ func inspectionOperationEvidenceValue(value: AppRunOperationEvidence): AgentValu
 }
 
 public func runInspectionValue(value: AppRunInspectionPage): AgentValue {
-    objectValue([
+    let fields = ArrayList<ValueField>([
         ValueField("thread_id", textValue(value.threadId.value)),
         ValueField("run_id", textValue(value.runId.value)),
         ValueField("thread_revision", integerValue(value.threadRevision)),
@@ -127,5 +139,9 @@ public func runInspectionValue(value: AppRunInspectionPage): AgentValue {
         ValueField("warnings", listValue(value.warnings.map { item => textValue(item) })),
         ValueField("next_before_cursor", integerValue(value.nextBeforeCursor))
     ])
+    if (!value.planExecution.fields.isEmpty()) {
+        fields.add(ValueField("plan_execution", redactProductPlanInspection(value.planExecution)))
+    }
+    objectValue(fields.toArray())
 }
 

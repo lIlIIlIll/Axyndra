@@ -6,7 +6,7 @@ import std.io.*
 import std.sync.*
 import std.time.*
 
-foreign func process4cj_spawn(
+foreign func process4cj_spawn_with_fds(
     executable: CString,
     arguments: CPointer<CString>,
     environment: CPointer<CString>,
@@ -16,7 +16,9 @@ foreign func process4cj_spawn(
     stdinFd: CPointer<Int32>,
     stdoutFd: CPointer<Int32>,
     stderrFd: CPointer<Int32>,
-    statusFd: CPointer<Int32>
+    statusFd: CPointer<Int32>,
+    passedFds: CPointer<Int32>,
+    passedCount: Int32
 ): Int32
 foreign func process4cj_random_bytes(buffer: CPointer<UInt8>, length: Int64): Int32
 foreign func process4cj_read(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int64
@@ -29,9 +31,9 @@ foreign func process4cj_wait_status_owned180(fd:Int32):Int64
 foreign func process4cj_wait_tree_reap_receipt180(fd:Int32,commandStatus:Int64):Int32
 foreign func process4cj_reap_receipted_supervisor180(pid:Int64,commandStatus:Int64):Int32
 foreign func process4cj_abort_unwrapped_owned180(journal:CPointer<Int64>,words:Int64,statusFd:Int32):Int32
-foreign func process4cj_spawn_owned180(executable:CString,argv:CPointer<CString>,envp:CPointer<CString>,
+foreign func process4cj_spawn_owned_with_fds180(executable:CString,argv:CPointer<CString>,envp:CPointer<CString>,
     cwd:CString,newSession:Int32,pid:CPointer<Int64>,input:CPointer<Int32>,out:CPointer<Int32>,
-    error:CPointer<Int32>,status:CPointer<Int32>,journal:CPointer<Int64>,words:Int64):Int32
+    error:CPointer<Int32>,status:CPointer<Int32>,journal:CPointer<Int64>,words:Int64,passed:CPointer<Int32>,passedCount:Int32):Int32
 foreign func process4cj_wait(pid: Int64): Int64
 foreign func process4cj_kill(pid: Int64, force: Int32, processGroup: Int32): Int32
 foreign func process4cj_terminate_tree(
@@ -43,6 +45,62 @@ foreign func process4cj_start_time(pid: Int64): Int64
 foreign func process4cj_is_alive(pid: Int64): Int32
 foreign func process4cj_signal_frame_bytes180(): Int64
 foreign func process4cj_signal_owned_tree180(pid: Int64, expectedStart: Int64, signal: Int32): Int32
+foreign func process4cj_pin_directory(baseFd: Int32, path: CString): Int32
+foreign func process4cj_directory_identity(fd: Int32, part: Int32): Int64
+foreign func process4cj_self_pid(): Int64
+
+// The descriptor remains owned by the parent until the sandbox has consumed
+// its mounts. CLOEXEC prevents propagation into the target process itself.
+public class PinnedProcessDirectory {
+    public let path: String
+    public let sourcePath: String
+    public let identity: String
+    private let lock = Mutex()
+    private var descriptor: Int32
+    public init(path: String, parent!: ?PinnedProcessDirectory = None) {
+        let relative = match (parent) {
+            case Some(value) =>
+                if (path == value.path) { "" }
+                else if (path.startsWith(value.path + "/")) { path[value.path.size + 1..] }
+                else { throw IllegalArgumentException("directory capability must remain beneath its parent") }
+            case None => path
+        }
+        let native = unsafe { LibC.mallocCString(relative) }
+        let fd = try {
+            match (parent) {
+                case Some(value) => value.pinChild(native)
+                case None => unsafe { process4cj_pin_directory(-1, native) }
+            }
+        } finally { unsafe { LibC.free(native) } }
+        if (fd < 0) { throw IllegalArgumentException("could not pin an existing directory without following symlinks") }
+        this.path = path
+        this.descriptor = fd
+        this.sourcePath = "/proc/" + unsafe { process4cj_self_pid().toString() } + "/fd/" + fd.toString()
+        this.identity = unsafe { process4cj_directory_identity(fd, 0).toString() } + ":" +
+            unsafe { process4cj_directory_identity(fd, 1).toString() }
+    }
+    private func pinChild(relative: CString): Int32 {
+        lock.lock()
+        try {
+            if (descriptor < 0) { throw IllegalArgumentException("directory capability is closed") }
+            unsafe { process4cj_pin_directory(descriptor, relative) }
+        } finally { lock.unlock() }
+    }
+    public func descriptorForLaunch(): Int32 {
+        lock.lock()
+        try {
+            if (descriptor < 0) { throw IllegalArgumentException("directory capability is closed") }
+            descriptor
+        } finally { lock.unlock() }
+    }
+    public func close(): Unit {
+        lock.lock()
+        try {
+            if (descriptor >= 0) { let _ = unsafe { process4cj_close(descriptor) }; descriptor = -1 }
+        } finally { lock.unlock() }
+    }
+}
+
 // Terminate a process group by its owned session leader PID.  This keeps
 // process-port cancellation inside the native ownership boundary instead of
 // shelling out to an external `kill` command.
@@ -718,6 +776,10 @@ public class ProcessCommand {
     public let environment: HashMap<String, String>
     public let maxOutputBytes: Int64
     public let terminateProcessTree: Bool
+    // Host-owned descriptors borrowed until spawn completes. The parent keeps
+    // ownership and CLOEXEC; only this explicit list survives into the child.
+    // Never derive it from model arguments or untrusted executable argv.
+    public let passedFileDescriptors: Array<Int32>
 
     public init(
         executable: String,
@@ -725,7 +787,8 @@ public class ProcessCommand {
         workingDirectory!: String = "",
         environment!: HashMap<String, String> = HashMap<String, String>(),
         maxOutputBytes!: Int64 = 16777216,
-        terminateProcessTree!: Bool = true
+        terminateProcessTree!: Bool = true,
+        passedFileDescriptors!: Array<Int32> = []
     ) {
         if (executable.trimAscii() == "" || maxOutputBytes < 0) {
             throw IllegalArgumentException("invalid process command")
@@ -736,6 +799,7 @@ public class ProcessCommand {
         this.environment = environment
         this.maxOutputBytes = maxOutputBytes
         this.terminateProcessTree = terminateProcessTree
+        this.passedFileDescriptors = passedFileDescriptors.clone()
     }
 }
 
@@ -1401,6 +1465,7 @@ func nativeSpawn(command: ProcessCommand, namespaceHandle!: Int64 = 0): ProcessP
     var stdoutPointer = CPointer<Int32>()
     var stderrPointer = CPointer<Int32>()
     var statusPointer = CPointer<Int32>()
+    var passedPointer = CPointer<Int32>()
     unsafe {
         try {
             executable = LibC.mallocCString(command.executable)
@@ -1425,12 +1490,16 @@ func nativeSpawn(command: ProcessCommand, namespaceHandle!: Int64 = 0): ProcessP
             stdoutPointer = LibC.malloc<Int32>()
             stderrPointer = LibC.malloc<Int32>()
             statusPointer = LibC.malloc<Int32>()
+            if (!command.passedFileDescriptors.isEmpty()) {
+                passedPointer = LibC.malloc<Int32>(count: command.passedFileDescriptors.size)
+                for (index in 0..command.passedFileDescriptors.size) { passedPointer.write(index, command.passedFileDescriptors[index]) }
+            }
             let error = if (namespaceHandle > 0) {
-                process4cj_spawn_in_namespace(namespaceHandle, executable,
+                process4cj_spawn_in_namespace_with_fds(namespaceHandle, executable,
                     argumentPointer, environmentPointer, workingDirectory,
-                    pidPointer, stdinPointer, stdoutPointer, stderrPointer, statusPointer)
+                    pidPointer, stdinPointer, stdoutPointer, stderrPointer, statusPointer, passedPointer, Int32(command.passedFileDescriptors.size))
             } else {
-                process4cj_spawn(
+                process4cj_spawn_with_fds(
                     executable,
                     argumentPointer,
                     environmentPointer,
@@ -1440,7 +1509,9 @@ func nativeSpawn(command: ProcessCommand, namespaceHandle!: Int64 = 0): ProcessP
                     stdinPointer,
                     stdoutPointer,
                     stderrPointer,
-                    statusPointer
+                    statusPointer,
+                passedPointer,
+                Int32(command.passedFileDescriptors.size)
                 )
             }
             if (error != 0) {
@@ -1461,6 +1532,7 @@ func nativeSpawn(command: ProcessCommand, namespaceHandle!: Int64 = 0): ProcessP
             if (!stdoutPointer.isNull()) { LibC.free(stdoutPointer) }
             if (!stderrPointer.isNull()) { LibC.free(stderrPointer) }
             if (!statusPointer.isNull()) { LibC.free(statusPointer) }
+            if (!passedPointer.isNull()) { LibC.free(passedPointer) }
             if (!argumentPointer.isNull()) { LibC.free(argumentPointer) }
             if (!environmentPointer.isNull()) { LibC.free(environmentPointer) }
             if (!executable.getChars().isNull()) { LibC.free(executable) }
@@ -1505,6 +1577,61 @@ public func runProcess(
         ProcessRunResult(process.wait(), output.toArray(), errors.toArray(), budget.wasTruncated())
     } finally {
         registration.dispose()
+        let _ = process.close()
+    }
+}
+
+// Deadline ownership is separate from a child's numeric exit status. In
+// particular a command that exits 124 or 137 has completed, not timed out.
+public class DeadlineProcessRunResult {
+    public let result: ProcessRunResult
+    public let timedOut: Bool
+    public init(result: ProcessRunResult, timedOut: Bool) {
+        this.result = result
+        this.timedOut = timedOut
+    }
+}
+
+public func runProcessWithDeadline(
+    command: ProcessCommand,
+    timeoutMillis: Int64,
+    onStarted!: ?((ManagedProcess) -> Unit) = None
+): DeadlineProcessRunResult {
+    if (timeoutMillis < 1) {
+        throw IllegalArgumentException("process deadline must be positive")
+    }
+    let process = startProcess(command)
+    let budget = BoundedOutputBudget(command.maxOutputBytes)
+    let stdout = (process.stdout as NativeProcessInput).getOrThrow()
+    let stderr = (process.stderr as NativeProcessInput).getOrThrow()
+    let output = ArrayList<Byte>()
+    let errors = ArrayList<Byte>()
+    let deadline = MonoTime.now() + Duration.millisecond * timeoutMillis
+    var timedOut = false
+    try {
+        match (onStarted) { case Some(callback) => callback(process); case None => () }
+        let _ = process.closeInput()
+        while (process.tryExit().isNone() || !stdout.isClosed() || !stderr.isClosed()) {
+            stdout.readAvailable(budget, output)
+            stderr.readAvailable(budget, errors)
+            if (process.tryExit().isSome() && stdout.isClosed() && stderr.isClosed()) { break }
+            if (MonoTime.now() >= deadline) {
+                // A child may have completed while an escaped descendant holds
+                // a pipe. Bound the whole probe, including output collection.
+                timedOut = true
+                let _ = process.terminate(force: true)
+                stdout.readAvailable(budget, output)
+                stderr.readAvailable(budget, errors)
+                break
+            }
+            if (stdout.isClosed() && stderr.isClosed() && process.tryExit().isNone()) {
+                sleep(Duration.millisecond * 5)
+            }
+        }
+        DeadlineProcessRunResult(ProcessRunResult(
+            process.wait(), output.toArray(), errors.toArray(), budget.wasTruncated()
+        ), timedOut)
+    } finally {
         let _ = process.close()
     }
 }
@@ -1606,10 +1733,10 @@ public class ProcessNativeStartCustody180 {
     func noteNativeCallEntered180():Unit{lock.lock();try{nativeEntered=true}finally{lock.unlock()}}
     func invokeOwnedNative180(executable:CString,argv:CPointer<CString>,envp:CPointer<CString>,
         cwd:CString,newSession:Int32,pid:CPointer<Int64>,input:CPointer<Int32>,out:CPointer<Int32>,
-        error:CPointer<Int32>,status:CPointer<Int32>):Int32{
+        error:CPointer<Int32>,status:CPointer<Int32>,passed:CPointer<Int32>,passedCount:Int32):Int32{
         lock.lock();try{unsafe{
             let raw=acquireArrayRawData(nativeJournal180)
-            try{process4cj_spawn_owned180(executable,argv,envp,cwd,newSession,pid,input,out,error,status,raw.pointer,112)}
+            try{process4cj_spawn_owned_with_fds180(executable,argv,envp,cwd,newSession,pid,input,out,error,status,raw.pointer,112,passed,passedCount)}
             finally{releaseArrayRawData(raw)}
         }}finally{lock.unlock()}
     }
@@ -1871,6 +1998,7 @@ func nativeSpawnOwned180(command:ProcessCommand,owner:ProcessNativeStartCustody1
     var stdoutPointer = CPointer<Int32>()
     var stderrPointer = CPointer<Int32>()
     var statusPointer = CPointer<Int32>()
+    var passedPointer = CPointer<Int32>()
     unsafe {
         try {
             executable = LibC.mallocCString(command.executable)
@@ -1896,10 +2024,14 @@ func nativeSpawnOwned180(command:ProcessCommand,owner:ProcessNativeStartCustody1
             stderrPointer = LibC.malloc<Int32>()
             statusPointer = LibC.malloc<Int32>()
             pidPointer.write(0);stdinPointer.write(-1);stdoutPointer.write(-1);stderrPointer.write(-1);statusPointer.write(-1)
+            if (!command.passedFileDescriptors.isEmpty()) {
+                passedPointer = LibC.malloc<Int32>(count: command.passedFileDescriptors.size)
+                for (index in 0..command.passedFileDescriptors.size) { passedPointer.write(index, command.passedFileDescriptors[index]) }
+            }
             owner.noteNativeCallEntered180()
             let error = owner.invokeOwnedNative180(executable,argumentPointer,environmentPointer,
                 workingDirectory,if(command.terminateProcessTree){1}else{0},
-                pidPointer,stdinPointer,stdoutPointer,stderrPointer,statusPointer)
+                pidPointer,stdinPointer,stdoutPointer,stderrPointer,statusPointer,passedPointer,Int32(command.passedFileDescriptors.size))
             // Actual outputs are registered before constructing exception
             // text, NativeProcessInput, LinuxNativeProcess or ManagedProcess.
             owner.retainNativeOutputs180(pidPointer.read(),stdinPointer.read(),stdoutPointer.read(),stderrPointer.read(),statusPointer.read(),error)
@@ -1924,6 +2056,7 @@ func nativeSpawnOwned180(command:ProcessCommand,owner:ProcessNativeStartCustody1
             if (!stdoutPointer.isNull()) { LibC.free(stdoutPointer) }
             if (!stderrPointer.isNull()) { LibC.free(stderrPointer) }
             if (!statusPointer.isNull()) { LibC.free(statusPointer) }
+            if (!passedPointer.isNull()) { LibC.free(passedPointer) }
             if (!argumentPointer.isNull()) { LibC.free(argumentPointer) }
             if (!environmentPointer.isNull()) { LibC.free(environmentPointer) }
             if (!executable.getChars().isNull()) { LibC.free(executable) }

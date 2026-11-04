@@ -12,6 +12,7 @@ import std.deriving.*
 import std.overflow.*
 import std.sync.*
 import std.process.*
+import std.fs.*
 
 // Extra execution-current restriction, never source, approval or effect authority.
 // A lease spans only one durable admission transition; callbacks run afterward.
@@ -70,6 +71,10 @@ public type ToolCanonicalArgumentsResolver = (
     ToolInvocationContext,
     ToolCall
 ) -> Result<AgentValue>
+public type ToolOwnedCanonicalArgumentsResolver204 = (
+    ToolInvocationContext,
+    ToolCall
+) -> Result<ToolCanonicalArgumentsOwner204>
 
 
 public class ObjectArgumentValidator <: ToolArgumentValidator {
@@ -147,6 +152,11 @@ public class ToolDescriptor {
     public let implementationVersion: String
     public let implementationFingerprint: String
     public let schemaDigest: String
+    // Host-registered execution contract; opaque tools default to refused.
+    public let supervisedExecutionSafe: Bool
+    public let planReviewSafe: Bool
+    public let planBindingInArguments: Bool
+    public let coreMetadataResolverClosed204: Bool
     private let capabilityResolver: ?ToolCapabilityResolver
     private let networkPolicyResolver: ?ToolNetworkPolicyResolver
     private let additionalCapabilityResolver: ?ToolAdditionalCapabilityResolver
@@ -158,6 +168,12 @@ public class ToolDescriptor {
     private let preparationReadResolver: ?ToolPreparationReadResolver
     public prop hasPreparationRead: Bool { get() { preparationReadResolver.isSome() } }
     private let canonicalArgumentsResolver: ?ToolCanonicalArgumentsResolver
+    private let ownedCanonicalArgumentsResolver204: ?ToolOwnedCanonicalArgumentsResolver204
+    func hasOwnedCanonicalArguments204(): Bool { ownedCanonicalArgumentsResolver204.isSome() }
+    func ownedCanonicalArguments204(context: ToolInvocationContext, call: ToolCall): Result<ToolCanonicalArgumentsOwner204> {
+        match (ownedCanonicalArgumentsResolver204) { case Some(value) => value(context, call)
+            case None => Result.Err(AgentError(AgentErrorKind.Configuration,"tool.canonical_owner_missing","owned canonicalizer is unavailable")) }
+    }
     private let approvalMetadataValue: ?ToolApprovalMetadata
 
     public init(
@@ -171,6 +187,10 @@ public class ToolDescriptor {
         additionalCapabilities!: Array<Capability> = [],
         implementationVersion!: String = "agent-core-v1",
         implementationFingerprint!: String = "",
+        supervisedExecutionSafe!: Bool = false,
+        planReviewSafe!: Bool = false,
+        planBindingInArguments!: Bool = true,
+        coreMetadataResolverClosed204!: Bool = false,
         capabilityResolver!: ?ToolCapabilityResolver = None,
         additionalCapabilityResolver!: ?ToolAdditionalCapabilityResolver = None,
         sideEffectResolver!: ?ToolSideEffectResolver = None,
@@ -178,6 +198,7 @@ public class ToolDescriptor {
         networkPolicyResolver!: ?ToolNetworkPolicyResolver = None,
         approvalMetadataValue!: ?ToolApprovalMetadata = None,
         canonicalArgumentsResolver!: ?ToolCanonicalArgumentsResolver = None,
+        ownedCanonicalArgumentsResolver204!: ?ToolOwnedCanonicalArgumentsResolver204 = None,
         preparationReadResolver!: ?ToolPreparationReadResolver = None,
         preparationReadMayBeAbsent!: Bool = false
     ) {
@@ -185,7 +206,12 @@ public class ToolDescriptor {
         if (version == "") {
             throw IllegalArgumentException("tool implementation version must not be empty")
         }
-        this.definitionValue = definition
+        let registeredDefinition = if (supervisedExecutionSafe && planBindingInArguments) { planAwareToolDefinition(definition) } else { definition }
+        this.definitionValue = registeredDefinition
+        this.supervisedExecutionSafe = supervisedExecutionSafe
+        this.planReviewSafe = planReviewSafe
+        this.planBindingInArguments = planBindingInArguments
+        this.coreMetadataResolverClosed204 = coreMetadataResolverClosed204
         this.capability = capability
         this.sideEffecting = sideEffecting
         this.concurrencyValue = concurrency
@@ -195,12 +221,12 @@ public class ToolDescriptor {
         this.additionalCapabilitiesValue = additionalCapabilities
         this.implementationVersion = version
         this.schemaDigest = modelPolicySha256Text(
-            canonicalAgentValue(definition.inputSchema)
+            canonicalAgentValue(registeredDefinition.inputSchema)
         )
         this.implementationFingerprint = if (implementationFingerprint.trimAscii() == "") {
             modelPolicySha256Text(
-                definition.name + "\n" + version + "\n" + definition.description + "\n" +
-                    canonicalAgentValue(definition.inputSchema)
+                registeredDefinition.name + "\n" + version + "\n" + registeredDefinition.description + "\n" +
+                    canonicalAgentValue(registeredDefinition.inputSchema)
             )
         } else {
             implementationFingerprint.trimAscii()
@@ -210,10 +236,28 @@ public class ToolDescriptor {
         this.sideEffectResolver = sideEffectResolver
         this.approvalMetadataResolver = approvalMetadataResolver
         this.canonicalArgumentsResolver = canonicalArgumentsResolver
+        this.ownedCanonicalArgumentsResolver204 = ownedCanonicalArgumentsResolver204
         this.preparationReadResolver = preparationReadResolver
         this.preparationReadMayBeAbsent = preparationReadMayBeAbsent && preparationReadResolver.isSome()
         this.approvalMetadataValue = approvalMetadataValue
         this.networkPolicyResolver = networkPolicyResolver
+    }
+
+    func supervisedCopy(): ToolDescriptor {
+        ToolDescriptor(definition, capability, sideEffecting: sideEffecting,
+            concurrency: concurrency, additionalCapabilities: additionalCapabilities,
+            controlOnly: controlOnly, hostServiceOnly: hostServiceOnly, neverReplay: neverReplay,
+            implementationVersion: implementationVersion,
+            // Marking trust changes the frozen implementation identity.
+            implementationFingerprint: modelPolicySha256Text(implementationFingerprint + "\nsupervised-v1"),
+            supervisedExecutionSafe: true, capabilityResolver: capabilityResolver,
+            additionalCapabilityResolver: additionalCapabilityResolver,
+            sideEffectResolver: sideEffectResolver, approvalMetadataResolver: approvalMetadataResolver,
+            networkPolicyResolver: networkPolicyResolver, approvalMetadataValue: approvalMetadataValue,
+            canonicalArgumentsResolver: canonicalArgumentsResolver, ownedCanonicalArgumentsResolver204: ownedCanonicalArgumentsResolver204,
+            preparationReadResolver: preparationReadResolver, preparationReadMayBeAbsent: preparationReadMayBeAbsent,
+            planReviewSafe: planReviewSafe, planBindingInArguments: planBindingInArguments,
+            coreMetadataResolverClosed204: coreMetadataResolverClosed204)
     }
 
     public func resolved(call: ToolCall): ToolDescriptor {
@@ -237,6 +281,8 @@ public class ToolDescriptor {
             additionalCapabilities: resolvedAdditional.toArray(),
             implementationVersion: implementationVersion,
             implementationFingerprint: implementationFingerprint,
+            supervisedExecutionSafe: supervisedExecutionSafe, planReviewSafe: planReviewSafe, planBindingInArguments: planBindingInArguments,
+            coreMetadataResolverClosed204: coreMetadataResolverClosed204,
             networkPolicyResolver: networkPolicyResolver,
             approvalMetadataResolver: approvalMetadataResolver,
             approvalMetadataValue: Some(match (approvalMetadataValue) {
@@ -246,7 +292,7 @@ public class ToolDescriptor {
                     case None => defaultToolApprovalMetadata(resolvedCapability)
                 }
             }),
-            canonicalArgumentsResolver: canonicalArgumentsResolver, preparationReadResolver: preparationReadResolver,
+            canonicalArgumentsResolver: canonicalArgumentsResolver, ownedCanonicalArgumentsResolver204: ownedCanonicalArgumentsResolver204, preparationReadResolver: preparationReadResolver,
             preparationReadMayBeAbsent: preparationReadMayBeAbsent
         )
     }
@@ -281,13 +327,15 @@ public class ToolDescriptor {
             controlOnly: controlOnly, hostServiceOnly: hostServiceOnly,
             neverReplay: neverReplay, additionalCapabilities: additionalCapabilities.clone(),
             implementationVersion: version, implementationFingerprint: fingerprint,
+            supervisedExecutionSafe: supervisedExecutionSafe, planReviewSafe: planReviewSafe, planBindingInArguments: planBindingInArguments,
+            coreMetadataResolverClosed204: coreMetadataResolverClosed204,
             capabilityResolver: capabilityResolver, additionalCapabilityResolver: additionalCapabilityResolver,
             sideEffectResolver: sideEffectResolver, approvalMetadataResolver: approvalMetadataResolver,
             networkPolicyResolver: networkPolicyResolver, approvalMetadataValue: match (approvalMetadataValue) {
                 case Some(value) => Some(toolOwnedApprovalCopy(value))
                 case None => None
             },
-            canonicalArgumentsResolver: canonicalArgumentsResolver, preparationReadResolver: preparationReadResolver,
+            canonicalArgumentsResolver: canonicalArgumentsResolver, ownedCanonicalArgumentsResolver204: ownedCanonicalArgumentsResolver204, preparationReadResolver: preparationReadResolver,
             preparationReadMayBeAbsent: preparationReadMayBeAbsent)
         if (frozen.schemaDigest != schemaDigest) {
             throw IllegalArgumentException("tool schema changed after descriptor construction")
@@ -309,13 +357,21 @@ public class ToolDescriptor {
                 case None => nullValue()
             })
         ])
+        if (supervisedExecutionSafe) { identity.put("supervised_execution_safe", boolValue(true)) }
+        if (planReviewSafe) { identity.put("plan_review_safe", boolValue(true)) }
+        if (!planBindingInArguments) { identity.put("plan_binding_in_arguments", boolValue(false)) }
         if (preparationReadResolver.isSome()) { identity.put("preparation_read_resolver", boolValue(true)) }
         if (preparationReadMayBeAbsent) { identity.put("preparation_read_may_be_absent", boolValue(true)) }
         identity
     }
 
+    func nameForData204(): String { definitionValue.name }
+    func estimateTokensForData204(scratch: ?ToolTokenScratch204): Int64 {
+        estimateToolTokensData204(definitionValue.name, definitionValue.description,
+            definitionValue.inputSchema, scratch: scratch)
+    }
     func hasRawPreparedCallResolver204(): Bool {
-        canonicalArgumentsResolver.isSome() || preparationReadResolver.isSome()
+        canonicalArgumentsResolver.isSome() || ownedCanonicalArgumentsResolver204.isSome() || preparationReadResolver.isSome()
     }
     public func preparationRead(context: ToolInvocationContext, call: ToolCall): Result<?ToolPreparationRead> {
         let view = context.beginInvocationView159()
@@ -580,6 +636,11 @@ public interface ToolCatalogDataLease159 {
     func catalogProducerReturned159(): Bool
     func catalogReferencesReturned159(): (?LogicalJsonOwnerReservation, ?LogicalJsonOwnerReservation)
 }
+// Read-only evidence of an original legacy DATA alias blocker. This is not
+// a return proof and cannot alter the existing Catalog retirement guards.
+public interface ToolCatalogOriginalLegacyAliasPayment204 {
+    func originalLegacyAliasPaymentHeld204(): Bool
+}
 public interface ToolCatalogRetirableBacking159 {
     func backingProducerReturned159(): Bool
     func backingReferencesReturned159(): ?LogicalJsonOwnerReservation
@@ -608,6 +669,7 @@ public class ToolCatalog {
     private var rawAliases159 = false
     private var publicationFrames159: Int64 = 0
     private var hostConsumerFrames204: Int64 = 0
+    private var coreDataSourceFrames204: Int64 = 0
     private var pendingConsumerPayment204: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     private var dataOwners159: ?ToolCatalogDataLink159 = None<ToolCatalogDataLink159>
     private let ownerSeal = ToolCatalogSeal()
@@ -631,6 +693,33 @@ public class ToolCatalog {
                 index++
             }
             index == expected.size
+        } finally { lock.unlock() }
+    }
+    public func actualTransientConsumersReturned204(): Bool {
+        lock.lock(); try {
+            if (rawAliases159 || publicationFrames159 != 0 || hostConsumerFrames204 != 0 ||
+                coreDataSourceFrames204 != 0 || pendingConsumerPayment204.isSome()) { return false }
+            if (!dataClosed159) {
+                for (entry in registrations where !entry.activeExecutions.isEmpty()) { return false }
+            }
+            true
+        } finally { lock.unlock() }
+    }
+    public func originalLegacyAliasPaymentHeld204(): Bool {
+        lock.lock(); try {
+            var found = false
+            var cursor = dataOwners159
+            while (cursor.isSome()) {
+                let node = cursor.getOrThrow()
+                match (node.value.getOrThrow() as ToolCatalogOriginalLegacyAliasPayment204) {
+                    case Some(value) =>
+                        if (!value.originalLegacyAliasPaymentHeld204()) { return false }
+                        found = true
+                    case None => return false
+                }
+                cursor = node.next
+            }
+            found
         } finally { lock.unlock() }
     }
     // Called only after the caller's own producer/worker helpers return.
@@ -667,7 +756,7 @@ public class ToolCatalog {
         lock.lock()
         try {
             if (dataClosed159) { return true }
-            if (rawAliases159 || publicationFrames159 != 0 || hostConsumerFrames204 != 0 || pendingConsumerPayment204.isSome()) { return false }
+            if (rawAliases159 || publicationFrames159 != 0 || hostConsumerFrames204 != 0 || coreDataSourceFrames204 != 0 || pendingConsumerPayment204.isSome()) { return false }
             for (entry in registrations where !entry.activeExecutions.isEmpty()) { return false }
             var link = dataOwners159
             while (link.isSome()) {
@@ -717,6 +806,60 @@ public class ToolCatalog {
             value
         } finally { lock.unlock() }
     }
+    func prepareCoreDataScope204(pipeline: ToolPipeline, core: PlanCopyDataConsumer204, run: RunId): ?ToolCatalogCoreDataScope204 {
+        lock.lock(); try {
+            if (dataClosed159 || coreDataSourceFrames204 == Int64.Max) { throw IllegalStateException("Catalog DATA source has returned") }
+            match (snapshotPayment159) { case None => None<ToolCatalogCoreDataScope204>
+                case Some(original) =>
+                    let paid = original.reserveSnapshotCatalogData159(16384)
+                    let value = ToolCatalogCoreDataScope204(this, pipeline, core, run, paid)
+                    coreDataSourceFrames204++; Some(value) }
+        } finally { lock.unlock() }
+    }
+    func coreDataSourceReturned204(): Unit {
+        lock.lock(); try {
+            if (coreDataSourceFrames204 < 1) { throw IllegalStateException("Catalog DATA source count underflow") }
+            coreDataSourceFrames204--
+        } finally { lock.unlock() }
+    }
+    public func openPlanIdentityCopy204(threadId: ?ThreadId): ?ToolCatalogIdentityOwner204 {
+        let owner = producePlanIdentityCopyFrame204(threadId, None<CapabilitySet>)
+        match (owner) { case Some(value) => value.producerFrameReturned204(); case None => () }
+        owner
+    }
+    public func openToolIdentitiesFor204(capabilities: CapabilitySet, threadId: ?ThreadId): ?ToolCatalogIdentityOwner204 {
+        let owner = producePlanIdentityCopyFrame204(threadId, Some(capabilities))
+        match (owner) { case Some(value) => value.producerFrameReturned204(); case None => () }
+        owner
+    }
+    private func producePlanIdentityCopyFrame204(threadId: ?ThreadId,
+        capabilities: ?CapabilitySet): ?ToolCatalogIdentityOwner204 {
+        lock.lock(); try {
+            if (dataClosed159) { throw IllegalStateException("Catalog DATA source has returned") }
+            let original = match (snapshotPayment159) { case Some(value) => value; case None => return None<ToolCatalogIdentityOwner204> }
+            let paid = original.reserveSnapshotCatalogData159(131072)
+            let owner = ToolCatalogIdentityOwner204(paid)
+            let meter = ToolSnapshotMeasure159(paid)
+            var count: Int64 = 0
+            for (item in registrations where item.active && !item.revoked && toolRegistrationVisible(item, threadId) &&
+                !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly &&
+                (capabilities.isNone() || item.descriptor.capabilitiesAllow159(capabilities.getOrThrow()))) {
+                count++; meter.addText159(item.descriptor.nameForData204()); meter.addText159(item.descriptor.implementationVersion)
+                meter.addText159(item.descriptor.implementationFingerprint); meter.addText159(item.descriptor.schemaDigest)
+            }
+            meter.addSlots159(count * 2); meter.fund159()
+            let entries = ArrayList<ToolCatalogIdentity204>()
+            for (item in registrations where item.active && !item.revoked && toolRegistrationVisible(item, threadId) &&
+                !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly &&
+                (capabilities.isNone() || item.descriptor.capabilitiesAllow159(capabilities.getOrThrow()))) {
+                entries.add(ToolCatalogIdentity204(copyTextData204(item.descriptor.nameForData204()),
+                    copyTextData204(item.descriptor.implementationVersion), copyTextData204(item.descriptor.implementationFingerprint),
+                    copyTextData204(item.descriptor.schemaDigest)))
+            }
+            owner.installFrame204(entries.toArray()); Some(owner)
+        } finally { lock.unlock() }
+    }
+
     func prepareHostConsumer204(pipeline: ToolPipeline, context: ToolInvocationContext): ?ToolCatalogHostConsumer204 {
         lock.lock()
         try {
@@ -753,6 +896,7 @@ public class ToolCatalog {
         try { if (!dataClosed159) { rawAliases159 = true } }
         finally { lock.unlock() }
     }
+
     public func register(
         descriptor: ToolDescriptor,
         executor: ToolExecutor
@@ -796,6 +940,65 @@ public class ToolCatalog {
         } finally {
             lock.unlock()
         }
+    }
+
+    func reviewControlNames159(snapshot: SharedToolSetSnapshot159, thread: ThreadId): Array<String> {
+        let names = ArrayList<String>()
+        lock.lock()
+        try {
+            for (item in registrations where !item.revoked && item.descriptor.planReviewSafe && item.descriptor.supervisedExecutionSafe &&
+                !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly && toolRegistrationVisible(item, Some(thread))) {
+                if (snapshot.planReviewSafeExport159(item.descriptor.definition.name, item.descriptor.implementationVersion,
+                    item.descriptor.implementationFingerprint, item.descriptor.schemaDigest)) {
+                    names.add(String.fromUtf8(item.descriptor.definition.name.toArray()))
+                }
+            }
+            names.toArray()
+        } finally { lock.unlock() }
+    }
+    func reviewControlNames159(snapshot: ToolSetSnapshot, thread: ThreadId): Array<String> {
+        let names = ArrayList<String>()
+        lock.lock()
+        try {
+            for (entry in snapshot.entries where entry.availableAtSnapshot && entry.planReviewSafe) {
+                for (item in registrations where !item.revoked && item.descriptor.planReviewSafe && item.descriptor.supervisedExecutionSafe &&
+                    !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly && toolRegistrationVisible(item, Some(thread))) {
+                    if (item.descriptor.definition.name == entry.name && item.descriptor.implementationVersion == entry.executorVersion &&
+                        item.descriptor.implementationFingerprint == entry.implementationFingerprint && item.descriptor.schemaDigest == entry.schemaDigest) {
+                        names.add(String.fromUtf8(entry.name.toArray())); break
+                    }
+                }
+            }
+            names.toArray()
+        } finally { lock.unlock() }
+    }
+
+    // Host composition must call this only for compiled, scope-normalizing
+    // builtins before freezing a Run snapshot. A replacement registration does
+    // not inherit trust. Existing snapshots keep their old immutable identity.
+    public func markSupervisedSafe(name: String): Result<Unit> {
+        lock.lock()
+        try {
+            for (index in 0..registrations.size) {
+                let item = registrations[index]
+                if (!item.active || item.revoked || item.descriptor.definition.name != name) { continue }
+                if (item.descriptor.supervisedExecutionSafe) { return Result.Ok(()) }
+                if (!item.activeExecutions.isEmpty()) {
+                    return planExecutionError("plan.tool_contract_in_use", "cannot change a running tool execution contract")
+                }
+                if (item.owner.isSome()) {
+                    return planExecutionError("plan.owned_tool_contract_immutable", "owned contributions must declare supervision in their authenticated host publication")
+                }
+                let replacement = ToolRegistration(item.descriptor.supervisedCopy(), item.executor)
+                item.active = false
+                // Preserve model catalog ordering. Retain the prior immutable
+                // identity separately for already-frozen Run snapshots.
+                registrations[index] = replacement
+                registrations.add(item)
+                return Result.Ok(())
+            }
+            planExecutionError("plan.tool_contract_missing", "trusted builtin is not registered")
+        } finally { lock.unlock() }
     }
 
     // Candidates are staged before mutation, then published by one locked list replacement.
@@ -1336,6 +1539,58 @@ public class ToolCatalog {
     // the same active registration lookup and never resolves call-dependent policy.
     // Data observation only: no executor, registration, Source or invocation
     // capability escapes. The existing finder applies active/revoked/scope.
+    func findCoreBorrowed204(scope: ToolCatalogCoreDataScope204, name: String, threadId: ?ThreadId): ?ToolRegistration {
+        if (!scope.belongsToCatalog204(this)) { throw IllegalStateException("Catalog registration has no active private consumer") }
+        lock.lock()
+        try {
+            for (item in registrations where item.active && !item.revoked && item.descriptor.nameForData204() == name && toolRegistrationVisible(item, threadId)) {
+                return Some(item)
+            }
+            None
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func findRegisteredCoreBorrowed204(scope: ToolCatalogCoreDataScope204, name: String, threadId: ?ThreadId): ?ToolRegistration {
+        if (!scope.belongsToCatalog204(this)) { throw IllegalStateException("Catalog registration has no active private consumer") }
+        lock.lock()
+        try {
+            var selected: ?ToolRegistration = None
+            var selectedIsActive = false
+            for (item in registrations where item.descriptor.nameForData204() == name && !item.revoked && toolRegistrationVisible(item, threadId)) {
+                if (item.active) {
+                    selected = Some(item)
+                    selectedIsActive = true
+                } else if (!selectedIsActive) {
+                    selected = Some(item)
+                }
+            }
+            selected
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func findForSharedSnapshotCoreBorrowed204(scope: ToolCatalogCoreDataScope204, snapshot: SharedToolSetSnapshot159, name: String, threadId: ThreadId): ?ToolRegistration {
+        if (!scope.belongsToCatalog204(this)) { throw IllegalStateException("Catalog registration has no active private consumer") }
+        if (!snapshot.permitsThread159(threadId)) { return None<ToolRegistration> }
+        lock.lock()
+        try {
+            for (item in registrations where item.descriptor.nameForData204() == name && !item.revoked) {
+                if (snapshot.matchesRegistration159(name, item.descriptor.implementationVersion,
+                    item.descriptor.implementationFingerprint, item.descriptor.schemaDigest, toolRegistrationThread(item))) {
+                    return Some(item)
+                }
+            }
+            None<ToolRegistration>
+        } finally { lock.unlock() }
+    }
+
+    // Pure publication classification for trusted host composition. This borrows
+    // the same active registration lookup and never resolves call-dependent policy.
+    // Data observation only: no executor, registration, Source or invocation
+    // capability escapes. The existing finder applies active/revoked/scope.
     public func publicationRetainsExecutor(name: String, expected: ToolExecutor,
         threadId!: ?ThreadId = Option<ThreadId>.None): Bool {
         lock.lock()
@@ -1382,6 +1637,20 @@ public class ToolCatalog {
         } finally { lock.unlock() }
     }
 
+    // Match the same first live registration as the public identity lookup,
+    // without exporting its descriptor or introducing additional constraints.
+    public func publishedToolIdentityMatches204(name: String, version: String,
+        fingerprint: String, threadId: ?ThreadId): Bool {
+        lock.lock(); try {
+            if (dataClosed159) { return false }
+            for (item in registrations where item.active && !item.revoked &&
+                item.descriptor.nameForData204() == name && toolRegistrationVisible(item, threadId)) {
+                return item.descriptor.implementationVersion == version &&
+                    item.descriptor.implementationFingerprint == fingerprint
+            }
+            false
+        } finally { lock.unlock() }
+    }
     public func publishedDescriptor(name: String, threadId!: ?ThreadId = None): ?ToolDescriptor {
         recordRawCatalogAlias159()
         match (find(name, threadId: threadId)) {
@@ -1435,6 +1704,34 @@ public class ToolCatalog {
         } finally { lock.unlock() }
     }
 
+    public func estimateDefinitionsTokens204(capabilities: CapabilitySet, threadId: ?ThreadId): Int64 {
+        let result = estimateDefinitionsTokensFrame204(capabilities, threadId)
+        // The complete private Catalog/schema traversal frame has returned.
+        match (result[1]) { case Some(value) => value.returnWholeEstimate204(); case None => () }
+        result[0]
+    }
+    private func estimateDefinitionsTokensFrame204(capabilities: CapabilitySet,
+        threadId: ?ThreadId): (Int64, ?ToolTokenScratch204) {
+        lock.lock(); try {
+            if (dataClosed159) { throw IllegalStateException("Catalog DATA has returned") }
+            let scratch: ?ToolTokenScratch204 = match (snapshotPayment159) {
+                case Some(value) => Some(ToolTokenScratch204(value.reserveSnapshotCatalogData159(131072)))
+                // An existing fixture-only Catalog does not invent a bank.
+                case None => None<ToolTokenScratch204>
+            }
+            var tokens: Int64 = 0
+            for (item in registrations where item.active && !item.revoked && toolRegistrationVisible(item, threadId) &&
+                !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly &&
+                item.descriptor.capabilitiesAllow159(capabilities)) {
+                tokens += item.descriptor.estimateTokensForData204(scratch)
+            }
+            (tokens, scratch)
+        } catch (error: Exception) {
+            // No exception asserts a concrete source/scratch return. The
+            // Runtime debt root retains any constructed scratch owner.
+            rawAliases159 = true; throw error
+        } finally { lock.unlock() }
+    }
     public func definitionsFor(capabilities: CapabilitySet, threadId!: ?ThreadId = None): Array<ModelToolDefinition> {
         recordRawCatalogAlias159()
         lock.lock()
@@ -1674,6 +1971,7 @@ public class ToolCatalog {
                 required,
                 implementationFingerprint: item.descriptor.implementationFingerprint,
                 schemaDigest: item.descriptor.schemaDigest,
+                planReviewSafe: item.descriptor.planReviewSafe && item.descriptor.supervisedExecutionSafe,
                 availableAtSnapshot: allowed
             ))
         }
@@ -1992,8 +2290,11 @@ public class ToolPipeline {
     private let audit: AuditPort
     private let ids: IdGenerator
     private let permissions: PermissionRepository
+    private let plans: ?PlanExecutionPort
     private let hostConsumerLock204 = Mutex()
     private var hostConsumers204: ?ToolCatalogHostConsumer204 = None<ToolCatalogHostConsumer204>
+    private let coreCatalogDataLock204 = Mutex()
+    private var coreCatalogData204: ?ToolCatalogCoreDataScope204 = None<ToolCatalogCoreDataScope204>
 
     public init(
         catalog: ToolCatalog,
@@ -2002,7 +2303,8 @@ public class ToolPipeline {
         ids: IdGenerator,
         validator!: ToolArgumentValidator = ObjectArgumentValidator(),
         policy!: CapabilityPolicy = DefaultCapabilityPolicy(),
-        permissions!: PermissionRepository = MemoryPermissionRepository()
+        permissions!: PermissionRepository = MemoryPermissionRepository(),
+        plans!: ?PlanExecutionPort = None
     ) {
         this.catalog = catalog
         this.validator = validator
@@ -2011,6 +2313,7 @@ public class ToolPipeline {
         this.audit = audit
         this.ids = ids
         this.permissions = permissions
+        this.plans = plans
     }
     private func copyPlanValueFrame204(context: ToolInvocationContext,
         plan: NormalizedOperationPlan): ?OwnedPreparedPlanUtf8204 {
@@ -2049,7 +2352,16 @@ public class ToolPipeline {
         prepared: PreparedToolInvocation): ?OwnedPreparedPlanUtf8204 {
         let action = beginRegistrationConsumer204(context)
         match (action) {
-            case None => return None<OwnedPreparedPlanUtf8204>
+            case None =>
+                let receiver = match (corePlanCopyConsumer204(context)) {
+                    case Some(value) => value
+                    case None => return None<OwnedPreparedPlanUtf8204>
+                }
+                let payment = receiver.derivePlanWireAllocation204(context.runId, 131072)
+                let copied = OwnedPreparedPlanUtf8204(payment)
+                copied.installPlanFrame204(prepared.borrowOperationPlanFrame204())
+                copied.producerFrameReturned204()
+                return Some(copied)
             case Some(value) =>
                 var returned = false
                 try {
@@ -2149,9 +2461,91 @@ public class ToolPipeline {
             None<ToolCatalogHostConsumer204>
         } finally { hostConsumerLock204.unlock() }
     }
+    private func coreCatalogDataScope204(context: ToolInvocationContext): ?ToolCatalogCoreDataScope204 {
+        if (hostConsumerForContext204(context).isSome()) { return None<ToolCatalogCoreDataScope204> }
+        let core = match (corePlanCopyConsumer204(context)) { case Some(value) => value; case None => return None<ToolCatalogCoreDataScope204> }
+        coreCatalogDataLock204.lock(); try {
+            var cursor = coreCatalogData204
+            while (cursor.isSome()) {
+                let value = cursor.getOrThrow()
+                if (value.matches204(catalog, context.runId, core)) { return Some(value) }
+                cursor = value.nextPipeline204
+            }
+            let scope = match (catalog.prepareCoreDataScope204(this, core, context.runId)) {
+                case Some(value) => value; case None => return None<ToolCatalogCoreDataScope204> }
+            scope.nextPipeline204 = coreCatalogData204; coreCatalogData204 = Some(scope)
+            try { core.retainCatalogSource204(context.runId, scope) }
+            catch (error: Exception) { scope.holdUnknown204(); throw error }
+            Some(scope)
+        } finally { coreCatalogDataLock204.unlock() }
+    }
+    func removeCoreCatalogDataScope204(scope: ToolCatalogCoreDataScope204): Unit {
+        coreCatalogDataLock204.lock(); try {
+            var previous: ?ToolCatalogCoreDataScope204 = None<ToolCatalogCoreDataScope204>
+            var cursor = coreCatalogData204
+            while (cursor.isSome()) {
+                let value = cursor.getOrThrow()
+                if (refEq(value, scope)) {
+                    match (previous) { case Some(parent) => parent.nextPipeline204 = value.nextPipeline204; case None => coreCatalogData204 = value.nextPipeline204 }
+                    value.nextPipeline204 = None<ToolCatalogCoreDataScope204>; return
+                }
+                previous = cursor; cursor = value.nextPipeline204
+            }
+            throw IllegalStateException("Catalog Core DATA source loan is missing")
+        } finally { coreCatalogDataLock204.unlock() }
+    }
+    private func pipelineCall204(context: ToolInvocationContext, prepared: PreparedToolInvocation): ToolCall {
+        match (context.paidExecutionFailureConsumer173()) {
+            case Some(actual) => prepared.borrowCallForCore204(actual)
+            case None => prepared.call
+        }
+    }
+    private func retainCorePrepared204(context: ToolInvocationContext, value: PreparedToolInvocation): Unit {
+        match (coreCatalogDataScope204(context)) { case Some(scope) => scope.retainPrepared204(value); case None => () }
+    }
+    private func retainCorePreparation204(context: ToolInvocationContext, value: Result<ToolPreparation>): Result<ToolPreparation> {
+        let scope = match (coreCatalogDataScope204(context)) { case Some(value) => value; case None => return value }
+        match (value) {
+            case Result.Ok(ToolPreparation.Ready(prepared)) => scope.retainPrepared204(prepared); value
+            case Result.Ok(ToolPreparation.NeedsApproval(prepared, _)) =>
+                scope.retainPrepared204(prepared); Result.Ok(ToolPreparation.NeedsApproval(prepared, prepared.borrowApprovalFrame204().getOrThrow()))
+            case Result.Ok(ToolPreparation.Completed(result)) => Result.Ok(ToolPreparation.Completed(scope.copyToolResult204(result)))
+            case Result.Ok(ToolPreparation.Denied(denial)) => Result.Ok(ToolPreparation.Denied(scope.copyDenial204(denial)))
+            case Result.Err(error) => Result.Err(scope.copyError204(error)) }
+    }
+    private func retainCorePreparedValue204(context: ToolInvocationContext, value: Result<PreparedToolInvocation>): Result<PreparedToolInvocation> {
+        match (value) { case Result.Ok(prepared) => retainCorePrepared204(context, prepared); value
+            case Result.Err(error) => match (coreCatalogDataScope204(context)) { case Some(scope) => Result.Err(scope.copyError204(error)); case None => value } }
+    }
+    private func retainCoreAuthorization204(context: ToolInvocationContext, value: Result<ToolAuthorization>): Result<ToolAuthorization> {
+        let scope = match (coreCatalogDataScope204(context)) { case Some(value) => value; case None => return value }
+        match (value) { case Result.Ok(ToolAuthorization.Ready(prepared)) => scope.retainPrepared204(prepared); value
+            case Result.Ok(ToolAuthorization.Completed(result)) => Result.Ok(ToolAuthorization.Completed(scope.copyToolResult204(result)))
+            case Result.Ok(ToolAuthorization.Denied(denial)) => Result.Ok(ToolAuthorization.Denied(scope.copyDenial204(denial)))
+            case Result.Err(error) => Result.Err(scope.copyError204(error)) }
+    }
+    private func holdCoreCatalogData204(context: ToolInvocationContext): Unit {
+        let core = match (corePlanCopyConsumer204(context)) { case Some(value) => value; case None => return }
+        coreCatalogDataLock204.lock(); try {
+            var cursor = coreCatalogData204
+            while (cursor.isSome()) {
+                let value = cursor.getOrThrow()
+                if (value.matches204(catalog, context.runId, core)) { value.holdUnknown204(); return }
+                cursor = value.nextPipeline204
+            }
+        } finally { coreCatalogDataLock204.unlock() }
+    }
+
     private func beginRegistrationConsumer204(context: ToolInvocationContext): ?ToolCatalogHostConsumerAction204 {
         match (hostConsumerForContext204(context)) {
-            case None => None<ToolCatalogHostConsumerAction204>
+            case None =>
+                match (coreCatalogDataScope204(context)) { case Some(value) =>
+                    if ((validator as ObjectArgumentValidator).isNone() || (policy as DefaultCapabilityPolicy).isNone() ||
+                        ((permissions as MemoryPermissionRepository).isNone() && (permissions as CatalogPermissionGrantDataPort204).isNone())) {
+                        value.holdUnknown204()
+                    }
+                    case None => () }
+                None<ToolCatalogHostConsumerAction204>
             case Some(value) =>
                 // Unknown validators receive a ModelToolDefinition and may
                 // keep it. They retain the real backing, before that export.
@@ -2162,10 +2556,291 @@ public class ToolPipeline {
         }
     }
 
+    public func canonicalImmediatePlan204(context: ToolInvocationContext, call: ToolCall): ?NormalizedOperationPlan {
+        let scope = coreCatalogDataScope204(context)
+        try {
+            let registration = match (registrationForRun(context, call.name, newPreparation: true)) {
+                case Some(value) => value; case None => return None<NormalizedOperationPlan> }
+            let plan = normalizedToolOperationPlan(context, call, registration.descriptor.resolved(call))
+            match (scope) { case Some(value) => Some(value.copyPlan204(plan)); case None => Some(plan) }
+        } catch (error: Exception) {
+            match (scope) { case Some(value) => value.holdUnknown204(); case None => () }; throw error
+        }
+    }
+
     public func operationRuntime(): OperationRuntimePort {
         operations
     }
 
+    public func reviewControlToolNames(snapshot: SharedToolSetSnapshot159, thread: ThreadId): Array<String> {
+        catalog.reviewControlNames159(snapshot, thread)
+    }
+    public func reviewControlToolNames(snapshot: ToolSetSnapshot, thread: ThreadId): Array<String> {
+        catalog.reviewControlNames159(snapshot, thread)
+    }
+
+    public func planExecutionRuntime(): ?PlanExecutionPort { plans }
+
+    private func ensurePlanExecution(context: ToolInvocationContext): Result<Bool> {
+        if (context.planReviewControl) { return Result.Ok(false) }
+        let runtime = match (plans) {
+            case Some(value) => value
+            case None => return Result.Ok(false)
+        }
+        match (runtime.executionForRun(context.runId)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(Some(_)) => return Result.Ok(true)
+            case Result.Ok(None) => ()
+        }
+        match (runtime.executionForSession(context.sessionId.value)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(None) => Result.Ok(false)
+            case Result.Ok(Some(executionId)) => match (runtime.bindRun(executionId, context.sessionId.value, context.runId)) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) => Result.Ok(true)
+            }
+        }
+    }
+
+    // Called after canonical Operation preparation, before approval or effects.
+    // Repeating admission for the same Operation never replenishes an attempt.
+    public func admitPrepared(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<Unit> {
+        let frame = beginRegistrationConsumer204(context)
+        var returned = false
+        try {
+            let answer = admitPreparedFrame204(context, prepared)
+            returned = true
+            answer
+        } catch (error: Exception) {
+            match (frame) { case Some(value) => value.holdUnknown204(); case None => () }; throw error
+        } finally {
+            if (returned) { match (frame) { case Some(value) => value.returnedWholeAction204(); case None => () } }
+        }
+    }
+
+    private func admitPreparedFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<Unit> {
+        let initializationRead = initializationReadSource(prepared.source)
+        let reviewReadChild = context.planReviewControl && prepared.source.kind == PreparedInvocationSourceKind.Derived &&
+            prepared.source.parentOperationId.isSome() && prepared.source.operationRoot.isSome() &&
+            isReadViewServiceChildPlan(prepared.borrowOperationPlanFrame204())
+        if (!initializationRead && !reviewReadChild) {
+            match (validatePlanReviewControl(context, prepared.borrowOperationPlanFrame204())) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
+            }
+        } else if (initializationRead && !isContextReadPlan(prepared.borrowOperationPlanFrame204())) {
+            return planExecutionError("plan.initialization_read_invalid", "initialization source must keep its canonical read-only contract")
+        }
+        let supervised = match (ensurePlanExecution(context)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        if (!supervised && !context.planReviewControl) { return Result.Ok(()) }
+        let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name,
+            allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name))) {
+            case Some(value) => value
+            case None => return planExecutionError("plan.tool_contract_missing", "supervised tool registration is unavailable")
+        }
+        if (!registration.descriptor.supervisedExecutionSafe && !initializationRead &&
+            !inheritedHostSource(prepared.source, registration.descriptor, pipelineCall204(context, prepared).name)) {
+            return planExecutionError("plan.tool_contract_required", "tool has no trusted supervised execution contract")
+        }
+        if (context.planReviewControl && !initializationRead && !reviewReadChild) {
+            if (!registration.descriptor.planReviewSafe) { return planExecutionError("plan.review_control_denied", "tool lacks its authenticated review contract") }
+            return Result.Ok(())
+        }
+        if (pipelineCall204(context, prepared).name == "bash" && detachedSupervisedBash(prepared.borrowOperationPlanFrame204().canonicalArguments)) {
+            return planExecutionError("plan.bash_detached_denied", "supervised bash must finish in its admitted Operation")
+        }
+        if (pipelineCall204(context, prepared).name == "bash" && !networkPolicyModeIsDenied(prepared.borrowOperationPlanFrame204().networkPolicy.mode)) {
+            return planExecutionError("plan.bash_network_denied", "supervised bash must use denied network policy")
+        }
+        let runtime = match (plans) {
+            case Some(value) => value
+            case None => return planExecutionError("plan.execution_runtime_missing", "plan execution runtime is unavailable")
+        }
+        match (runtime as PlanExecutionDataPort204) {
+            case Some(receiver) => match (copyPreparedPlanUtf8204(context, prepared)) {
+                case Some(bytes) =>
+                    let answer = receiver.admitOwnedPlan204(context.runId, prepared.operationId,
+                        prepared.borrowPlanStepIdFrame204(), prepared.borrowPlanActionIdFrame204(), bytes)
+                    bytes.closeAfterWholeCaller204()
+                    return answer
+                case None => ()
+            }
+            case None => ()
+        }
+        planExecutionError("plan.owned_admission_required",
+            "supervised admission requires the actual paid owned-plan consumer and receiver")
+    }
+
+
+    // Preparation-only classification. Execution still requires the actual
+    // canonical source row and same-transaction Store provenance checks.
+    private func initializationReadSource(source: PreparedInvocationSource): Bool {
+        if (source.kind != PreparedInvocationSourceKind.Direct || source.parentOperationId.isSome() ||
+            source.parentCallId != "" || source.requestKey != "") { return false }
+        match (source.contextReadAdmission) {
+            case Some(value) => if (value.validateLive().isOk()) { return true }
+            case None => ()
+        }
+        match (source.operationRoot) {
+            case Some(OperationRootSource.Direct(root)) => match (root.origin) {
+                case DirectCallOrigin.ContextRead(_) => root.validateLiveSource().isOk()
+                case _ => false
+            }
+            case _ => false
+        }
+    }
+    private func inheritedHostSource(source: PreparedInvocationSource, descriptor: ToolDescriptor, name: String): Bool {
+        source.kind == PreparedInvocationSourceKind.Derived && source.parentOperationId.isSome() &&
+            source.operationRoot.isSome() && source.parentCallId != "" && source.requestKey != "" &&
+            descriptor.hostServiceOnly && hostServiceSourceAllowed(source, name)
+    }
+
+    private func canonicalizedInvocationCall204(context: ToolInvocationContext, call: ToolCall,
+        descriptor: ToolDescriptor): Result<ToolCall> {
+        if (!descriptor.hasOwnedCanonicalArguments204()) { return descriptor.canonicalizedCall(context, call) }
+        // The old direct/Host contract remains conservative. Only actual Core
+        // DATA consumers can accept this separate paid producer protocol.
+        let scope = match (coreCatalogDataScope204(context)) { case Some(value) => value
+            case None => return descriptor.canonicalizedCall(context, call) }
+        let owner = match (descriptor.ownedCanonicalArguments204(context, call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => scope.holdUnknown204(); return Result.Err(scope.copyError204(error)) }
+        let copied = try { copyCanonicalOutcomeFrame204(scope, owner, call) }
+        catch (error: Exception) { owner.holdUnknownConsumer204(); scope.holdUnknown204(); throw error }
+        // The complete independent copy frame, including every original
+        // outcome/call/DOM reference, has returned before this DATA-only ACK.
+        owner.returnCopiedConsumerFrame204()
+        copied
+    }
+    private func copyCanonicalOutcomeFrame204(scope: ToolCatalogCoreDataScope204,
+        owner: ToolCanonicalArgumentsOwner204, call: ToolCall): Result<ToolCall> {
+        scope.requireCanonicalOwnerBank204(owner)
+        owner.beginConsumer204()
+        owner.withOutcome204<Result<ToolCall>>({ outcome => match (outcome) {
+            case Result.Ok(arguments) => if (arguments.unifiedKind == ValueKind.Object) {
+                Result.Ok(scope.copyCanonicalCall204(call, arguments))
+            } else { Result.Err(AgentError(AgentErrorKind.InvalidInput,"tool.normalized_arguments_invalid",
+                "normalized tool arguments must be an object")) }
+            case Result.Err(error) => Result.Err(scope.copyError204(error)) } })
+    }
+
+    private func normalizedInvocationPlan(context: ToolInvocationContext, call: ToolCall,
+        descriptor: ToolDescriptor, contextReadFacts!: Array<ContextReadFactLink> = [],
+        initializationReadControl!: Bool = false): Result<NormalizedOperationPlan> {
+        let roots = match (approvedProcessWriteRoots(context, call.name)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        Result.Ok(normalizedToolOperationPlan(context, call, descriptor, approvedWriteRoots: roots, contextReadFacts: contextReadFacts, initializationReadControl: initializationReadControl))
+    }
+
+    private func openPaidPlanRead204(context: ToolInvocationContext, scopeOnly: Bool): Result<PlanExecutionReadOwner204> {
+        let runtime = match (plans) { case Some(value) => value
+            case None => return planExecutionError("plan.execution_runtime_missing", "plan runtime is unavailable") }
+        let reader = match (runtime as PlanExecutionReadDataPort204) { case Some(value) => value
+            case None => return planExecutionError("plan.paid_read_required", "supervised preparation requires the paid projection port") }
+        let payer = match (catalog.reserveRegistryData180(4096)) { case Some(value) => value
+            case None => return planExecutionError("plan.read_bank_missing", "supervised preparation requires the actual Registry DATA bank") }
+        let answer = if (scopeOnly) { reader.openRunScope204(context.runId, payer) }
+            else { reader.openBinding204(context.runId, payer) }
+        payer.close()
+        answer
+    }
+    private func corePlanCopyConsumer204(context: ToolInvocationContext): ?PlanCopyDataConsumer204 {
+        match (context.paidExecutionFailureConsumer173()) {
+            case Some(value) => value as PlanCopyDataConsumer204
+            case None => None<PlanCopyDataConsumer204>
+        }
+    }
+    private func retainPlanReadCopies204(context: ToolInvocationContext,
+        owner: PlanExecutionReadOwner204): Result<LogicalJsonOwnerReservation> {
+        match (hostConsumerForContext204(context)) {
+            case Some(actual) =>
+                let payment = owner.deriveRetainedAllocation204(131072)
+                actual.retainPlanReadAllocation204(payment)
+                return Result.Ok(payment)
+            case None => ()
+        }
+        let actual = match (corePlanCopyConsumer204(context)) { case Some(value) => value
+            case None => return planExecutionError("plan.read_consumer_missing", "plan copies require their actual owning consumer") }
+        let payment = owner.deriveRetainedAllocation204(131072)
+        actual.retainPlanReadAllocation204(context.runId, payment)
+        Result.Ok(payment)
+    }
+    private func inferApprovedAction(context: ToolInvocationContext, plan: NormalizedOperationPlan): Result<(String, String)> {
+        let owner = match (openPaidPlanRead204(context, false)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let consumer = owner.beginConsumer204()
+        let result = try { inferApprovedActionFrame204(context, plan, owner, consumer) }
+        catch (error: Exception) { owner.holdUnknownConsumer204(); throw error }
+        consumer.returnConsumerFrame204(); owner.closeAfterCaller204()
+        result
+    }
+    private func inferApprovedActionFrame204(context: ToolInvocationContext, plan: NormalizedOperationPlan,
+        owner: PlanExecutionReadOwner204, consumer: PlanExecutionReadConsumer204): Result<(String, String)> {
+        let copyPayment = match (retainPlanReadCopies204(context, owner)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let state = consumer.value204()
+        let meter = ToolSnapshotMeasure159(copyPayment)
+        meter.addValue159(state); meter.fund159()
+        let rawContract = match (state.field("contract_view")) { case Some(value) => value
+            case None => return planExecutionError("plan.binding_unavailable", "approved contract view is unavailable") }
+        let contract = match (parsePlanContractProjection(rawContract)) { case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error) }
+        let allowed = match (state.field("runnable_action_ids")) { case Some(value) => value
+            case None => return planExecutionError("plan.binding_unavailable", "runnable approved actions are unavailable") }
+        var selectedStep = ""; var selectedAction = ""; var matches: Int64 = 0
+        for (step in contract.steps) {
+            for (action in step.actions) {
+                var runnable = false
+                for (id in allowed.items where id.unifiedKind == ValueKind.Text && id.text == action.id) { runnable = true }
+                if (runnable && planActionAllows(contract, action, plan)) {
+                    matches += 1; selectedStep = step.id.value; selectedAction = action.id
+                }
+            }
+        }
+        if (matches != 1) { return planExecutionError("plan.binding_ambiguous", "canonical Native call must match exactly one runnable approved action") }
+        Result.Ok((String.fromUtf8(selectedStep.toArray()), String.fromUtf8(selectedAction.toArray())))
+    }
+
+    private func approvedProcessWriteRoots(context: ToolInvocationContext, toolName: String): Result<Array<String>> {
+        if (toolName != "bash" && toolName != "command_probe") { return Result.Ok([]) }
+        let supervised = match (ensurePlanExecution(context)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        if (!supervised) { return Result.Ok([]) }
+        let owner = match (openPaidPlanRead204(context, true)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let consumer = owner.beginConsumer204()
+        let result = try { approvedProcessWriteRootsFrame204(context, owner, consumer) }
+        catch (error: Exception) { owner.holdUnknownConsumer204(); throw error }
+        consumer.returnConsumerFrame204(); owner.closeAfterCaller204()
+        result
+    }
+    private func approvedProcessWriteRootsFrame204(context: ToolInvocationContext,
+        owner: PlanExecutionReadOwner204, consumer: PlanExecutionReadConsumer204): Result<Array<String>> {
+        let copyPayment = match (retainPlanReadCopies204(context, owner)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let projection = consumer.value204()
+        let meter = ToolSnapshotMeasure159(copyPayment)
+        meter.addValue159(projection); meter.fund159()
+        let rawRoots = match (projection.field("target_roots")) {
+            case Some(value) => value
+            case None => return planExecutionError("plan.process_scope_missing", "approved process target roots are unavailable")
+        }
+        if (rawRoots.unifiedKind != ValueKind.List || rawRoots.items.isEmpty()) {
+            return planExecutionError("plan.process_scope_missing", "approved process target roots must be nonempty")
+        }
+        let roots = ArrayList<String>()
+        for (root in rawRoots.items) {
+            if (root.unifiedKind != ValueKind.Text || !Path(root.text).isAbsolute() ||
+                Path(root.text).normalize().toString() != root.text || planContains(roots.toArray(), root.text)) {
+                return planExecutionError("plan.process_scope_invalid", "approved process target roots must be canonical paths")
+            }
+            roots.add(String.fromUtf8(root.text.toArray()))
+        }
+        Result.Ok(roots.toArray())
+    }
 
     private func registrationConsumerBody204<T>(action: () -> T): T { action() }
 
@@ -2221,7 +2896,10 @@ public class ToolPipeline {
         // Arbitrary resolvers may return a graph from their captured catalog.
         // Public Prepared.call and deferred reads remain compatibility Raw.
         if (descriptor.hasRawPreparedCallResolver204()) {
-            match (hostConsumerForContext204(context)) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (hostConsumerForContext204(context)) { case Some(value) => value.holdUnknown204()
+                case None => if (!descriptor.coreMetadataResolverClosed204) {
+                    match (coreCatalogDataScope204(context)) { case Some(value) => value.holdUnknown204(); case None => () }
+                } }
         }
     }
     private func registrationForRun(
@@ -2248,7 +2926,9 @@ public class ToolPipeline {
         if (allowHostService && hostServiceNameAllowed(name)) {
             let fallback204 = match (consumer204) {
                 case Some(scope) => catalog.findBorrowed204(scope, name, Some(ThreadId(context.sessionId.value)))
-                case None => catalog.find(name, threadId: Some(ThreadId(context.sessionId.value))) }
+                case None => match (coreCatalogDataScope204(context)) {
+                    case Some(scope) => catalog.findCoreBorrowed204(scope, name, Some(ThreadId(context.sessionId.value)))
+                    case None => catalog.find(name, threadId: Some(ThreadId(context.sessionId.value))) } }
             match (fallback204) {
                 case Some(value) =>
                     noteRegistrationMetadataEscapers204(context, value.descriptor)
@@ -2265,7 +2945,9 @@ public class ToolPipeline {
         match (ownedSnapshot) {
             case Some(snapshot) => return match (consumer204) {
                 case Some(scope) => catalog.findForSharedSnapshotBorrowed204(scope, snapshot, name, ThreadId(context.sessionId.value))
-                case None => catalog.findForSharedSnapshot159(snapshot, name, ThreadId(context.sessionId.value)) }
+                case None => match (coreCatalogDataScope204(context)) {
+                    case Some(scope) => catalog.findForSharedSnapshotCoreBorrowed204(scope, snapshot, name, ThreadId(context.sessionId.value))
+                    case None => catalog.findForSharedSnapshot159(snapshot, name, ThreadId(context.sessionId.value)) } }
             case None => ()
         }
         match (context.legacyToolSetSnapshot159) {
@@ -2291,7 +2973,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -2315,7 +2997,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -2349,7 +3031,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -2372,6 +3054,45 @@ public class ToolPipeline {
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         preparationReadFunded340(context,call)
     }
+    private func planBoundBusinessCall204(requestedCall: ToolCall, requireBinding: Bool,
+        stripBinding: Bool): Result<(ToolCall, String, String)> {
+        var planStepId = ""
+        var planActionId = ""
+        if (requireBinding) {
+            var bindingCount: Int64 = 0
+            for (field in requestedCall.arguments.fields where field.name == "_plan") { bindingCount += 1 }
+            if (bindingCount != 1) {
+                return planExecutionError("plan.binding_required", "supervised tool calls require one _plan binding")
+            }
+            match (requestedCall.arguments.field("_plan")) {
+                case Some(binding) =>
+                    if (binding.unifiedKind != ValueKind.Object || binding.fields.size != 2) {
+                        return planExecutionError("plan.binding_invalid", "supervised tool requires an exact step/action binding")
+                    }
+                    match ((binding.field("step_id"), binding.field("action_id"))) {
+                        case (Some(step), Some(action)) =>
+                            if (step.unifiedKind != ValueKind.Text || action.unifiedKind != ValueKind.Text ||
+                                step.text.trimAscii() == "" || action.text.trimAscii() == "" || step.text.size > 200 || action.text.size > 200) {
+                                return planExecutionError("plan.binding_invalid", "plan binding identities must be nonempty text")
+                            }
+                            planStepId = step.text
+                            planActionId = action.text
+                        case _ => return planExecutionError("plan.binding_invalid", "plan binding identities are required")
+                    }
+                case None => return planExecutionError("plan.binding_required", "supervised tool calls require _plan step_id and action_id")
+            }
+        }
+        if (!stripBinding) { return Result.Ok((requestedCall, planStepId, planActionId)) }
+        let arguments = ArrayList<ValueField>()
+        for (field in requestedCall.arguments.fields where field.name != "_plan") {
+            arguments.add(ValueField(field.name, field.value))
+        }
+        let call = if (requestedCall.arguments.unifiedKind == ValueKind.Object) {
+            ToolCall(requestedCall.callId, requestedCall.name, objectValue(arguments.toArray()))
+        } else { requestedCall }
+        Result.Ok((call, planStepId, planActionId))
+    }
+
     private func preparationReadFunded340(context: ToolInvocationContext, call: ToolCall): Result<?ToolPreparationRead> {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
@@ -2382,16 +3103,33 @@ public class ToolPipeline {
         let registration = match (registrationForRun(context, call.name, newPreparation: true)) {
             case Some(value) => value; case None => return Result.Ok(None) }
         if (registration.descriptor.hostServiceOnly || registration.descriptor.controlOnly) { return Result.Ok(None) }
-        match (validator.validate(call, registration.descriptor.definition)) {
+        let supervised = match (ensurePlanExecution(context)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        if (supervised && !registration.descriptor.supervisedExecutionSafe) {
+            return planExecutionError("plan.tool_contract_required", "tool has no trusted supervised execution contract") }
+        let envelope = match (planBoundBusinessCall204(call,
+            supervised && (registration.descriptor.planBindingInArguments || call.arguments.field("_plan").isSome()),
+            supervised)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let businessCall = envelope[0]
+        match (validator.validate(businessCall, registration.descriptor.definition)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        registration.descriptor.preparationRead(context, call)
+        registration.descriptor.preparationRead(context, businessCall)
     
             })
             match (consumerFrame204) { case Some(value) => value.holdReturnedResultData204(result204); case None => () }
+            let outward204: Result<?ToolPreparationRead> = match (coreCatalogDataScope204(context)) {
+                case Some(scope) => match (result204) {
+                    case Result.Err(error) => Result.Err(scope.copyError204(error))
+                    // A deferred callback can retain its captured graph. Its
+                    // own concrete consumer is not the Core DATA loan.
+                    case Result.Ok(Some(_)) => scope.holdUnknown204(); result204
+                    case Result.Ok(None) => result204 }
+                case None => result204 }
             returnedConsumer204 = true
-            result204
+            outward204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -2607,17 +3345,17 @@ public class ToolPipeline {
             context.sessionId.value!=source.threadId.value){
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied,"tool.direct_source_invalid",
                 "direct source does not attest this prepared invocation"))}
-        match(retainPreparationInput340(context,Some(OperationRootSource.Direct(source)),prepared.call,prepared.borrowOperationPlanFrame204().contextReadFacts)){
+        match(retainPreparationInput340(context,Some(OperationRootSource.Direct(source)),pipelineCall204(context, prepared),prepared.borrowOperationPlanFrame204().contextReadFacts)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         if (prepared.source.kind != PreparedInvocationSourceKind.Direct ||
             prepared.source.operationRoot.isSome() ||
             source.runId.value != context.runId.value || source.epoch != context.epoch ||
             source.threadId.value != context.sessionId.value ||
             source.operationId.value != prepared.operationId.value ||
-            source.call.callId != prepared.call.callId || source.call.name != prepared.call.name ||
+            source.call.callId != pipelineCall204(context, prepared).callId || source.call.name != pipelineCall204(context, prepared).name ||
             canonicalAgentValue(source.call.arguments) != canonicalAgentValue(match (source.origin) {
                 case DirectCallOrigin.ContextRead(_) => prepared.borrowOperationPlanFrame204().canonicalArguments
-                case _ => prepared.call.arguments })) {
+                case _ => pipelineCall204(context, prepared).arguments })) {
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
                 "tool.direct_source_invalid", "direct source does not attest this prepared invocation"))
         }
@@ -2645,21 +3383,22 @@ public class ToolPipeline {
             case None => ()
         }
         Result.Ok(PreparedToolInvocation(
-            prepared.operationId, prepared.call, prepared.borrowConcurrencyFrame204(), prepared.authorization,
+            prepared.operationId, pipelineCall204(context, prepared), prepared.borrowConcurrencyFrame204(), prepared.authorization,
             prepared.borrowOperationPlanFrame204(), PreparedInvocationSource(
                 PreparedInvocationSourceKind.Direct, context,
                 operationRoot: Some(OperationRootSource.Direct(source)), contextReadFacts: prepared.borrowOperationPlanFrame204().contextReadFacts,
                 contextReadAdmission: prepared.source.contextReadAdmission,
                 contextReadPreparation: prepared.source.contextReadPreparation
-            ), approval: prepared.borrowApprovalFrame204()
+            ), approval: prepared.borrowApprovalFrame204(),
+            planStepId: prepared.borrowPlanStepIdFrame204(), planActionId: prepared.borrowPlanActionIdFrame204()
         ))
     
             })
-            let outward204 = match (consumerFrame204) { case Some(value) => value.retainPreparedValueResult204(result204); case None => result204 }
+            let outward204 = match (consumerFrame204) { case Some(value) => value.retainPreparedValueResult204(result204); case None => retainCorePreparedValue204(context, result204) }
             returnedConsumer204 = true
             outward204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -2849,7 +3588,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -2934,7 +3673,7 @@ public class ToolPipeline {
             // Its installed executor also restricts handoff. It cannot grant
             // permission: every original Store/source/capability check remains.
             match (prepared.source.operationRoot) {
-                case Some(root) => if (root.toolName() != prepared.call.name) {
+                case Some(root) => if (root.toolName() != pipelineCall204(context, prepared).name) {
                     let actual = match (registrationForRun(context, root.toolName(), allowHostService: true)) {
                         case Some(value) => value; case None => return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
                             "tool.root_registration_revoked", "canonical root executor is unavailable before handoff"))
@@ -2953,7 +3692,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -2982,6 +3721,7 @@ public class ToolPipeline {
             return livePolicyPreparationError<OwnedToolPipelineProgress>("tool.live_owned_parent_not_authorized")}
         match(validatePreparedSourceContext(context,parent.source)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         match(validateLivePreparedCurrent(context,parent)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        match(admitPrepared(context,parent)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         let registration=match(registrationForRun(context,parent.call.name)){
             case Some(value)=>value;case None=>return livePolicyPreparationError<OwnedToolPipelineProgress>("tool.live_owned_registration_missing")}
         let executor=match(registration.executor as OwnedToolExecutor){case Some(value)=>value
@@ -3019,7 +3759,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -3057,7 +3797,7 @@ public class ToolPipeline {
         match(decision){case ApprovalDecision.ApproveSession=>
             match(copiedPermissionGrant204(context,context.sessionId,parent.operationPlan.approvalMetadata.grantScope)){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()};case _=>()}
-        if(approved){return executeOwnedPrepared(context,preparedWithAuthorization(parent,PreparedAuthorization.Approved),
+        if(approved){return executeOwnedPrepared(context,preparedWithAuthorization(context,parent,PreparedAuthorization.Approved),
             afterHandoff:afterHandoff,afterExecutionAdmission:afterExecutionAdmission)}
         // Rejection has no execution handoff. Its real executor must freeze a
         // paid denial and dedicated no-handoff final witness; the old generic
@@ -3088,7 +3828,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -3152,7 +3892,7 @@ public class ToolPipeline {
             match(validateLivePreparedCurrent(context,parent)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             if(catalog.executionWasRevoked(registration)){
                 return livePolicyPreparationError<OwnedToolPipelineProgress>("tool.live_owned_registration_revoked")}
-            let approvedPending:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(child,PreparedAuthorization.Approved))}else{None}
+            let approvedPending:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(context,child,PreparedAuthorization.Approved))}else{None}
             let control=match(ownedExecutionControlForExecutor(context,parent,Some(value),executor,resumed:approvedPending)){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(actual)=>actual}
             let returned=try{executor.resumeOwned(context,value,decision,control)}finally{control.close()}
@@ -3194,7 +3934,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -3277,7 +4017,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -3317,7 +4057,7 @@ public class ToolPipeline {
             match(copiedPermissionGrant204(context,context.sessionId,child.operationPlan.approvalMetadata.grantScope)){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()};case _=>()}
         match(validateLivePreparedCurrent(context,parent)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-        let selected:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(child,PreparedAuthorization.Approved))}else{None<PreparedToolInvocation>}
+        let selected:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(context,child,PreparedAuthorization.Approved))}else{None<PreparedToolInvocation>}
         let control=match(preparedPhaseControl(context,parent,Some(value),executor,phase.inputCustody(),selected)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(actual)=>actual}
         let returned:Result<Unit>=try{
@@ -3546,7 +4286,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -3641,7 +4381,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -3723,8 +4463,9 @@ public class ToolPipeline {
         parent: PreparedToolInvocation,
         requestKey: String
     ): Result<ToolPreparation> {
+        parent.withOperationPlan204<Result<ToolPreparation>>({ parentPlan =>
         if ((parent.source.kind == PreparedInvocationSourceKind.Derived &&
-                (!isReadonlyDelegatedChildPlan(parent.operationPlan) || call.name != HOST_READ_VIEW_TOOL)) ||
+                (!isReadonlyDelegatedChildPlan(parentPlan) || call.name != HOST_READ_VIEW_TOOL)) ||
             parent.source.operationRoot.isNone() || requestKey.trimAscii() == "" ||
             context.trustedControl) {
             return Result.Err(AgentError(
@@ -3741,11 +4482,12 @@ public class ToolPipeline {
             PreparedInvocationSourceKind.Derived, context,
             operationRoot: parent.source.operationRoot,
             parentOperationId: Some(parent.operationId),
-            requestKey: requestKey, parentCallId: parent.call.callId,
+            requestKey: requestKey, parentCallId: pipelineCall204(context, parent).callId,
             managedJobCeiling: parent.source.managedJobCeiling
         ), parentIntentPlan: if (parent.authorization == PreparedAuthorization.ApprovalRequired) {
             None
-        } else { Some(parent.operationPlan) })
+        } else { Some(parentPlan) })
+        })
     }
 
     // A trusted host broker retains the actual root context while its child
@@ -3758,8 +4500,9 @@ public class ToolPipeline {
         parent: PreparedToolInvocation,
         requestKey: String
     ): Result<ToolPreparation> {
+        parent.withOperationPlan204<Result<ToolPreparation>>({ parentPlan =>
         if ((parent.source.kind == PreparedInvocationSourceKind.Derived &&
-                (!isReadonlyDelegatedChildPlan(parent.operationPlan) || call.name != HOST_READ_VIEW_TOOL)) ||
+                (!isReadonlyDelegatedChildPlan(parentPlan) || call.name != HOST_READ_VIEW_TOOL)) ||
             parent.source.operationRoot.isNone() || requestKey.trimAscii() == "" ||
             context.trustedControl) {
             return Result.Err(AgentError(
@@ -3785,7 +4528,7 @@ public class ToolPipeline {
             PreparedInvocationSourceKind.Derived, context,
             operationRoot: parent.source.operationRoot,
             parentOperationId: Some(parent.operationId),
-            requestKey: requestKey, parentCallId: parent.call.callId,
+            requestKey: requestKey, parentCallId: pipelineCall204(context, parent).callId,
             managedJobCeiling: parent.source.managedJobCeiling
         )
         match (validatePreparedSourceContext(context, source)) {
@@ -3795,7 +4538,8 @@ public class ToolPipeline {
         prepareResolved(context, call, None, source,
             parentIntentPlan: if (parent.authorization == PreparedAuthorization.ApprovalRequired) {
                 None
-            } else { Some(parent.operationPlan) })
+            } else { Some(parentPlan) })
+        })
     }
 
     // The sealed source supplies every origin argument to the existing
@@ -3828,7 +4572,7 @@ public class ToolPipeline {
         operations.prepareDerivedInvocation(
             prepared.operationId, source.parentOperationId.getOrThrow(),
             source.runId, source.operationRoot.getOrThrow(), source.requestKey,
-            ToolCall(prepared.call.callId, prepared.call.name, prepared.borrowOperationPlanFrame204().canonicalArguments),
+            ToolCall(pipelineCall204(context, prepared).callId, pipelineCall204(context, prepared).name, prepared.borrowOperationPlanFrame204().canonicalArguments),
             prepared.borrowOperationPlanFrame204()
         )
     
@@ -3837,7 +4581,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -3942,7 +4686,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4005,7 +4749,7 @@ public class ToolPipeline {
 
     private func prepareResolved(
         context: ToolInvocationContext,
-        call: ToolCall,
+        requestedCall: ToolCall,
         committedOperationId: ?OperationId,
         source: PreparedInvocationSource,
         parentIntentPlan!: ?NormalizedOperationPlan = None
@@ -4019,18 +4763,33 @@ public class ToolPipeline {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
-        let registration = match (registrationForRun(context, call.name, newPreparation: true,
-            allowHostService: hostServiceSourceAllowed(source, call.name))) {
+        let supervised = match (ensurePlanExecution(context)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let registration = match (registrationForRun(context, requestedCall.name, newPreparation: true,
+            allowHostService: hostServiceSourceAllowed(source, requestedCall.name))) {
             case Some(value) => value
             case None =>
                 let error = AgentError(
                     AgentErrorKind.InvalidInput,
                     "tool.not_found",
                     "tool is not registered",
-                    fields: [ErrorField("tool", call.name)]
+                    fields: [ErrorField("tool", requestedCall.name)]
                 )
-                return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
+                return Result.Ok(ToolPreparation.Completed(recoverableToolResult(requestedCall, error)))
         }
+        let initializationRead = initializationReadSource(source)
+        let envelope = match (planBoundBusinessCall204(requestedCall,
+            supervised && !initializationRead && source.kind != PreparedInvocationSourceKind.Derived &&
+                (registration.descriptor.planBindingInArguments || requestedCall.arguments.field("_plan").isSome()),
+            supervised || context.planReviewControl)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let call = envelope[0]
+        var planStepId = envelope[1]
+        var planActionId = envelope[2]
         if (registration.descriptor.controlOnly && !context.trustedControl) {
             let error = AgentError(
                 AgentErrorKind.InvalidInput,
@@ -4039,6 +4798,10 @@ public class ToolPipeline {
                 fields: [ErrorField("tool", call.name)]
             )
             return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
+        }
+        if ((supervised || context.planReviewControl) && !registration.descriptor.supervisedExecutionSafe &&
+            !initializationRead && !inheritedHostSource(source, registration.descriptor, call.name)) {
+            return planExecutionError("plan.tool_contract_required", "tool has no trusted supervised execution contract")
         }
         // Freeze and validate network authorization before schema-dependent
         // resolution or any executor can observe the call. A gateway error
@@ -4062,7 +4825,7 @@ public class ToolPipeline {
             case Result.Err(error) =>
                 return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
         }
-        let canonicalCall = match (registration.descriptor.canonicalizedCall(context, call)) {
+        let canonicalCall = match (canonicalizedInvocationCall204(context, call, registration.descriptor)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Ok(
                 ToolPreparation.Completed(recoverableToolResult(call, error))
@@ -4104,7 +4867,35 @@ public class ToolPipeline {
                 )
             )
         }
-        let plan = normalizedToolOperationPlan(context, canonicalCall, effective, contextReadFacts: source.contextReadFacts)
+        let plan = match (normalizedInvocationPlan(context, canonicalCall, effective, contextReadFacts: source.contextReadFacts, initializationReadControl: initializationRead)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        if (initializationRead) {
+            if (!isContextReadPlan(plan)) { return planExecutionError("plan.initialization_read_invalid", "initialization source must keep its canonical read-only contract") }
+        } else if (!(context.planReviewControl && inheritedHostSource(source, registration.descriptor, call.name) &&
+            isReadViewServiceChildPlan(plan))) {
+            match (validatePlanReviewControl(context, plan)) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
+            }
+        }
+        if (supervised && call.name == "bash" && detachedSupervisedBash(plan.canonicalArguments)) {
+            return planExecutionError("plan.bash_detached_denied", "supervised bash does not support async or pty")
+        }
+        if (supervised && call.name == "bash" && !networkPolicyModeIsDenied(plan.networkPolicy.mode)) {
+            return planExecutionError("plan.bash_network_denied", "supervised bash must use denied network policy")
+        }
+        if (supervised && isFrozenReadViewParentPlan(plan) && plan.effectClass != OperationEffectClass.ReadOnly) {
+            return planExecutionError("plan.tool_contract_required", "supervised read-view contributions must remain read-only")
+        }
+        if (supervised && !initializationRead && source.kind != PreparedInvocationSourceKind.Derived && planActionId == "") {
+            if (registration.descriptor.planBindingInArguments) { return planExecutionError("plan.binding_required", "tool requires an explicit approved action binding") }
+            match (inferApprovedAction(context, plan)) {
+                case Result.Ok((stepId, actionId)) => planStepId = stepId; planActionId = actionId
+                case Result.Err(error) => return Result.Err(error)
+            }
+        }
         let metadata = plan.approvalMetadata
         let riskFlags = mergedApprovalFlags(
             approvalRiskFlags(call, effective.capability),
@@ -4219,7 +5010,7 @@ public class ToolPipeline {
                 },
                 metadata: Some(metadata),
                 requestedOperationId: committedOperationId,
-                source: source
+                source: source, planStepId: planStepId, planActionId: planActionId
             )
             case PermissionRequirement.Confirm => prepareForApproval(
                 context,
@@ -4228,16 +5019,16 @@ public class ToolPipeline {
                 metadata,
                 plan,
                 requestedOperationId: committedOperationId,
-                source: source
+                source: source, planStepId: planStepId, planActionId: planActionId
             )
         }
     
             })
-            let outward204 = match (consumerFrame204) { case Some(value) => value.retainPreparedResult204(result204); case None => result204 }
+            let outward204 = match (consumerFrame204) { case Some(value) => value.retainPreparedResult204(result204); case None => retainCorePreparation204(context, result204) }
             returnedConsumer204 = true
             outward204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4282,7 +5073,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4296,7 +5087,7 @@ public class ToolPipeline {
         try {
             let result204: Result<?DirectPostCanonicalObserverCapture> = registrationConsumerBody204<Result<?DirectPostCanonicalObserverCapture>>({ =>
 
-        let registration = match (registrationForRun(context, prepared.call.name)) {
+        let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name)) {
             case Some(value) => value; case None => return Result.Ok(None<DirectPostCanonicalObserverCapture>) }
         let observer = match (registration.executor as DirectPostCanonicalToolObserver) {
             case Some(value) => value; case None => return Result.Ok(None<DirectPostCanonicalObserverCapture>) }
@@ -4312,7 +5103,7 @@ public class ToolPipeline {
         let executor = match (registration.executor as Object) { case Some(value) => value
             case None => return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                 "tool.direct_projection_executor_not_reference", "Direct observer requires its actual reference executor")) }
-        let canonical=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
+        let canonical=ToolCall(pipelineCall204(context, prepared).callId,pipelineCall204(context, prepared).name,prepared.borrowOperationPlanFrame204().canonicalArguments)
         let plan = normalizedToolOperationPlan(context, canonical, registration.descriptor.resolved(canonical),
             contextReadFacts: prepared.borrowOperationPlanFrame204().contextReadFacts)
         if (!sameNormalizedOperationPlan(plan, prepared.borrowOperationPlanFrame204())) {
@@ -4328,7 +5119,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4346,19 +5137,19 @@ public class ToolPipeline {
         captured.consume({ =>
             if (!refEq(context, captured.context) || !refEq(prepared, captured.prepared) ||
                 !refEq(context.budget, boundary.budget) || result.isError || result.payloadLease.isNone() ||
-                result.callId != prepared.call.callId || result.receiptId != "receipt-" + prepared.operationId.value) {
+                result.callId != pipelineCall204(context, prepared).callId || result.receiptId != "receipt-" + prepared.operationId.value) {
                 return directPostCanonicalObserverFailure("tool.direct_projection_invocation_changed") }
             match (prepared.source.operationRoot) { case Some(OperationRootSource.Direct(source)) =>
                 if (!refEq(source, boundary.source)) { return directPostCanonicalObserverFailure("tool.direct_projection_root_changed") }
                 case _ => return directPostCanonicalObserverFailure("tool.direct_projection_source_missing") }
             match (validatePreparedSourceContext(context, prepared.source)) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            let registration = match (registrationForRun(context, prepared.call.name)) {
+            let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name)) {
                 case Some(value) => value; case None => return directPostCanonicalObserverFailure("tool.direct_projection_registration_missing") }
             let executor = match (registration.executor as Object) { case Some(value) => value
                 case None => return directPostCanonicalObserverFailure("tool.direct_projection_executor_changed") }
             if (!refEq(executor, captured.executor)) { return directPostCanonicalObserverFailure("tool.direct_projection_executor_changed") }
-            let call=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
+            let call=ToolCall(pipelineCall204(context, prepared).callId,pipelineCall204(context, prepared).name,prepared.borrowOperationPlanFrame204().canonicalArguments)
             let plan = normalizedToolOperationPlan(context, call, registration.descriptor.resolved(call),
                 contextReadFacts: prepared.borrowOperationPlanFrame204().contextReadFacts)
             if (!sameNormalizedOperationPlan(plan, prepared.borrowOperationPlanFrame204())) {
@@ -4371,7 +5162,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4427,7 +5218,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4450,7 +5241,7 @@ public class ToolPipeline {
         captured.consumeOwned113({ =>
             if (!refEq(context, captured.context) || !refEq(prepared, captured.prepared) ||
                 !refEq(context.budget, boundary.budget) || result.isError || result.payloadLease.isNone() ||
-                result.callId != prepared.call.callId || result.receiptId != "receipt-" + prepared.operationId.value) {
+                result.callId != pipelineCall204(context, prepared).callId || result.receiptId != "receipt-" + prepared.operationId.value) {
                 return OwnedPostCanonicalObserverDispatch113.Existing(
                     directPostCanonicalObserverFailure("tool.direct_projection_invocation_changed")) }
             match (prepared.source.operationRoot) {
@@ -4463,7 +5254,7 @@ public class ToolPipeline {
             match (validatePreparedSourceContext(context, prepared.source)) {
                 case Result.Err(error) => return OwnedPostCanonicalObserverDispatch113.Existing(Result<Unit>.Err(error))
                 case Result.Ok(_) => () }
-            let registration = match (registrationForRun(context, prepared.call.name)) {
+            let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name)) {
                 case Some(value) => value
                 case None => return OwnedPostCanonicalObserverDispatch113.Existing(
                     directPostCanonicalObserverFailure("tool.direct_projection_registration_missing")) }
@@ -4474,7 +5265,7 @@ public class ToolPipeline {
             if (!refEq(executor, captured.executor)) {
                 return OwnedPostCanonicalObserverDispatch113.Existing(
                     directPostCanonicalObserverFailure("tool.direct_projection_executor_changed")) }
-            let call=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
+            let call=ToolCall(pipelineCall204(context, prepared).callId,pipelineCall204(context, prepared).name,prepared.borrowOperationPlanFrame204().canonicalArguments)
             let plan = normalizedToolOperationPlan(context, call, registration.descriptor.resolved(call),
                 contextReadFacts: prepared.borrowOperationPlanFrame204().contextReadFacts)
             if (!sameNormalizedOperationPlan(plan, prepared.borrowOperationPlanFrame204())) {
@@ -4487,7 +5278,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4561,7 +5352,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4614,7 +5405,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4658,19 +5449,24 @@ public class ToolPipeline {
                 "the canonical Operation plan changed while approval was pending"
             ))
         }
-        let registration = match (registrationForRun(context, prepared.call.name,
-            allowHostService: hostServiceSourceAllowed(prepared.source, prepared.call.name))) {
+        match (admitPrepared(context, prepared)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name,
+            allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name))) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,
                 "tool.pending_registration_missing",
                 "pending tool is no longer registered",
-                fields: [ErrorField("tool", prepared.call.name)]
+                fields: [ErrorField("tool", pipelineCall204(context, prepared).name)]
             ))
         }
-        let canonicalCall=ToolCall(prepared.call.callId,prepared.call.name,plan.canonicalArguments)
+        let canonicalCall=ToolCall(pipelineCall204(context, prepared).callId,pipelineCall204(context, prepared).name,plan.canonicalArguments)
         let current = registration.descriptor.resolved(canonicalCall)
-        let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current, contextReadFacts: plan.contextReadFacts)
+        let currentPlan = match (normalizedInvocationPlan(context, canonicalCall, current, contextReadFacts: plan.contextReadFacts,
+            initializationReadControl: context.planReviewControl && isContextReadPlan(plan))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
         if (!sameNormalizedOperationPlan(plan, currentPlan)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Conflict,
@@ -4683,7 +5479,7 @@ public class ToolPipeline {
             case ApprovalDecision.Approve | ApprovalDecision.ApproveSession => true
         }
         match (validateDecisionPolicy(
-            context, prepared.call, plan, decision
+            context, pipelineCall204(context, prepared), plan, decision
         )) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
@@ -4731,31 +5527,31 @@ public class ToolPipeline {
                 } else {
                     "user rejected the pending tool operation: " + reason
                 },
-                fields: rejectionFields(prepared.call.name, reason)
+                fields: rejectionFields(pipelineCall204(context, prepared).name, reason)
             )
             let result = recoverableToolResult(
-                prepared.call,
+                pipelineCall204(context, prepared),
                 error,
                 receiptId: prepared.operationId.value
             )
             let _ = appendAudit(
                 context,
                 "tool.approval_rejected",
-                prepared.call,
+                pipelineCall204(context, prepared),
                 primaryPlanCapability(plan)
             )
             return Result.Ok(ToolAuthorization.Completed(result))
         }
         Result.Ok(ToolAuthorization.Ready(
-            preparedWithAuthorization(prepared, PreparedAuthorization.Approved)
+            preparedWithAuthorization(context,prepared, PreparedAuthorization.Approved)
         ))
     
             })
-            let outward204 = match (consumerFrame204) { case Some(value) => value.retainAuthorizedResult204(result204); case None => result204 }
+            let outward204 = match (consumerFrame204) { case Some(value) => value.retainAuthorizedResult204(result204); case None => retainCoreAuthorization204(context, result204) }
             returnedConsumer204 = true
             outward204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4806,7 +5602,7 @@ public class ToolPipeline {
                 // validation. A concurrent transition must not become Rejected.
                 match (validateRetainedContextReadDecision(context, prepared, decision)) {
                     case Result.Err(changed) => return Result.Err(changed); case Result.Ok(_) => () }
-                return Result.Ok(ToolInvocationResult.Denied(ToolDenial(prepared.call.callId, prepared.call.name, error)))
+                return Result.Ok(ToolInvocationResult.Denied(ToolDenial(pipelineCall204(context, prepared).callId, pipelineCall204(context, prepared).name, error)))
             case Result.Ok(_) => ()
         }
         decidePrepared(context, prepared, decision, afterHandoff, decisionSource)
@@ -4862,14 +5658,14 @@ public class ToolPipeline {
 
         if (prepared.authorization != PreparedAuthorization.ApprovalRequired || prepared.borrowApprovalFrame204().isNone()) {
             return Result.Err(AgentError(AgentErrorKind.Conflict, "approval.review_missing", "retained review is missing")) }
-        validateDecisionPolicy(context, prepared.call, prepared.borrowOperationPlanFrame204(), decision)
+        validateDecisionPolicy(context, pipelineCall204(context, prepared), prepared.borrowOperationPlanFrame204(), decision)
     
             })
             match (consumerFrame204) { case Some(value) => value.holdReturnedResultData204(result204); case None => () }
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4910,7 +5706,7 @@ public class ToolPipeline {
                 return Result.Err(error)
         }
         validateDecisionPolicy(
-            context, prepared.call, prepared.borrowOperationPlanFrame204(), decision
+            context, pipelineCall204(context, prepared), prepared.borrowOperationPlanFrame204(), decision
         )
     
             })
@@ -4918,7 +5714,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -4990,7 +5786,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -5014,21 +5810,21 @@ public class ToolPipeline {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         if (prepared.authorization != PreparedAuthorization.ApprovalRequired || !sameNormalizedOperationPlan(plan, prepared.borrowOperationPlanFrame204())) {
             return Result.Err(AgentError(AgentErrorKind.Conflict, "context.read_approval_changed", "read approval plan changed")) }
-        if (root.operationId.value != prepared.operationId.value || root.call.callId != prepared.call.callId ||
-            root.call.name != prepared.call.name || root.runId.value != context.runId.value ||
+        if (root.operationId.value != prepared.operationId.value || root.call.callId != pipelineCall204(context, prepared).callId ||
+            root.call.name != pipelineCall204(context, prepared).name || root.runId.value != context.runId.value ||
             root.threadId.value != context.sessionId.value || root.epoch != context.epoch ||
             !isContextReadPlan(plan) || canonicalAgentValue(root.call.arguments) != canonicalAgentValue(plan.canonicalArguments)) {
             return Result.Err(AgentError(AgentErrorKind.Conflict, "context.read_approval_changed", "read approval identity changed")) }
         match (operations.verifyContextReadApprovalPending(root, plan)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        validateDecisionPolicy(context, prepared.call, plan, decision)
+        validateDecisionPolicy(context, pipelineCall204(context, prepared), plan, decision)
     
             })
             match (consumerFrame204) { case Some(value) => value.holdReturnedResultData204(result204); case None => () }
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -5059,10 +5855,10 @@ public class ToolPipeline {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             case None => ()
         }
-        let registration = match (registrationForRun(context, prepared.call.name, allowHostService: true)) {
+        let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name, allowHostService: true)) {
             case Some(value) => value; case None => return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                 "context.read_registration_missing", "read implementation is no longer registered")) }
-        let canonical=ToolCall(prepared.call.callId,prepared.call.name,plan.canonicalArguments)
+        let canonical=ToolCall(pipelineCall204(context, prepared).callId,pipelineCall204(context, prepared).name,plan.canonicalArguments)
         if (!sameNormalizedOperationPlan(plan, normalizedToolOperationPlan(context, canonical, registration.descriptor.resolved(canonical)))) {
             return Result.Err(AgentError(AgentErrorKind.Conflict, "context.read_approval_changed", "read target or authority changed while approval was pending")) }
         Result.Ok(())
@@ -5072,7 +5868,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -5109,17 +5905,18 @@ public class ToolPipeline {
         }
     }
     private func preparedWithAuthorization(
+        context: ToolInvocationContext,
         prepared: PreparedToolInvocation,
         authorization: PreparedAuthorization
     ): PreparedToolInvocation {
         PreparedToolInvocation(
             prepared.operationId,
-            prepared.call,
+            pipelineCall204(context, prepared),
             prepared.borrowConcurrencyFrame204(),
             authorization,
             prepared.borrowOperationPlanFrame204(),
             prepared.source,
-            approval: prepared.borrowApprovalFrame204()
+            approval: prepared.borrowApprovalFrame204(), planStepId: prepared.borrowPlanStepIdFrame204(), planActionId: prepared.borrowPlanActionIdFrame204()
         )
     }
 
@@ -5173,7 +5970,11 @@ public class ToolPipeline {
         // Reload approval from its persisted plan, without staging a new payload.
         let canonicalCall=ToolCall(call.callId,call.name,plan.canonicalArguments)
         let current = registration.descriptor.resolved(canonicalCall)
-        let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current, contextReadFacts: plan.contextReadFacts)
+        let currentPlan = match (normalizedInvocationPlan(context, canonicalCall, current, contextReadFacts: plan.contextReadFacts,
+            initializationReadControl: context.planReviewControl && isContextReadPlan(plan))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
         if (!sameNormalizedOperationPlan(plan, currentPlan)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Conflict,
@@ -5215,11 +6016,11 @@ public class ToolPipeline {
         ))
     
             })
-            let outward204 = match (consumerFrame204) { case Some(value) => value.retainPreparedValueResult204(result204); case None => result204 }
+            let outward204 = match (consumerFrame204) { case Some(value) => value.retainPreparedValueResult204(result204); case None => retainCorePreparedValue204(context, result204) }
             returnedConsumer204 = true
             outward204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -5300,7 +6101,8 @@ public class ToolPipeline {
         metadata: ToolApprovalMetadata,
         plan: NormalizedOperationPlan,
         requestedOperationId!: ?OperationId = None,
-        source!: PreparedInvocationSource
+        source!: PreparedInvocationSource,
+        planStepId!: String = "", planActionId!: String = ""
     ): Result<ToolPreparation> {
         let operationId = match (requestedOperationId) {
             case Some(value) => value
@@ -5337,7 +6139,7 @@ public class ToolPipeline {
             PreparedAuthorization.ApprovalRequired,
             plan,
             source,
-            approval: Some(request)
+            approval: Some(request), planStepId: planStepId, planActionId: planActionId
         )
         Result.Ok(ToolPreparation.NeedsApproval(prepared, request))
     }
@@ -5351,7 +6153,8 @@ public class ToolPipeline {
         decisionSource!: ApprovalDecisionSource = ApprovalDecisionSource.StaticPolicy,
         metadata!: ?ToolApprovalMetadata = None,
         requestedOperationId!: ?OperationId = None,
-        source!: PreparedInvocationSource
+        source!: PreparedInvocationSource,
+        planStepId!: String = "", planActionId!: String = ""
     ): Result<ToolPreparation> {
         let operationId = match (requestedOperationId) {
             case Some(value) => value
@@ -5377,7 +6180,7 @@ public class ToolPipeline {
                         PreparedAuthorization.StaticPolicy
                     },
                     plan,
-                    source
+                    source, planStepId: planStepId, planActionId: planActionId
                 )
                 )
             )
@@ -5458,10 +6261,18 @@ public class ToolPipeline {
                 }
             }
         }
+        let supervisedExecution = match (ensurePlanExecution(context)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (admitPrepared(context, prepared)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         match (operations.loadCommittedToolResult(prepared.operationId, context.runId)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(Some(result)) =>
-                if (result.callId != prepared.call.callId) {
+                if (result.callId != pipelineCall204(context, prepared).callId) {
                     return Result.Err(AgentError(
                         AgentErrorKind.Conflict,
                         "operation.semantic_replay_drift",
@@ -5473,22 +6284,26 @@ public class ToolPipeline {
             case Result.Ok(None) => ()
         }
         let retainedJob: ?DirectToolCallRef = if (prepared.source.kind == PreparedInvocationSourceKind.Direct) { managedJobRoot(prepared.source) } else { None }
-        let selected = if (retainedJob.isSome()) { managedJobRegistration(prepared.source, prepared.call.name) } else {
-            registrationForRun(context, prepared.call.name, allowHostService: hostServiceSourceAllowed(prepared.source, prepared.call.name)) }
+        let selected = if (retainedJob.isSome()) { managedJobRegistration(prepared.source, pipelineCall204(context, prepared).name) } else {
+            registrationForRun(context, pipelineCall204(context, prepared).name, allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name)) }
         let registration = match (selected) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,
                 "tool.prepared_registration_missing",
                 "prepared tool is no longer registered",
-                fields: [ErrorField("tool", prepared.call.name)]
+                fields: [ErrorField("tool", pipelineCall204(context, prepared).name)]
             ))
         }
         // Preparation is frozen. Recheck the current descriptor against that
         // exact plan without running its input resolver or staging payloads again.
-        let canonicalCall = ToolCall(prepared.call.callId, prepared.call.name, storedPlan.canonicalArguments)
+        let canonicalCall = ToolCall(pipelineCall204(context, prepared).callId, pipelineCall204(context, prepared).name, storedPlan.canonicalArguments)
         let current = registration.descriptor.resolved(canonicalCall)
-        let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current, contextReadFacts: storedPlan.contextReadFacts)
+        let currentPlan = match (normalizedInvocationPlan(context, canonicalCall, current, contextReadFacts: storedPlan.contextReadFacts,
+            initializationReadControl: initializationReadSource(prepared.source))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
         if (!sameNormalizedOperationPlan(currentPlan, storedPlan)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Conflict,
@@ -5500,14 +6315,14 @@ public class ToolPipeline {
         match (missingRequiredCapability(context, storedPlan.requiredCapabilities)) {
             case Some(missing) => return Result.Ok(ToolInvocationResult.Denied(
                 ToolDenial(
-                    prepared.call.callId,
-                    prepared.call.name,
+                    pipelineCall204(context, prepared).callId,
+                    pipelineCall204(context, prepared).name,
                     AgentError(
                         AgentErrorKind.PermissionDenied,
                         "tool.capability_denied",
                         "required capability is no longer granted at execution",
                         fields: [
-                            ErrorField("tool", prepared.call.name),
+                            ErrorField("tool", pipelineCall204(context, prepared).name),
                             ErrorField("capability", capabilityName(missing.kind)),
                             ErrorField("resource", missing.resource)
                         ]
@@ -5523,7 +6338,7 @@ public class ToolPipeline {
                 AgentErrorKind.RecoveryRequired,
                 "tool.prepared_registration_missing",
                 "prepared tool was revoked before execution",
-                fields: [ErrorField("tool", prepared.call.name)]
+                fields: [ErrorField("tool", pipelineCall204(context, prepared).name)]
             ))
         }
         try {
@@ -5573,7 +6388,7 @@ public class ToolPipeline {
                 AgentErrorKind.PermissionDenied,
                 "tool.revoked_during_execution",
                 "tool was revoked before executor admission",
-                fields: [ErrorField("tool", prepared.call.name)]
+                fields: [ErrorField("tool", pipelineCall204(context, prepared).name)]
             ))
         }
         // Only this synchronous executor call can return local execution
@@ -5644,12 +6459,12 @@ public class ToolPipeline {
                 AgentErrorKind.PermissionDenied,
                 "tool.revoked_during_execution",
                 "tool was revoked while execution was in flight",
-                fields: [ErrorField("tool", prepared.call.name)]
+                fields: [ErrorField("tool", pipelineCall204(context, prepared).name)]
             ))
         }
         let execution = match (executionResult) {
             case Result.Ok(value) =>
-                if (value.callId != prepared.call.callId) {
+                if (value.callId != pipelineCall204(context, prepared).callId) {
                     return Result.Err(AgentError(
                         AgentErrorKind.Internal,
                         "tool.result_call_mismatch",
@@ -5658,10 +6473,11 @@ public class ToolPipeline {
                 }
                 value
             case Result.Err(error) =>
-                if (recoverableExecutorError(error)) {
+                if (recoverableExecutorError(error) &&
+                    (!supervisedExecution || storedPlan.effectClass == OperationEffectClass.ReadOnly)) {
                     return Result.Ok(ToolInvocationResult.Completed(
                         recoverableToolResult(
-                            prepared.call,
+                            pipelineCall204(context, prepared),
                             error,
                             receiptId: prepared.operationId.value
                         )
@@ -5670,7 +6486,7 @@ public class ToolPipeline {
                 return Result.Err(error)
         }
         let completed = ToolResult(
-                prepared.call.callId,
+                pipelineCall204(context, prepared).callId,
                 execution.output,
                 isError: execution.isError,
                 receiptId: if (execution.receiptId == "") {
@@ -5694,7 +6510,7 @@ public class ToolPipeline {
             returnedConsumer204 = true
             result204
         } catch (error: Exception) {
-            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => () }
+            match (consumerFrame204) { case Some(value) => value.holdUnknown204(); case None => holdCoreCatalogData204(context) }
             throw error
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
@@ -5867,10 +6683,17 @@ public func normalizedToolOperationPlan(
     context: ToolInvocationContext,
     call: ToolCall,
     descriptor: ToolDescriptor,
-    contextReadFacts!: Array<ContextReadFactLink> = []
+    contextReadFacts!: Array<ContextReadFactLink> = [],
+    approvedWriteRoots!: Array<String> = [],
+    initializationReadControl!: Bool = false
 ): NormalizedOperationPlan {
     let networkPolicy = networkPolicyForNormalizedCall(call, descriptor)
-    let canonicalArguments = canonicalToolArguments(call.arguments)
+    let reviewPolicy = context.planReviewControl && ((descriptor.planReviewSafe && descriptor.supervisedExecutionSafe) ||
+        (initializationReadControl && descriptor.hostServiceOnly && call.name == HOST_CONTEXT_READ_TOOL &&
+         descriptor.implementationVersion == HOST_CONTEXT_READ_IMPLEMENTATION &&
+         descriptor.implementationFingerprint == HOST_CONTEXT_READ_IMPLEMENTATION))
+    let cwd = effectiveOperationCwd(context, call)
+    let canonicalArguments = canonicalProcessArguments(call, cwd)
     let required = descriptor.requiredCapabilities(call)
     let paths = ArrayList<String>()
     let hosts = ArrayList<String>()
@@ -5913,11 +6736,6 @@ public func normalizedToolOperationPlan(
     } else {
         OperationRetryDisposition.Never
     }
-    let cwd = if (context.cwd.trimAscii() == "") {
-        context.workspaceRoot
-    } else {
-        context.cwd
-    }
     let metadata = descriptor.approvalMetadata(call)
     let writeBinding = match (metadata.writeSummary) {
         case Some(summary) => objectValue([
@@ -5928,7 +6746,14 @@ public func normalizedToolOperationPlan(
         ])
         case None => objectValue([])
     }
-    let bindingValue = objectValue([
+    let bindingFields = ArrayList<ValueField>()
+    if (reviewPolicy) {
+        bindingFields.add(ValueField("policy_version", textValue("tool-policy-plan-review-v1")))
+    }
+    if (!approvedWriteRoots.isEmpty()) {
+        bindingFields.add(ValueField("approved_write_roots", operationStringList(approvedWriteRoots)))
+    }
+    for (field in [
         ValueField("tool", textValue(call.name)),
         ValueField("arguments", canonicalArguments),
         ValueField("capabilities", listValue(capabilities.toArray())),
@@ -5957,7 +6782,8 @@ public func normalizedToolOperationPlan(
             case OperationRetryDisposition.VerifyThenRetry => "verify_then_retry"
             case OperationRetryDisposition.Never => "never"
         }))
-    ])
+    ]) { bindingFields.add(field) }
+    let bindingValue = objectValue(bindingFields.toArray())
     if (!contextReadFacts.isEmpty()) { bindingValue.put("context_reads", contextReadFactLinksValue(contextReadFacts)) }
     NormalizedOperationPlan(
         call.name,
@@ -5971,7 +6797,9 @@ public func normalizedToolOperationPlan(
         resolvedHosts: hosts.toArray(),
         cwd: cwd,
         relevantEnvironment: environment.toArray(),
+        approvedWriteRoots: approvedWriteRoots,
         approvalMetadata: Some(metadata),
+        policyVersion: if (reviewPolicy) { "tool-policy-plan-review-v1" } else { "tool-policy-v1" },
         toolVersion: descriptor.implementationVersion,
         implementationFingerprint: descriptor.implementationFingerprint,
         schemaDigest: descriptor.schemaDigest,
@@ -5992,9 +6820,10 @@ public func sameNormalizedOperationPlan(
     left: NormalizedOperationPlan,
     right: NormalizedOperationPlan
 ): Bool {
-    left.toolName == right.toolName &&
+    left.toolName == right.toolName && left.policyVersion == right.policyVersion &&
         canonicalApprovalValue(left.canonicalArguments) == canonicalApprovalValue(right.canonicalArguments) &&
         sameStringArray(left.resolvedPaths, right.resolvedPaths) &&
+        sameStringArray(left.approvedWriteRoots, right.approvedWriteRoots) &&
         sameStringArray(left.resolvedHosts, right.resolvedHosts) &&
         canonicalApprovalValue(networkPolicyCanonicalValue(left.networkPolicy)) ==
             canonicalApprovalValue(networkPolicyCanonicalValue(right.networkPolicy)) &&
@@ -6498,4 +7327,82 @@ func capabilityName(kind: CapabilityKind): String {
         case CapabilityKind.Delegate => "delegate"
         case CapabilityKind.ExtensionInvoke => "extension.invoke"
     }
+}
+
+// _plan is an optional model request envelope; canonical tool arguments never
+// contain it. Requiring the binding belongs to supervised admission only.
+func planAwareToolDefinition(definition: ModelToolDefinition): ModelToolDefinition {
+    let schema = ArrayList<ValueField>()
+    let properties = ArrayList<ValueField>()
+    match (definition.inputSchema.field("properties")) {
+        case Some(value) => for (field in value.fields where field.name != "_plan") {
+            properties.add(ValueField(field.name, field.value))
+        }
+        case None => ()
+    }
+    properties.add(ValueField("_plan", objectValue([
+        ValueField("type", textValue("object")),
+        ValueField("properties", objectValue([
+            ValueField("step_id", objectValue([ValueField("type", textValue("string"))])),
+            ValueField("action_id", objectValue([ValueField("type", textValue("string"))]))
+        ])),
+        ValueField("required", listValue([textValue("step_id"), textValue("action_id")])),
+        ValueField("additionalProperties", boolValue(false))
+    ])))
+    for (field in definition.inputSchema.fields where field.name != "properties") {
+        schema.add(ValueField(field.name, field.value))
+    }
+    schema.add(ValueField("properties", objectValue(properties.toArray())))
+    ModelToolDefinition(definition.name, definition.description, objectValue(schema.toArray()))
+}
+
+
+func detachedSupervisedBash(arguments: AgentValue): Bool {
+    for (name in ["async", "pty", "detached"]) {
+        match (arguments.field(name)) {
+            case Some(value) => if (value.unifiedKind == ValueKind.Boolean && value.asBool()) { return true }
+            case None => ()
+        }
+    }
+    false
+}
+
+func validatePlanReviewControl(context: ToolInvocationContext, plan: NormalizedOperationPlan): Result<Unit> {
+    if (!context.planReviewControl) { return Result.Ok(()) }
+    if (plan.effectClass != OperationEffectClass.ReadOnly || !networkPolicyModeIsDenied(plan.networkPolicy.mode) ||
+        plan.policyVersion != "tool-policy-plan-review-v1") {
+        return planExecutionError("plan.review_control_denied", "plan review permits only read-only review tools with denied network")
+    }
+    if (!planReviewCapabilitiesAllowed(plan)) {
+        return planExecutionError("plan.review_control_denied", "plan review cannot authorize delegated or effectful capabilities")
+    }
+    Result.Ok(())
+}
+
+
+// Process backends resolve authored cwd against the workspace root. Their
+// registered canonicalizer freezes symlinks before this normalizer runs.
+func effectiveOperationCwd(context: ToolInvocationContext, call: ToolCall): String {
+    if (call.name == "bash" || call.name == "command_probe") {
+        match (call.arguments.field("cwd")) {
+            case Some(value) => if (value.unifiedKind == ValueKind.Text && value.text != "") {
+                let authored = Path(value.text)
+                return if (authored.isAbsolute()) { authored.normalize().toString() }
+                    else { Path(context.workspaceRoot).join(authored).normalize().toString() }
+            }
+            case None => ()
+        }
+        if (context.workspaceRoot != "") { return context.workspaceRoot }
+    }
+    if (context.cwd.trimAscii() == "") { context.workspaceRoot } else { context.cwd }
+}
+
+
+func canonicalProcessArguments(call: ToolCall, cwd: String): AgentValue {
+    if (call.name != "bash" && call.name != "command_probe") { return canonicalToolArguments(call.arguments) }
+    let fields = ArrayList<ValueField>()
+    for (field in call.arguments.fields) {
+        fields.add(ValueField(field.name, if (field.name == "cwd") { textValue(cwd) } else { field.value }))
+    }
+    objectValue(fields.toArray())
 }

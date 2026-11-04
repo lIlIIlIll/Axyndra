@@ -77,6 +77,7 @@ AXYNDRA_MEMORY_LATEST_CONTEXT_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_me
 export AXYNDRA_MEMORY_LATEST_CONTEXT_PLUGIN_PACKAGE
 AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE=$(bash "$root/scripts/prepare_model_provider_plugin.sh")
 export AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE
+python3 scripts/command_probe_native_test.py --sandbox
 python3 scripts/product_unit_gate.py
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
 package_root=$(mktemp -d -t axyndra-candidate.XXXXXX)

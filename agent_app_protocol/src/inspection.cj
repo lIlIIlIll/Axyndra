@@ -1,6 +1,8 @@
 package agent_app_protocol
 
 import agent_domain.*
+import yjson.*
+import yjson_support.*
 
 // Read-only, bounded projections for diagnostics. These types deliberately
 // carry identifiers, digests, counts, and decisions rather than prompt text,
@@ -43,6 +45,20 @@ public class AppRunPromptEvidence {
     }
 }
 
+public class AppRunContextSourceEvidence {
+    public let sourceHash: String
+    public let scopeHash: String
+    public let selected: Bool
+    public let reason: String
+
+    public init(sourceHash: String, scopeHash: String, selected: Bool, reason: String) {
+        this.sourceHash = sourceHash
+        this.scopeHash = scopeHash
+        this.selected = selected
+        this.reason = reason
+    }
+}
+
 public class AppRunContextEvidence {
     public let manifestId: String
     public let manifestDigest: String
@@ -53,6 +69,8 @@ public class AppRunContextEvidence {
     public let activeSkillIds: Array<String>
     public let promptContributions: Array<AppRunPromptEvidence>
     public let tools: Array<AppRunToolEvidence>
+    public let requestVisibleToolNames: Array<String>
+    public let instructionSources: Array<AppRunContextSourceEvidence>
 
     public init(
         manifestId: String,
@@ -63,7 +81,9 @@ public class AppRunContextEvidence {
         tokenBudget: Int64,
         activeSkillIds: Array<String>,
         promptContributions: Array<AppRunPromptEvidence>,
-        tools: Array<AppRunToolEvidence>
+        tools: Array<AppRunToolEvidence>,
+        requestVisibleToolNames!: Array<String> = [],
+        instructionSources!: Array<AppRunContextSourceEvidence> = []
     ) {
         if (estimatedTokens < 0 || tokenBudget < 0) {
             throw IllegalArgumentException("run inspection token counts must not be negative")
@@ -77,6 +97,8 @@ public class AppRunContextEvidence {
         this.activeSkillIds = activeSkillIds
         this.promptContributions = promptContributions
         this.tools = tools
+        this.requestVisibleToolNames = requestVisibleToolNames
+        this.instructionSources = instructionSources
     }
 }
 
@@ -277,6 +299,18 @@ public class AppRunInspectionPage {
     public let operations: Array<AppRunOperationEvidence>
     public let warnings: Array<String>
     public let nextBeforeCursor: Int64
+    private var planExecutionData204: ?AgentValue
+    private var planProjectionPayment204: ?LogicalJsonOwnerReservation
+    public prop planExecution: AgentValue { get() { planExecutionData204.getOrThrow() } }
+
+    // DATA acknowledgement only. Call after the complete reader/serializer
+    // frame returns and all borrowed plan aliases have been discarded.
+    public func returnPlanProjectionAfterConsumption204(): Unit {
+        planExecutionData204 = None<AgentValue>
+        let returned = planProjectionPayment204
+        planProjectionPayment204 = None<LogicalJsonOwnerReservation>
+        match (returned) { case Some(value) => value.close(); case None => () }
+    }
 
     public init(
         threadId: ThreadId,
@@ -297,12 +331,12 @@ public class AppRunInspectionPage {
         modelRequests: Array<AppRunModelRequestEvidence>,
         operations: Array<AppRunOperationEvidence>,
         warnings: Array<String>,
-        nextBeforeCursor: Int64
+        nextBeforeCursor: Int64,
+        planExecution!: AgentValue = objectValue([]),
+        planProjectionPayment204!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     ) {
-        if (threadRevision < 0 || nextBeforeCursor < 0) {
-            throw IllegalArgumentException(
-                "thread revision and next operation cursor must not be negative"
-            )
+        if (threadRevision < 0 || nextBeforeCursor < 0 || planExecution.unifiedKind != ValueKind.Object) {
+            throw IllegalArgumentException("inspection requires non-negative revision/cursor and an object plan projection")
         }
         this.threadId = threadId
         this.runId = runId
@@ -323,6 +357,8 @@ public class AppRunInspectionPage {
         this.operations = operations
         this.warnings = warnings
         this.nextBeforeCursor = nextBeforeCursor
+        this.planExecutionData204 = Some(planExecution)
+        this.planProjectionPayment204 = planProjectionPayment204
     }
 }
 

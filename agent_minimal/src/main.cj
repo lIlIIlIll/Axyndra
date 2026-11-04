@@ -3,6 +3,7 @@ package agent_minimal
 import agent_plugin_registry.*
 import agent_extension_runtime.*
 import agent_history.*
+import agent_app_protocol.AppRunInspectionPage
 import agent_domain.*
 import tool_runtime.*
 import agent_store.*
@@ -81,8 +82,16 @@ func minimalHistory(args: Array<String>): Int64 {
         return minimalError("minimal.command_invalid", "history command has wrong argument count")
     }
     let database = SqliteDatabase(args[1], readOnly: true)
+    // One original DATA bank for this CLI invocation; every plan read and
+    // rendered copy derives from it rather than creating a per-read pool.
+    let historyBank204 = LogicalJsonOwnerBudget()
+    let historyPayment204 = historyBank204.acquire(1)
     try {
-        let projection = RunInspectionProjection(database)
+        let projection = RunInspectionProjection(database, knownParentAllocation204: Some({ bytes =>
+            let payment = historyPayment204.deriveRetainedLease()
+            try { payment.ensureRetainedPeak(bytes); payment }
+            catch (error: Exception) { payment.close(); throw error }
+        }))
         if (args[0] == "latest") {
             match (projection.latestRunId(ThreadId(args[2]))) {
                 case Result.Err(error) => return minimalError(error.code, error.message)
@@ -94,10 +103,19 @@ func minimalHistory(args: Array<String>): Int64 {
         let limit = if (args.size >= 6) { Int64.parse(args[5]) } else { 25 }
         match (projection.inspect(ThreadId(args[2]), RunId(args[3]), before, limit)) {
             case Result.Err(error) => minimalError(error.code, error.message)
-            case Result.Ok(value) => println(stringifyUnifiedJson(objectValue([
-                ValueField("ok", boolValue(true)), ValueField("inspection", runInspectionValue(value))]))); 0
+            case Result.Ok(value) =>
+                try { minimalPrintRunInspection204(value) }
+                finally { value.returnPlanProjectionAfterConsumption204() }
         }
-    } finally { database.close() }
+    } finally { historyPayment204.close(); database.close() }
+}
+
+// The entire serialization/output frame returns before its source projection
+// is acknowledged. Neither the JSON graph nor its encoded text escapes.
+func minimalPrintRunInspection204(value: AppRunInspectionPage): Int64 {
+    println(stringifyUnifiedJson(objectValue([
+        ValueField("ok", boolValue(true)), ValueField("inspection", runInspectionValue(value))])))
+    0
 }
 
 func minimalHelp(): Unit {

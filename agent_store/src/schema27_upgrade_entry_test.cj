@@ -5,14 +5,19 @@ import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
-// Start from the actual current schema, remove only its empty v28 destination,
+// Start from the actual current schema, remove its empty v28/v29 destinations,
 // and retain every v27 table/index/column. This follows the existing historical
 // schema fixtures. No Runtime owner, operation authority or fake receipt exists.
 private func schema27EntryFixture(database: SqliteDatabase): Unit {
-    @Expect(database.scalarInt("PRAGMA user_version"), 28)
+    @Expect(database.scalarInt("PRAGMA user_version"), 29)
     @Expect(database.scalarInt("SELECT COUNT(*) FROM plugin_documents"), 0)
     @Expect(database.scalarInt("SELECT COUNT(*) FROM pragma_table_info('derived_operation_admissions') " +
         "WHERE name IN ('child_call_id','root_operation_id','depth')"), 3)
+    @Expect(database.scalarInt("SELECT COUNT(*) FROM plan_executions"), 0)
+    for (table in ["plan_step_decisions", "plan_action_admissions", "plan_execution_runs",
+        "plan_execution_sessions", "plan_execution_members", "plan_executions"]) {
+        database.execute("DROP TABLE " + table)
+    }
     database.execute("DROP TABLE plugin_documents")
     database.execute("PRAGMA user_version=27")
     database.execute("INSERT INTO threads(id,revision,workspace_id,status,next_item_ordinal,active_turn_id) " +
@@ -27,7 +32,7 @@ private func schema27EntryMetadata(database: SqliteDatabase, id: String, todo: S
 }
 
 private func schema27EntryAssertMigrated(database: SqliteDatabase, todo: String, goal: String): Unit {
-    @Expect(database.scalarInt("PRAGMA user_version"), 28)
+    @Expect(database.scalarInt("PRAGMA user_version"), 29)
     @Expect(database.scalarInt("SELECT COUNT(*) FROM plugin_documents"), 2)
     let copied=database.query("SELECT document_key,revision,payload FROM plugin_documents " +
         "WHERE thread_id='schema27-thread' AND lane_id='main' AND namespace='axyndra:workflow' ORDER BY document_key")
@@ -109,14 +114,14 @@ class Schema27UpgradeEntryTests {
             try {
                 schema27EntryMetadata(seed,"future-thread",payload,"")
                 seed.execute("INSERT INTO plugin_documents VALUES('future-thread','main','axyndra:workflow','todo',4,?)",[SqlParameter.Text(payload)])
-                seed.execute("PRAGMA user_version=29")
+                seed.execute("PRAGMA user_version=30")
                 // A DELETE header exposes configuration writes before refusal.
                 seed.execute("PRAGMA journal_mode=DELETE")
             } finally { seed.close() }
             let original=File.readFrom(path)
             var rejected=false
             try { let unexpected=SqliteDatabase(path); unexpected.close() }
-            catch(error:Exception) { rejected=true; @Expect(error.message.contains("Unsupported SQLite schema version 29")) }
+            catch(error:Exception) { rejected=true; @Expect(error.message.contains("Unsupported SQLite schema version 30")) }
             @Expect(rejected)
             @Expect(File.readFrom(path),original)
             @Expect(!exists(Path(path+"-wal")))
@@ -124,7 +129,7 @@ class Schema27UpgradeEntryTests {
             let history=SqliteDatabase(path,readOnly:true)
             try {
                 @Expect(history.query("PRAGMA journal_mode")[0].required(0),"delete")
-                @Expect(history.scalarInt("PRAGMA user_version"),29)
+                @Expect(history.scalarInt("PRAGMA user_version"),30)
                 @Expect(history.query("SELECT todo_payload FROM thread_metadata WHERE thread_id='future-thread'")[0].required(0),payload)
                 let row=history.query("SELECT revision,payload FROM plugin_documents WHERE thread_id='future-thread'")[0]
                 @Expect(row.required(0),"4"); @Expect(row.required(1),payload)

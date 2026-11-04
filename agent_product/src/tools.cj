@@ -115,6 +115,10 @@ func installRequiredToolGroups(
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
+    match (registerCommandProbeTool(catalog, workspace, processes, shellNetworkMode)) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
+    }
     // The historical bare adapters are only explicit unsafe Support
     // fixtures. Normal production uses the actual installed Native Tool;
     // absent/disabled/missing canonical-data selection has no Host fallback.

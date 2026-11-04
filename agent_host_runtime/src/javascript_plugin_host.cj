@@ -118,12 +118,19 @@ public open class HostJavaScriptPluginHost {
             Result.Ok(())
         } finally { childBackendLock111.unlock() }
     }
-    func childOptions111(): Result<AgentValue> {
+    func childOptions111(context: ToolInvocationContext): Result<AgentValue> {
+        let backend: ?HostPluginChildBackend111
         childBackendLock111.lock()
-        try { match (childBackend111) {
-            case Some(value) => Result.Ok(objectValue([ValueField("background_enabled", boolValue(value.backgroundEnabled()))]))
-            case None => hostPluginResourceError("child.backend_missing", "actual controlled child backend is unavailable") }
-        } finally { childBackendLock111.unlock() }
+        try { backend = childBackend111 } finally { childBackendLock111.unlock() }
+        let actual = match (backend) {
+            case Some(value) => value
+            case None => return hostPluginResourceError<AgentValue>("child.backend_missing",
+                "actual controlled child backend is unavailable")
+        }
+        match (actual.backgroundEnabledFor(context)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(enabled) => Result.Ok(objectValue([ValueField("background_enabled", boolValue(enabled))]))
+        }
     }
     func processOptions180(context:ToolInvocationContext,meter:HostPaidValueProjection151):Result<AgentValue>{
         let backend:?HostPluginChildBackend111
@@ -132,7 +139,11 @@ public open class HostJavaScriptPluginHost {
             "child.backend_missing","actual process resource owner is unavailable")}
         let facts=match(actual.processFacts180(context,meter)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         meter.fundAdditional151(65536,16)
-        Result.Ok(objectValue([ValueField("background_enabled",boolValue(actual.backgroundEnabled())),ValueField("process_facts",facts)]))
+        let enabled = match (actual.backgroundEnabledFor(context)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value
+        }
+        Result.Ok(objectValue([ValueField("background_enabled",boolValue(enabled)),ValueField("process_facts",facts)]))
     }
     func observeProcessPreparation180(context:ToolInvocationContext,request:AgentValue,
         meter:HostPaidValueProjection151):Result<AgentValue>{
@@ -393,6 +404,28 @@ public open class HostJavaScriptPluginHost {
             [".git", ".hg", ".svn", ".ssh", ".gnupg", ".aws", ".kube"].contains(part.toAsciiLower())) { return true }
         Path(source).fileName.toAsciiLower().startsWith(".env.")
     }
+    private var taskContextReadBoundary: ?((RunId, String) -> Result<Unit>) = None
+
+    // Trusted composition seam. The callback reads the existing immutable Run
+    // binding; providers cannot supply a scope, approval or replacement root.
+    public func ownTaskContextReadBoundary(validate: (RunId, String) -> Result<Unit>): Result<Unit> {
+        lock.lock()
+        try {
+            if (closed || taskContextReadBoundary.isSome()) {
+                return hostPluginResourceError("context.task_scope_owner_conflict", "task context scope boundary is already bound or closed") }
+            taskContextReadBoundary = Some(validate)
+            Result.Ok(())
+        } finally { lock.unlock() }
+    }
+
+    public func validateTaskContextResource(runId: RunId, source: String): Result<Unit> {
+        lock.lock(); let validate = try { taskContextReadBoundary } finally { lock.unlock() }
+        match (validate) {
+            case Some(check) => check(runId, source)
+            case None => Result.Ok(())
+        }
+    }
+
     public func captureContextReadScopes(): Result<HostContextReadScopes> {
         // Never hold the process-host lock while entering the existing registry.
         lock.lock(); let provider = try { contextReadComponents } finally { lock.unlock() }
@@ -498,6 +531,36 @@ public open class HostJavaScriptPluginHost {
         if (descriptor.requestedCapabilities.contains("tool.readonly")) { return delegationInput(context, prepared, namespace, tool, generation) }
         readViewInput(prepared, namespace, tool, generation)
     }
+    // Borrowed DATA only. The exact original data-only profile predicates
+    // are consumed completely; no canonical arguments escape this frame.
+    func ordinaryPlainDataOnlyFrame204(context: ToolInvocationContext, plan: NormalizedOperationPlan,
+        call: ToolCall, namespace: String, tool: String, generation: UInt64): Result<Unit> {
+        let descriptor = match (servicePackageData81(namespace, generation)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let profile = match (toolExecutionProfile(namespace, tool, generation)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (profile != PluginToolExecutionProfile.DataOnly) {
+            return hostPluginResourceError("plugin.tool_profile_changed", "Tool no longer has its frozen data-only restriction") }
+        let version = match (instanceExecutorVersion(namespace, generation)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (plan.toolName != "plugin." + namespace + "." + tool ||
+            plan.implementation.toolVersion != version ||
+            plan.implementation.implementationFingerprint != namespace + ":" + descriptor.contentDigest ||
+            plan.requiredCapabilities.size != 1 || plan.requiredCapabilities[0].kind != CapabilityKind.WorkspaceRead ||
+            plan.effectClass != OperationEffectClass.ReadOnly || !networkPolicyModeIsDenied(plan.networkPolicy.mode) ||
+            !plan.networkPolicy.egress.isEmpty() || !plan.networkPolicy.publish.isEmpty() ||
+            !plan.resolvedHosts.isEmpty() || !plan.contextReadFacts.isEmpty()) {
+            return hostPluginResourceError("plugin.tool_profile_changed", "data-only Tool lost its exact current contribution and restricted plan") }
+        match (prepareDataOnlyTool(context, ToolCall(call.callId, call.name, plan.canonicalArguments), namespace, tool, generation)) {
+            case Result.Err(error) => Result.Err(error); case Result.Ok(_) => Result.Ok(()) }
+    }
+    func plainDataOnlyReadViewFrame204(plan: NormalizedOperationPlan, namespace: String,
+        tool: String, generation: UInt64): Result<Unit> {
+        // Preserve the original read-view package predicate. For a plain
+        // data-only plan the same validator rejects a requested resource view.
+        match (hostValidatePluginReadViewParent(this, settingsRoot, plan, namespace, tool, generation)) {
+            case Result.Err(error) => Result.Err(error); case Result.Ok(_) => Result.Ok(()) }
+    }
+
     func readViewInvocationWindow(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         namespace: String, tool: String, generation: UInt64): Result<?HostReadViewCallWindow> {
         let descriptor = match (servicePackageData81(namespace, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -2377,15 +2440,17 @@ class HostToolExecutionCancellationObservation {
     private let context: ToolInvocationContext
     private let prepared: PreparedToolInvocation
     private var evidence: ?ToolExecutionCancellationEvidence = None
+    private let closedTask204: Bool
 
-    init(context: ToolInvocationContext, prepared: PreparedToolInvocation) {
-        this.context = context; this.prepared = prepared
+    init(context: ToolInvocationContext, prepared: PreparedToolInvocation, closedTask204!: Bool = false) {
+        this.context = context; this.prepared = prepared; this.closedTask204 = closedTask204
     }
     func record(identity: JavaScriptHostInvocationIdentity, generation: HostJavaScriptPluginGeneration,
         child: process.CancellationToken, error: AgentError): Unit {
+        let sameCall = if (closedTask204) { prepared.withCall204({ call => identity.callId == call.callId }) }
+            else { identity.callId == prepared.call.callId }
         if (identity.threadId != context.sessionId.value || identity.runId != context.runId.value ||
-            identity.epoch != context.epoch || identity.operationId != prepared.operationId.value ||
-            identity.callId != prepared.call.callId) { return }
+            identity.epoch != context.epoch || identity.operationId != prepared.operationId.value || !sameCall) { return }
         evidence = generation.executionCancellationEvidence(context, prepared, child, error)
     }
     func outcome(result: Result<ToolResult>): ToolExecutionOutcome {
@@ -2399,6 +2464,9 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
     private let toolName: String
     private let instanceGeneration: UInt64
     private let serviceRuntime: ?HostJavaScriptPluginServiceRuntime
+    // Factory-selected DATA protocol only; all original profile/Source and
+    // permission checks remain mandatory in the actual invocation below.
+    private let closedPlainDataOnly204: Bool
 
     public init(
         host: HostJavaScriptPluginHost,
@@ -2410,6 +2478,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         this.toolName = toolName.trimAscii()
         this.instanceGeneration = host.instanceGeneration(this.extensionId)
         this.serviceRuntime = None
+        this.closedPlainDataOnly204 = false
     }
 
     public init(
@@ -2417,7 +2486,8 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         extensionId: String,
         toolName: String,
         serviceRuntime!: ?HostJavaScriptPluginServiceRuntime,
-        expectedInstanceGeneration!: UInt64 = 0u64
+        expectedInstanceGeneration!: UInt64 = 0u64,
+        closedPlainDataOnly204!: Bool = false
     ) {
         this.host = host
         this.extensionId = extensionId.trimAscii()
@@ -2426,6 +2496,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
             host.instanceGeneration(this.extensionId)
         } else { expectedInstanceGeneration }
         this.serviceRuntime = serviceRuntime
+        this.closedPlainDataOnly204 = closedPlainDataOnly204
     }
 
     public func acquireHandoffLease(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolExecutionHandoffLease> {
@@ -2506,12 +2577,190 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
     }
 
     public func executeObserved(context: ToolInvocationContext, prepared: PreparedToolInvocation): ToolExecutionOutcome {
-        let observation = HostToolExecutionCancellationObservation(context, prepared)
+        let observation = HostToolExecutionCancellationObservation(context, prepared,
+            closedTask204: closedPlainDataOnly204 || hostWorkflowTaskDataSelected204(host, extensionId, toolName, instanceGeneration))
         let result = executeActual(context, prepared, executionObservation: Some(observation))
         observation.outcome(result)
     }
 
     private func executeActual(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
+        executionObservation!: ?HostToolExecutionCancellationObservation = None
+    ): Result<ToolResult> {
+        if (closedPlainDataOnly204) { return executePlainDataOnly204(context, prepared, executionObservation) }
+        if (hostWorkflowTaskDataSelected204(host, extensionId, toolName, instanceGeneration)) {
+            return prepared.withOperationPlan204({ plan => prepared.withCall204({ call =>
+                executeTaskActualFrame204(context, prepared, executionObservation, plan, call) }) })
+        }
+        executeLegacyActualFrame204(context, prepared, executionObservation: executionObservation)
+    }
+    private func executePlainDataOnly204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        observation: ?HostToolExecutionCancellationObservation): Result<ToolResult> {
+        // Retain an actual independent metadata consumer for the observer and
+        // Native/timer helper. A typed Err alone never acknowledges this loan.
+        let metadata = prepared.retainMetadataConsumer204()
+        let frame = HostPlainDataOnlyFrame204()
+        let result = prepared.withOperationPlan204({ plan => prepared.withCall204({ call =>
+            executePlainDataOnlyInputFrame204(context, prepared, observation, plan, call, frame) }) })
+        if (!frame.nativeAttempted || (frame.nativeReturned && frame.nativeSucceeded && frame.observerReturned && frame.awaitReturned)) {
+            let input = frame.detachReturnedInput204()
+            match (input) { case Some(value) => value.closeUnpublished151(); case None => () }
+            match (metadata) { case Some(value) => value.returnConsumerFrame204(); case None => () }
+        }
+        result
+    }
+    private func executePlainDataOnlyInputFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        frame: HostPlainDataOnlyFrame204): Result<ToolResult> {
+        if (isPluginLivePolicyParentPlan(plan)) {
+            return hostPluginResourceError("plugin.live_owned_entry_required", "live Parent requires the actual typed owned Pipeline entry") }
+        if (instanceGeneration == 0u64) { return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+            "plugin.instance_unbound", "plugin executor was not bound to an active instance")) }
+        if (context.cancellation.isCancelled()) { return Result.Err(AgentError(AgentErrorKind.Cancelled,
+            "extension.cancelled", "JavaScript plugin invocation was cancelled")) }
+        if (context.epoch < 1) { return Result.Err(AgentError(AgentErrorKind.Protocol,
+            "extension.invocation_identity_invalid", "JavaScript plugin invocation requires the active run epoch")) }
+        match (host.ordinaryPlainDataOnlyFrame204(context, plan, call, extensionId, toolName, instanceGeneration)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (host.plainDataOnlyReadViewFrame204(plan, extensionId, toolName, instanceGeneration)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        // The validated plain input has no host_plan/context fact. Therefore
+        // the original input-attachment predicate is exactly false here.
+        let input = match (hostCopyPlainDataOnlyInput204(host, extensionId, instanceGeneration, call.callId, plan.canonicalArguments)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        frame.input = Some(input)
+        let result = [None<Result<ToolResult>>]
+        input.payment.withValue151({ arguments => result[0] = Some(executePlainDataOnlyNativeFrame204(
+            context, prepared, observation, plan, call, arguments, input.identity, frame)) })
+        result[0].getOrThrow()
+    }
+    private func executePlainDataOnlyNativeFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        arguments: AgentValue, copiedIdentity: String, frame: HostPlainDataOnlyFrame204): Result<ToolResult> {
+        let observer = HostJavaScriptPluginInvocationObserver(context, prepared, None<HostJavaScriptPluginServiceBroker>)
+        let identity = JavaScriptHostInvocationIdentity(threadId: context.sessionId.value, runId: context.runId.value,
+            epoch: context.epoch, operationId: prepared.operationId.value, callId: copiedIdentity)
+        let result = executePlainDataOnlyObservedFrame204(context, prepared, observation, plan, call,
+            arguments, identity, observer, frame)
+        frame.observerReturned = observer.returnOwnedInvocationFrame159().isOk()
+        result
+    }
+    private func executePlainDataOnlyObservedFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        arguments: AgentValue, identity: JavaScriptHostInvocationIdentity,
+        observer: HostJavaScriptPluginInvocationObserver, frame: HostPlainDataOnlyFrame204): Result<ToolResult> {
+        match (observer.prepareOwnedAwait166()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        try {
+            let workingDirectory = if (context.cwd.trimAscii() == "") { context.workspaceRoot } else { context.cwd }
+            frame.nativeAttempted = true
+            let outcome = host.invokeObserved(extensionId, toolName, stringifyUnifiedJson(arguments), identity: identity,
+                cancellation: context.cancellation, cwd: workingDirectory, hasUI: false,
+                processLimits: context.budget.processLimits, observer: Some(observer), expectedInstanceGeneration: instanceGeneration,
+                authorityScope: "data-only:" + extensionId + ":" + plan.implementation.toolVersion + ":" +
+                    plan.implementation.implementationFingerprint, executionObservation: observation)
+            // invoke's real synchronous read/timer/Future helper has returned.
+            // Ordinary errors remain conservatively paid; no status grants ACK.
+            frame.nativeReturned = true
+            frame.nativeSucceeded = outcome.isOk()
+            try {
+                match (observer.finishReadonly()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                match (observer.finishChild111()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                match (observer.finishDocument()) {
+                    case Result.Err(error) =>
+                        match (outcome) { case Result.Err(original) => if (original.kind == AgentErrorKind.Cancelled && context.cancellation.isCancelled()) { return Result.Err(original) }
+                            case Result.Ok(_) => () }
+                        return Result.Err(error)
+                    case Result.Ok(_) => () }
+                let value = match (outcome) { case Result.Err(error) => return Result.Err(error); case Result.Ok(actual) => actual }
+                match (host.ordinaryPlainDataOnlyFrame204(context, plan, call, extensionId, toolName, instanceGeneration)) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                let copied = match (hostCopyPlainDataOnlyResult204(host, extensionId, instanceGeneration,
+                    identity.callId, value.value, value.isError)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(actual) => actual }
+                var transferred = false
+                try {
+                    match (context.outputSink.emit(ToolOutputChunk(copied.callId,
+                        if (copied.isError) { ToolOutputChannel.Stderr } else { ToolOutputChannel.Stdout }, stringifyUnifiedJson(copied.output)))) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    transferred = true
+                    Result.Ok(copied)
+                } finally { if (!transferred) { copied.releasePayload() } }
+            } finally { match (outcome) { case Result.Ok(value) => value.releasePayload(); case Result.Err(_) => () } }
+        } finally { frame.awaitReturned = observer.retireOwnedAwait166().isOk() }
+    }
+
+    private func executeTaskActualFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        executionObservation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall): Result<ToolResult> {
+        if(isPluginLivePolicyParentPlan(plan)){
+            return hostPluginResourceError("plugin.live_owned_entry_required","live Parent requires the actual typed owned Pipeline entry")}
+        if (instanceGeneration == 0u64) {
+            return Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "plugin.instance_unbound",
+                "plugin executor was not bound to an active instance"
+            ))
+        }
+        if (context.cancellation.isCancelled()) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Cancelled,
+                "extension.cancelled",
+                "JavaScript plugin invocation was cancelled"
+            ))
+        }
+        if (context.epoch < 1) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Protocol,
+                "extension.invocation_identity_invalid",
+                "JavaScript plugin invocation requires the active run epoch"
+            ))
+        }
+
+        match (hostChildInvocationPlanFrame204(host, context, prepared, extensionId, toolName, instanceGeneration, plan)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let configuration = match (host.primitiveConfiguration111(extensionId, toolName, instanceGeneration)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(Some(value)) => value
+            case Result.Ok(None) => return hostPluginResourceError("child.profile_missing", "operator primitive selection is absent") }
+        let input = try { copyHostTaskInvocationInput204(configuration, plan) }
+            catch (_: LogicalJsonPayloadError) { return Result.Err(AgentError(AgentErrorKind.BudgetExceeded,
+                "extension.payload_capacity", "Task invocation input cannot fit the original shared payload capacity")) }
+        let returned = [false]
+        try { input.withData({ arguments => executeTaskInputFrame204(context, prepared, executionObservation, plan, call, arguments, returned) }) }
+        finally { if (returned[0]) { let _ = input.retireAfterCompleteTaskFrame() } }
+    }
+    private func executeTaskInputFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        executionObservation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        invocationArguments: AgentValue, returned: Array<Bool>): Result<ToolResult> {        let toolPayload: ?OrdinaryToolPayloadLimits = if (isFrozenReadonlyDelegationParentPlan(plan)) {
+            ordinaryToolPayloadLimitsFromValue(plan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
+        } else if (isFrozenPluginDocumentParentPlan(plan) || isFrozenReadViewParentPlan(plan)) {
+            ordinaryToolPayloadLimitsFromValue(plan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
+        } else { None }
+        let identity = JavaScriptHostInvocationIdentity(
+            threadId: context.sessionId.value,
+            runId: context.runId.value,
+            epoch: context.epoch,
+            operationId: prepared.operationId.value,
+            callId: call.callId
+        )
+        let profile = match (host.toolExecutionProfile(extensionId, toolName, instanceGeneration)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let dataOnly = profile == PluginToolExecutionProfile.DataOnly
+        let preparedCompletion152 = isFrozenPluginPreparedCompletion152(plan)
+        let observer: HostJavaScriptPluginInvocationObserver = if (dataOnly || preparedCompletion152) {
+            // Denies every service request. No raw or ordinary broker fallback.
+            HostJavaScriptPluginInvocationObserver(context, prepared, Option<HostJavaScriptPluginServiceBroker>.None)
+        } else { match (serviceRuntime) {
+            case Some(runtime) => runtime.observerTaskFrame204(context, prepared,
+                HostPluginServiceIdentity(host, extensionId, instanceGeneration), plan, call)
+            case None => HostJavaScriptPluginInvocationObserver(context, prepared, Option<HostJavaScriptPluginServiceBroker>.None)
+        } }
+        let result = executeObservedTaskInvocationFrame204(context, prepared, executionObservation, plan, call,
+            invocationArguments, toolPayload, identity, dataOnly, preparedCompletion152, observer)
+        // The entire actual Native/service callback/timer/output/Future helper
+        // has returned. Failed Future retirement keeps the broker paid.
+        returned[0] = observer.returnOwnedInvocationFrame159().isOk()
+        result
+    }
+    private func executeLegacyActualFrame204(
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation,
         executionObservation!: ?HostToolExecutionCancellationObservation = None
@@ -2572,6 +2821,123 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         // has returned. Failed Future retirement keeps the broker paid.
         let _ = observer.returnOwnedInvocationFrame159()
         result
+    }
+    private func executeObservedTaskInvocationFrame204(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, executionObservation: ?HostToolExecutionCancellationObservation,
+        plan: NormalizedOperationPlan, call: ToolCall, invocationArguments: AgentValue, toolPayload: ?OrdinaryToolPayloadLimits,
+        identity: JavaScriptHostInvocationIdentity, dataOnly: Bool, preparedCompletion152: Bool,
+        observer: HostJavaScriptPluginInvocationObserver): Result<ToolResult> {
+        if(httpIntentText(plan.canonicalArguments.field("host_plan") ?? nullValue(),"version")==PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA ||
+            httpIntentText(plan.canonicalArguments.field("host_plan")??nullValue(),"version")==PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA){
+            return hostExecuteFrozenDocument(host,extensionId,toolName,instanceGeneration,context,prepared,observer)
+        }
+        try {
+            match(observer.prepareOwnedAwait166()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let hasUI = if (dataOnly || preparedCompletion152) { false } else { match (serviceRuntime) {
+            case Some(runtime) => runtime.hasUI(context.sessionId)
+            case None => false
+        } }
+        let workingDirectory = if (context.cwd.trimAscii() == "") {
+            context.workspaceRoot
+        } else {
+            context.cwd
+        }
+        let readViewWindow = match (host.readViewInvocationWindow(context, prepared, extensionId, toolName, instanceGeneration)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let attachment: ?HostToolInputAttachmentSession = if (!isFrozenReadonlyDelegationParentPlan(plan)) {
+            None<HostToolInputAttachmentSession>
+        } else { match (host.prepareToolInputAttachment(context, prepared, extensionId, toolName, instanceGeneration)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value } }
+        let outcome = try { host.invokeObserved(
+            extensionId,
+            toolName,
+            stringifyUnifiedJson(invocationArguments),
+            identity: identity,
+            cancellation: context.cancellation,
+            cwd: workingDirectory,
+            hasUI: hasUI,
+            processLimits: context.budget.processLimits,
+            finiteReadViewWindow: readViewWindow,
+            observer: Some(observer),
+            expectedInstanceGeneration: instanceGeneration,
+            authorityScope: if (dataOnly) { "data-only:" + extensionId + ":" +
+                plan.implementation.toolVersion + ":" +
+                plan.implementation.implementationFingerprint } else {
+                hostPluginInvocationAuthorityScope(context) },
+            toolPayloadLimits: toolPayload,
+            documentToolPayload: toolPayload.isSome() && isFrozenPluginDocumentParentPlan(plan),
+            executionObservation: executionObservation,
+            inputAttachment: match (attachment) { case Some(value) => value.descriptor(); case None => Option<AgentValue>.None },
+            inputAttachmentCurrent: match (attachment) { case Some(value) => Some({ => value.validate() }); case None => Option<() -> Result<Unit>>.None }
+        ) } catch (error: Exception) {
+            match (attachment) { case Some(owner) => owner.abort(); case None => () }; throw error
+        }
+        var transferred = false
+        try {
+            match (observer.finishReadonly()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            match (observer.finishChild111()) { case Result.Err(error) =>
+                return Result.Err(error); case Result.Ok(_) => () }
+        match (observer.finishDocument()) { case Result.Err(error) =>
+            match (outcome) {
+                case Result.Ok(_) => ()
+                case Result.Err(original) => if (original.kind == AgentErrorKind.Cancelled && context.cancellation.isCancelled()) {
+                    return Result.Err(original) }
+            }
+            return Result.Err(error)
+            case Result.Ok(_) => () }
+            match (outcome) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(value) =>
+                    match (hostChildInvocationPlanFrame204(host, context, prepared, extensionId, toolName, instanceGeneration, plan)) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
+                    }
+                    match (attachment) { case Some(owner) => match (owner.validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
+                    if (preparedCompletion152) {
+                        match (hostVerifyTaskPreparedCompletionFrame204(host, extensionId, toolName, instanceGeneration,
+                            context, prepared, plan, value.value, value.isError)) {
+                            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    }
+                    let owned=match(observer.retainOwnedAwaitResult166(call.callId,value.value,value.isError)){
+                        case Result.Err(error)=>return Result.Err(error);case Result.Ok(item)=>item}
+                    match(owned){case Some(copy)=>
+                        var copyReturned=false
+                        try{
+                            // The independent copy and this encoded output
+                            // helper are prepaid before real emission. No raw
+                            // ordinary Native result is relabeled as a lease.
+                            match(context.outputSink.emit(ToolOutputChunk(call.callId,
+                                if(copy.isError){ToolOutputChannel.Stderr}else{ToolOutputChannel.Stdout},stringifyUnifiedJson(copy.output)))){
+                                case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+                            let result=if(toolPayload.isSome() || attachment.isSome()){
+                                ToolResult(call.callId,copy.output,isError:copy.isError,payloadLease:Some(ToolResultPayloadLease({=>
+                                    copy.releasePayload();value.releasePayload()
+                                    match(attachment){case Some(owner)=>owner.acknowledge();case None=>()}})))}else{copy}
+                            match(attachment){case Some(owner)=>owner.returned();case None=>()}
+                            transferred=toolPayload.isSome() || attachment.isSome();copyReturned=true
+                            return Result.Ok(result)
+                        }finally{if(!copyReturned){copy.releasePayload()}}
+                        case None=>()}
+                    match (context.outputSink.emit(ToolOutputChunk(call.callId,
+                        if (value.isError) { ToolOutputChannel.Stderr } else { ToolOutputChannel.Stdout }, stringifyUnifiedJson(value.value)))) {
+                        case Result.Err(error) => Result.Err(error)
+                        case Result.Ok(_) =>
+                            let result = ToolResult(call.callId, value.value, isError: value.isError,
+                                payloadLease: if (toolPayload.isSome() || attachment.isSome() || preparedCompletion152) { Some(ToolResultPayloadLease({ =>
+                                    value.releasePayload(); match (attachment) { case Some(owner) => owner.acknowledge(); case None => () } })) } else { Option<ToolResultPayloadLease>.None })
+                            match (attachment) { case Some(owner) => owner.returned(); case None => () }
+                            transferred = toolPayload.isSome() || attachment.isSome() || preparedCompletion152
+                            Result.Ok(result)
+                    }
+            }
+        } finally {
+            if (!transferred) { match (outcome) { case Result.Ok(value) => value.releasePayload(); case _ => () }
+                match (attachment) { case Some(owner) => owner.abort(); case None => () } }
+        }
+        } finally {
+            // After complete Native worker/transport/output/copy frames. A
+            // failed retirement retains the actual paid controller debt.
+            let _ = observer.retireOwnedAwait166()
+        }
     }
     private func executeObservedInvocationFrame159(context: ToolInvocationContext,
         prepared: PreparedToolInvocation, executionObservation: ?HostToolExecutionCancellationObservation,

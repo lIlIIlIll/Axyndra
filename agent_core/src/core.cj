@@ -150,6 +150,8 @@ public class AgentRunRequest {
     public let executionLaneId: LaneId
     public let queuedInitiator113: ?QueuedRunInitiatorData113
     public let queuedInputPayment113: ?LogicalJsonOwnerReservation
+    public let planContextFacts: AgentValue
+    public let planRequestCustody204: ?PlanRequestCustody204
 
     public init(
         runId: RunId,
@@ -183,7 +185,9 @@ public class AgentRunRequest {
         initializeContext!: Bool = false,
         ownedEvents!: ?OwnedAgentEventSink = None,
         queuedInitiator113!: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>,
-        queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+        queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>,
+        planContextFacts!: AgentValue = objectValue([]),
+        planRequestCustody204!: ?PlanRequestCustody204 = None<PlanRequestCustody204>
     ) {
         if (prompt.trimAscii() == "") {
             throw IllegalArgumentException("agent prompt must not be empty")
@@ -253,6 +257,8 @@ public class AgentRunRequest {
             throw IllegalArgumentException("queued input requires its actual retained DATA payment") }
         this.queuedInitiator113 = queuedInitiator113
         this.queuedInputPayment113 = queuedInputPayment113
+        this.planContextFacts = planContextFacts
+        this.planRequestCustody204 = planRequestCustody204
         this.contextWindow = if (contextWindow > 0) {
             contextWindow
         } else if (budget.maxInputTokens > Int64.Max - budget.maxOutputTokens -
@@ -265,7 +271,8 @@ public class AgentRunRequest {
     }
 }
 
-func requestWithContextSnapshot(request: AgentRunRequest, snapshot: InvocationContextProjection): AgentRunRequest {
+func requestWithContextSnapshot(request: AgentRunRequest, snapshot: InvocationContextProjection,
+    custody204!: ?PlanRequestCustody204 = None<PlanRequestCustody204>): AgentRunRequest {
     AgentRunRequest(request.runId, request.sessionId, request.model, request.prompt,
         system: request.system, thinking: request.thinking,
         userRequestedThinking: request.requestedPolicy.userRequestedThinking,
@@ -279,7 +286,9 @@ func requestWithContextSnapshot(request: AgentRunRequest, snapshot: InvocationCo
         parallelToolCalls: request.parallelToolCalls, toolContext: request.toolContext,
         contextSnapshot: snapshot, contextWindow: request.contextWindow,
         providerSafetyMargin: request.providerSafetyMargin, executionLaneId: request.executionLaneId,
-        ownedEvents: request.ownedEvents, queuedInitiator113: request.queuedInitiator113, queuedInputPayment113: request.queuedInputPayment113)
+        ownedEvents: request.ownedEvents, queuedInitiator113: request.queuedInitiator113, queuedInputPayment113: request.queuedInputPayment113,
+        planContextFacts: request.planContextFacts, planRequestCustody204: match (custody204) {
+            case Some(value) => Some(value); case None => request.planRequestCustody204 })
 }
 
 public enum AgentRunOutcome {
@@ -293,6 +302,11 @@ public interface AgentRunner {
     func startOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
         OwnedAgentRunResult113.Existing(start(request, sink))
+    }
+    func startRestrictedOwnedCheckpointFailure113(request: AgentRunRequest,
+        restriction: AgentRunStartRestriction111, events: AgentEventSink): OwnedAgentRunResult113 {
+        OwnedAgentRunResult113.Existing(Result<AgentRunOutcome>.Err(AgentError(AgentErrorKind.PermissionDenied,
+            "child.start_restriction_unsupported", "this transport cannot carry the original live start restriction")))
     }
     func resumeContextBoundaryOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
@@ -546,25 +560,29 @@ class PreparedModelRequest {
     // Strong typed carrier; source snapshot does not escape with these copies.
     // Caller/store retirement is a separate actual-frame migration below.
     private var ownedTools159: ?OwnedModelTools159
+    private var planData204: ?CorePlanRequestData204
 
     init(requestId: RequestId, request: ModelRequest, estimatedInputTokens: Int64,
-        ownedTools159!: ?OwnedModelTools159 = None) {
+        ownedTools159!: ?OwnedModelTools159 = None, planData204!: ?CorePlanRequestData204 = None) {
         this.requestId = requestId
         this.requestValue159 = Some(request)
         this.estimatedInputTokens = estimatedInputTokens
         this.ownedTools159 = ownedTools159
+        this.planData204 = planData204
     }
     func borrowTools159(): ?ModelInputToolsBorrow159 {
         match (ownedTools159) { case Some(value) => Some(value.borrowModelTools159()); case None => None<ModelInputToolsBorrow159> }
     }
     func returnPreparedFrame159(): Unit {
         let owner = clearPreparedFrame159()
-        match (owner) { case Some(value) => value.closeAfterPreparedFrame159(); case None => () }
+        match (owner[0]) { case Some(value) => value.closeAfterPreparedFrame159(); case None => () }
+        match (owner[1]) { case Some(value) => value.returnPreparedFrame204(); case None => () }
     }
-    private func clearPreparedFrame159(): ?OwnedModelTools159 {
+    private func clearPreparedFrame159(): (?OwnedModelTools159, ?CorePlanRequestData204) {
         requestValue159 = None<ModelRequest>
         let owner = ownedTools159; ownedTools159 = None<OwnedModelTools159>
-        owner
+        let planOwner = planData204; planData204 = None<CorePlanRequestData204>
+        (owner, planOwner)
     }
 }
 
@@ -830,6 +848,7 @@ public class AgentCore <: AgentRunner {
     }
 
     public func prepareContinuation(request: AgentRunRequest): Result<CoreContinuationPreparation> {
+        match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         try { Result.Ok(CoreContinuationPreparation(request, coreModelLane(request, catalog))) }
         catch (_: Exception) { Result.Err(AgentError(AgentErrorKind.InvalidInput, "continuation.request_invalid", "cannot freeze the continuation request")) }
     }
@@ -848,9 +867,12 @@ public class AgentCore <: AgentRunner {
 
     private func startOwned(request: AgentRunRequest, sink: AgentEventSink,
         continuation: ?AgentContinuationStart, restriction!: ?AgentRunStartRestriction111 = None): Result<AgentRunOutcome> {
+        match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         let contextProjection = try {
             validatedContextSnapshot(request.contextSnapshot)
         } catch (error: Exception) {
+            match (request.planRequestCustody204) {
+                case Some(value) => value.rejectedBeforeRuntimeInvocation204(); case None => () }
             return Result.Err(AgentError(
                 AgentErrorKind.InvalidInput, "context.snapshot_invalid", error.message
             ))
@@ -875,10 +897,12 @@ public class AgentCore <: AgentRunner {
         let control = CoreRunControl(request.runId, request.budget, runtime,
             parentCancellation: match (restriction) { case Some(value) => Some(value.cancellation); case None => None },
             callerCancellation180: request.callerCancellation180,
-            recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery))
+            recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery),
+            requestCustody204: request.planRequestCustody204)
         match (controls.add(control)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
+                control.rejectBeforeRuntimeInvocation204()
                 if (restriction.isSome()) { control.close() }
                 return Result.Err(error)
         }
@@ -1033,14 +1057,16 @@ public class AgentCore <: AgentRunner {
     }
 
     public func resumeContextBoundary(request: AgentRunRequest, sink: AgentEventSink): Result<AgentRunOutcome> {
+        match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         // Ignore caller continuation data: read the actual current row first.
         let boundary = match (runs.contextBoundary(request.runId)) {
             case Result.Ok(Some(value)) => value
             case Result.Ok(None) => return Result.Err(coreContextBoundaryError("no current context boundary"))
             case Result.Err(error) => return Result.Err(error) }
         let data = boundary.data()
-        let durable = try { coreContextBoundaryRequestFromValue(contextBoundaryField(data, "request"), interactions: request.interactions, ownedEvents: request.ownedEvents, callerCancellation180: request.callerCancellation180) }
+        let restored = try { coreContextBoundaryRequestFromValue(contextBoundaryField(data, "request"), interactions: request.interactions, ownedEvents: request.ownedEvents, callerCancellation180: request.callerCancellation180) }
             catch (error: Exception) { return Result.Err(coreContextBoundaryError(error.message)) }
+        let durable = requestWithContextSnapshot(restored, restored.contextSnapshot, custody204: request.planRequestCustody204)
         if (durable.runId.value != request.runId.value || durable.sessionId.value != request.sessionId.value ||
             durable.resolverVersion != MODEL_POLICY_RESOLUTION_VERSION ||
             durable.modelCapabilitiesSnapshot.snapshotSchemaVersion != MODEL_CAPABILITY_SNAPSHOT_VERSION ||
@@ -1093,6 +1119,7 @@ public class AgentCore <: AgentRunner {
         request: AgentRunRequest,
         sink: AgentEventSink
     ): Result<AgentRunOutcome> {
+        match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         let continuation = match (runs.continuation(request.runId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1133,7 +1160,7 @@ public class AgentCore <: AgentRunner {
         }
         let durableRequest = try { requestFromContinuation(
             continuation, interactions: request.interactions,
-            toolContext: request.toolContext
+            toolContext: request.toolContext, planRequestCustody204: request.planRequestCustody204
         ) } catch (_: Exception) {
             return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                 "context.snapshot_unsupported_or_invalid",
@@ -1564,6 +1591,7 @@ public class AgentCore <: AgentRunner {
         decision: ApprovalDecision,
         sink: AgentEventSink
     ): Result<AgentRunOutcome> {
+        match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         let previous = match (runs.find(request.runId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1607,7 +1635,7 @@ public class AgentCore <: AgentRunner {
         let durableRequest = try { requestFromContinuation(
             continuation,
             interactions: request.interactions,
-            toolContext: request.toolContext
+            toolContext: request.toolContext, planRequestCustody204: request.planRequestCustody204
         ) } catch (_: Exception) {
             return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                 "context.snapshot_unsupported_or_invalid",
@@ -2144,6 +2172,11 @@ public class AgentCore <: AgentRunner {
         if (followUps) {
             return Result.Ok(None)
         }
+        match (coreRequirePlanComplete(tools, catalog, request)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                return optionalOutcome(fail(request, context, control, error, sink, counter: Some(counter)))
+        }
         let completed = RunSnapshot(
             request.runId,
             request.sessionId,
@@ -2182,6 +2215,10 @@ public class AgentCore <: AgentRunner {
                 AgentError(AgentErrorKind.RecoveryRequired, "run.owned_work_unsettled",
                     "owned work prevented successful Run settlement"),
                 sink, counter: Some(counter)))
+        }
+        match (coreFinishPlan(tools, catalog, request)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return optionalOutcome(fail(request, context, control, error, sink, counter: Some(counter)))
         }
         match (runs.save(completed)) {
             case Result.Ok(_) => ()
@@ -2229,13 +2266,43 @@ public class AgentCore <: AgentRunner {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (model.validatePolicySnapshot(request.model, Some(request.modelCapabilitiesSnapshot))) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let planOwner = match (corePlanReadOwner204(tools, catalog, request)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let consumer = match (planOwner) { case Some(value) => Some(value.beginConsumer204()); case None => None<PlanExecutionReadConsumer204> }
+        let built = try { buildBoundedPlanRequestFrame204(request, history, control, drainFinalization, planOwner, consumer) }
+        catch (_: ModelToolCopyInvoiceRefused204) {
+            // The exact prepay helper and its private source/copy selection
+            // frames have returned without constructing a definition carrier.
+            // Only their DATA loans may return here; no task/provider/effect
+            // ACK or exception message is inferred from this typed refusal.
+            match (consumer) { case Some(value) => value.returnConsumerFrame204(); case None => () }
+            match (planOwner) { case Some(value) => value.closeAfterCaller204(); case None => () }
+            return Result.Err(AgentError(AgentErrorKind.BudgetExceeded, "model.request_data_failed",
+                "the model request tool copies could not obtain their original DATA allocation"))
+        }
+        catch (error: Exception) {
+            match (planOwner) { case Some(value) => value.holdUnknownConsumer204(); case None => () }
+            throw error
+        }
+        // No borrowed state alias survives the complete construction helper.
+        match (consumer) { case Some(value) => value.returnConsumerFrame204(); case None => () }
+        match (planOwner) { case Some(value) => value.closeAfterCaller204(); case None => () }
+        built
+    }
+
+    private func buildBoundedPlanRequestFrame204(request: AgentRunRequest, history: Array<ModelMessage>,
+        control: CoreRunControl, drainFinalization: Bool, planOwner: ?PlanExecutionReadOwner204,
+        consumer: ?PlanExecutionReadConsumer204): Result<PreparedModelRequest> {
+        let planState = match (consumer) { case Some(value) => Some(value.value204()); case None => None<AgentValue> }
         // The drain finalization is a control-plane request: no tool surface,
         // NoTools choice, and a bounded wrap-up instruction. It must never be
         // able to start shell, edit, git, network, or any other side effect.
         var tools159 = if (drainFinalization) {
             (None<OwnedModelTools159>, Array<ModelToolDefinition>())
         } else {
-            match (coreModelToolsForRequest159(control.runtime, ThreadId(request.sessionId.value))) {
+            match (coreModelToolsForRequest159(control.runtime, ThreadId(request.sessionId.value), planState, request.toolContext.planReviewControl, tools)) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(value) => value
             }
@@ -2243,13 +2310,21 @@ public class AgentCore <: AgentRunner {
         let ownedTools159 = tools159[0]
         var requestTools = tools159[1]
         tools159 = (None<OwnedModelTools159>, Array<ModelToolDefinition>())
+        let planData = match (planOwner) {
+            case Some(owner) =>
+                let value = CorePlanRequestData204(owner.deriveRetainedAllocation204(131072))
+                value.fundBeforeRendering204(request, planState.getOrThrow())
+                Some(value)
+            case None => None<CorePlanRequestData204>
+        }
         let built = buildBoundedModelRequestFrame159(request, history, control,
-            requestTools, ownedTools159, drainFinalization)
+            requestTools, ownedTools159, drainFinalization, planState, planData)
         match (built) {
             case Result.Err(_) =>
                 requestTools = Array<ModelToolDefinition>()
                 match (ownedTools159) {
                     case Some(owner) => owner.closeAfterPreparedFrame159(); case None => () }
+                match (planData) { case Some(owner) => owner.returnPreparedFrame204(); case None => () }
             case Result.Ok(_) => ()
         }
         built
@@ -2258,11 +2333,11 @@ public class AgentCore <: AgentRunner {
     private func buildBoundedModelRequestFrame159(request: AgentRunRequest,
         history: Array<ModelMessage>, control: CoreRunControl,
         requestTools: Array<ModelToolDefinition>, ownedTools159: ?OwnedModelTools159,
-        drainFinalization: Bool): Result<PreparedModelRequest> {
+        drainFinalization: Bool, planState: ?AgentValue, planData: ?CorePlanRequestData204): Result<PreparedModelRequest> {
         let baseSystem = systemWithContextSnapshot(
             request.system,
             request.contextSnapshot
-        )
+        ) + corePlanInstructions(planState)
         let effectiveSystem = if (drainFinalization) {
             baseSystem +
                 "\n\n[BUDGET DRAINING] The work-turn budget is exhausted. Do " +
@@ -2274,11 +2349,16 @@ public class AgentCore <: AgentRunner {
         } else {
             baseSystem
         }
+        let laneInputLimit = match (control.runtime.activeRun()) {
+            case Some(active) => active.lane.maxEstimatedInput()
+            case None => 0
+        }
         let contextWindow = buildRequestContext(
             history,
             request.budget,
             system: effectiveSystem,
-            tools: requestTools
+            tools: requestTools,
+            inputTokenLimit: laneInputLimit
         )
         if (contextWindow.overBudget) {
             return Result.Err(AgentError(
@@ -2287,7 +2367,8 @@ public class AgentCore <: AgentRunner {
                 "model request context exceeds maxInputTokens",
                 fields: [
                     ErrorField("estimated_input_tokens", contextWindow.estimatedTokens.toString()),
-                    ErrorField("max_input_tokens", request.budget.maxInputTokens.toString())
+                    ErrorField("max_input_tokens", min(request.budget.maxInputTokens, laneInputLimit).toString()),
+                    ErrorField("configured_max_input_tokens", request.budget.maxInputTokens.toString())
                 ]
             ))
         }
@@ -2317,7 +2398,7 @@ public class AgentCore <: AgentRunner {
             cachePolicy: request.cachePolicy,
             structuredOutput: request.structuredOutput,
             cacheKey: request.cacheKey
-        ), contextWindow.estimatedTokens, ownedTools159: ownedTools159))
+        ), contextWindow.estimatedTokens, ownedTools159: ownedTools159, planData204: planData))
     }
 
     private func accountModelReply(
@@ -2666,7 +2747,9 @@ public class AgentCore <: AgentRunner {
             sink,
             toolLoopState
         )) {
-            case Result.Err(error) => return Result.Err(error)
+            case Result.Err(error) => return turnExecution(fail(
+                request, context, control, error, sink, counter: Some(counter)
+            ))
             case Result.Ok(Some(outcome)) => return Result.Ok(
                 CoreTurnExecution.Finished(outcome)
             )
@@ -3114,6 +3197,10 @@ public class AgentCore <: AgentRunner {
         sink: AgentEventSink,
         summary: String
     ): Result<AgentRunOutcome> {
+        match (coreRequirePlanComplete(tools, catalog, request)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(request, context, control, error, sink, counter: Some(counter))
+        }
         let completed = RunSnapshot(
             request.runId,
             request.sessionId,
@@ -3142,6 +3229,10 @@ public class AgentCore <: AgentRunner {
                 AgentError(AgentErrorKind.RecoveryRequired, "run.owned_work_unsettled",
                     "owned work prevented successful Run settlement"),
                 sink, counter: Some(counter))
+        }
+        match (coreFinishPlan(tools, catalog, request)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(request, context, control, error, sink, counter: Some(counter))
         }
         match (runs.save(completed)) {
             case Result.Ok(_) => ()
@@ -3508,10 +3599,10 @@ public class AgentCore <: AgentRunner {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let source = match (control.runtime.commitContextReadToolCall(admission,
                 ItemId("context-read-item-" + prepared.operationId.value), prepared.operationId,
-                ToolCall(readCall.callId, readCall.name, prepared.operationPlan.canonicalArguments), prepared.operationPlan,
+                ToolCall(readCall.callId, readCall.name, corePreparedOperationPlan204(prepared, context).canonicalArguments), corePreparedOperationPlan204(prepared, context),
                 createdAtMillis: agentUtcMillis())) {
                 case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-            match (operationRuntime.prepareDirectOperation(source, prepared.operationPlan)) {
+            match (operationRuntime.prepareDirectOperation(source, corePreparedOperationPlan204(prepared, context))) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             prepared = match (tools.bindDirectRoot(context, prepared, source)) {
                 case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
@@ -3632,7 +3723,7 @@ public class AgentCore <: AgentRunner {
         owner: CoreContextReadOwner, prepared: PreparedToolInvocation,
         outcome: Result<ToolInvocationResult>, handedOff: Bool): Result<Unit> {
         let resolved = match (control.runtime.resolveOperation(ItemId("result-" + prepared.operationId.value),
-            prepared.operationId, CanonicalToolCallId(prepared.call.callId), prepared.operationPlan,
+            prepared.operationId, CanonicalToolCallId(prepared.borrowCallForCore204(control).callId), corePreparedOperationPlan204(prepared, context),
             if (handedOff) { OperationAttemptStage.Executing } else { OperationAttemptStage.Prepared },
             outcome, "receipt-" + prepared.operationId.value, agentUtcMillis(),
             expectedRunId: Some(context.runId), expectedEpoch: Some(context.epoch))) {
@@ -3807,12 +3898,16 @@ public class AgentCore <: AgentRunner {
         match (prepareCanonicalOperations(context, preparation)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
+                let failure = match (rejectUnstartedCanonicalBatch(context, control, preparation, error)) {
+                    case Result.Ok(_) => error
+                    case Result.Err(cleanupError) => cleanupError
+                }
                 control.clearBatch(batchId)
                 if (hasReadPreparation(control, calls)) {
                     match (settleReadPreparationParents(context, control, calls, error, sink, preparation: Some(preparation))) {
                         case Result.Err(failure) => return Result.Err(failure); case Result.Ok(_) => () }
                 }
-                return Result.Err(error)
+                return Result.Err(failure)
         }
         executePreparedToolBatch(request,context,control,counter,preparation,sink,loopState,batchId)
     }
@@ -3890,12 +3985,21 @@ public class AgentCore <: AgentRunner {
                     fatal = Some(error)
                 }
             }
+            var planHandledFailure = false
             if (canonicalCommitted) {
+                match (coreObservePlanOperation(tools, catalog, request, item.operationId)) {
+                    case Result.Ok(handled) => planHandledFailure = handled
+                    case Result.Err(error) => if (fatal.isNone() || error.kind == AgentErrorKind.RecoveryRequired) {
+                        fatal = Some(error)
+                    }
+                }
                 notifyPostToolHook(context, item)
                 control.releasePreparationInput(item.committed.canonicalItemId)
             }
             match (item.result) {
-                case Result.Err(error) => if (fatal.isNone()) {
+                case Result.Err(error) => if (fatal.isNone() &&
+                    (!planHandledFailure || error.kind == AgentErrorKind.RecoveryRequired ||
+                        error.kind == AgentErrorKind.Cancelled || error.kind == AgentErrorKind.PermissionDenied)) {
                     fatal = Some(error)
                 }
                 case Result.Ok(actualOutcome) =>
@@ -3980,8 +4084,8 @@ public class AgentCore <: AgentRunner {
              }
              match ((preparation.approvalPrepared,preparation.approvalCall)) {
                  case (Some(parent),Some(committed)) =>
-                     if ((isPluginLivePolicyParentPlan(parent.operationPlan) || isManagedChannelOwnedParentPlan(parent.operationPlan))) {
-                         let retained = CorePendingOwnedParentApproval(CorePreparedTool(0,committed,parent))
+                     if ((isPluginLivePolicyParentPlan(corePreparedOperationPlan204(parent, context)) || isManagedChannelOwnedParentPlan(corePreparedOperationPlan204(parent, context)))) {
+                         let retained = CorePendingOwnedParentApproval(CorePreparedTool(0,committed,parent, metadataConsumer204: context.paidExecutionFailureConsumer173()))
                          match (control.retainPendingOwnedParent(retained)) {
                              case Result.Err(error) => control.clearBatch(batchId); return Result.Err(error)
                              case Result.Ok(_) => ()
@@ -4164,7 +4268,7 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(OwnedToolPipelineProgress.Waiting(publication)) =>
                 match(slot.settlementError){case Some(error)=>return fail(request,context,control,error,sink,counter:Some(counter));case None=>()}
                 let next=CorePendingOwnedExecution(CorePreparedTool(pending.work.index,pending.work.committed,
-                    (if(publication.isPreparedPhase()){publication.preparedParent().value().getOrThrow()}else{publication.continuation.parent})),publication,pending.remaining)
+                    (if(publication.isPreparedPhase()){publication.preparedParent().value().getOrThrow()}else{publication.continuation.parent}), metadataConsumer204: context.paidExecutionFailureConsumer173()),publication,pending.remaining)
                 match (control.replacePendingOwnedExecution(pending,next)) {
                     case Result.Err(error) => return fail(request,context,control,error,sink,counter:Some(counter))
                     case Result.Ok(_) => ()
@@ -4250,7 +4354,7 @@ public class AgentCore <: AgentRunner {
                 match(slot.settlementError){case Some(error)=>return fail(request,context,control,error,sink,counter:Some(counter));case None=>()}
                 if (!handoff.started) { return fail(request,context,control,coreOwnedLiveOwnerMissing(),sink,counter:Some(counter)) }
                 let next=CorePendingOwnedExecution(CorePreparedTool(pending.work.index,pending.work.committed,
-                    (if(publication.isPreparedPhase()){publication.preparedParent().value().getOrThrow()}else{publication.continuation.parent})),publication,CoreToolBatchPreparation([],[],None,None,None,[]))
+                    (if(publication.isPreparedPhase()){publication.preparedParent().value().getOrThrow()}else{publication.continuation.parent}), metadataConsumer204: context.paidExecutionFailureConsumer173()),publication,CoreToolBatchPreparation([],[],None,None,None,[]))
                 match (control.replacePendingOwnedParentWithExecution(pending,next)) {
                     case Result.Err(error) => return fail(request,context,control,error,sink,counter:Some(counter))
                     case Result.Ok(_) => ()
@@ -4321,7 +4425,7 @@ public class AgentCore <: AgentRunner {
         releasePayload!:Bool=true,onCanonicalPersisted!:()->Unit={=>()},
         retainedBatchId!:?ToolBatchId=None<ToolBatchId>):Result<Unit> {
         let item=CoreToolOutcome(work.index,work.committed,result,operationId:Some(work.prepared.operationId),
-            operationPlan:Some(work.prepared.operationPlan),attemptStage:stage,knownParentPrepared:if(isPluginLivePolicyParentPlan(work.prepared.operationPlan) || isManagedChannelOwnedParentPlan(work.prepared.operationPlan)){Some(work.prepared)}else{None})
+            operationPlan:Some(work.operationPlan204()),attemptStage:stage,knownParentPrepared:if(isPluginLivePolicyParentPlan(work.operationPlan204()) || isManagedChannelOwnedParentPlan(work.operationPlan204())){Some(work.prepared)}else{None})
         try {
             match (commitCanonicalToolAttempt(control,item)) {case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             onCanonicalPersisted()
@@ -4333,10 +4437,10 @@ public class AgentCore <: AgentRunner {
                     let outcome=canonicalRootToolResult(work.prepared.operationId,value)
                     // Canonical receipt/result belongs to the original Parent,
                     // never the child approval operation or its call ID.
-                    match (emitToolOutcome(context,work.block.name,outcome,work.prepared.operationPlan.canonicalArguments,sink,
+                    match (emitToolOutcome(context,work.block.name,outcome,work.operationPlan204().canonicalArguments,sink,
                         toolBatchId:retainedBatchId,
                         toolCallId:Some(ToolCallId(work.block.callId)))) {case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-                    match (afterCoreResultPersistedOwned113(context,control,work.block.name,outcome,Some(work.prepared.operationPlan))) {case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+                    match (afterCoreResultPersistedOwned113(context,control,work.block.name,outcome,Some(work.operationPlan204()))) {case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
                     updateCoreToolLoopState(loopState,work.block.name,outcome)
             }
             Result.Ok(())
@@ -4387,9 +4491,9 @@ public class AgentCore <: AgentRunner {
         let consumed = output.withOutput({ actual =>
             let outcome = CoreToolOutcome(work.index, work.committed,
                 Result.Ok(ToolInvocationResult.Completed(actual)), operationId: Some(work.prepared.operationId),
-                operationPlan: Some(work.prepared.operationPlan), attemptStage: stage,
-                knownParentPrepared: if (isPluginLivePolicyParentPlan(work.prepared.operationPlan) ||
-                    isManagedChannelOwnedParentPlan(work.prepared.operationPlan)) { Some(work.prepared) } else { None })
+                operationPlan: Some(work.operationPlan204()), attemptStage: stage,
+                knownParentPrepared: if (isPluginLivePolicyParentPlan(work.operationPlan204()) ||
+                    isManagedChannelOwnedParentPlan(work.operationPlan204())) { Some(work.prepared) } else { None })
             match (commitCanonicalToolAttempt(control, outcome)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             capture.committed = true; capture.lease = actual.payloadLease
             control.releasePreparationInput(work.committed.canonicalItemId)
@@ -4553,7 +4657,7 @@ public class AgentCore <: AgentRunner {
                 // The NEW persist operation proved and atomically wrote
                 // its exact waiting state. Repeating the legacy transition
                 // would reject an already-waiting actual SQLite operation.
-                if ((isPluginLivePolicyParentPlan(prepared.operationPlan) || isManagedChannelOwnedParentPlan(prepared.operationPlan))) { return Result.Ok(()) }
+                if ((isPluginLivePolicyParentPlan(corePreparedOperationPlan204(prepared, context)) || isManagedChannelOwnedParentPlan(corePreparedOperationPlan204(prepared, context)))) { return Result.Ok(()) }
                 operationRuntime.waitForApproval(
                     prepared.operationId, context.runId
                 )
@@ -4571,15 +4675,79 @@ public class AgentCore <: AgentRunner {
         committed: CommittedToolCallRef,
         prepared: PreparedToolInvocation
     ): Result<Unit> {
-        if ((isPluginLivePolicyParentPlan(prepared.operationPlan) || isManagedChannelOwnedParentPlan(prepared.operationPlan))) {
-            return tools.persistOwnedPrepared(context,prepared)
+        if ((isPluginLivePolicyParentPlan(corePreparedOperationPlan204(prepared, context)) || isManagedChannelOwnedParentPlan(corePreparedOperationPlan204(prepared, context)))) {
+            return match (tools.persistOwnedPrepared(context, prepared)) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) => tools.admitPrepared(context, prepared)
+            }
         }
-        operationRuntime.prepare(
+        match (operationRuntime.prepare(
             prepared.operationId,
             context.runId,
             committed,
-            prepared.operationPlan
-        )
+            corePreparedOperationPlan204(prepared, context)
+        )) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => tools.admitPrepared(context, prepared)
+        }
+    }
+
+    // No executor has received this batch yet. Pair every committed call with
+    // a canonical pre-dispatch rejection, including earlier reservations, so
+    // an invalid later call cannot strand known-unstarted work as pending.
+    private func rejectUnstartedCanonicalBatch(context: ToolInvocationContext,
+        control: CoreRunControl, preparation: CoreToolBatchPreparation, cause: AgentError): Result<Unit> {
+        let reason = AgentError(AgentErrorKind.Conflict, "tool.batch_aborted_before_dispatch",
+            "the tool batch was rejected before any executor received it",
+            fields: [ErrorField("cause", cause.code), ErrorField("started", "false")])
+        let outcomes = ArrayList<CoreToolOutcome>()
+        for (wave in preparation.waves) {
+            for (work in wave.calls) {
+                outcomes.add(CoreToolOutcome(work.index, work.committed,
+                    Result.Ok(ToolInvocationResult.Denied(ToolDenial(
+                        work.block.callId, work.block.name, reason))),
+                    operationId: Some(work.prepared.operationId), operationPlan: Some(work.operationPlan204())))
+            }
+        }
+        for (item in preparation.immediate) {
+            let operation = item.operationId.getOrDefault({ => OperationId(
+                "operation-immediate-" + item.committed.decisionId.value + "-" + item.committed.scopedToolCallId.value) })
+            let plan = item.operationPlan.getOrDefault({ => canonicalImmediatePlan(context, item.block) })
+            outcomes.add(CoreToolOutcome(item.index, item.committed,
+                Result.Ok(ToolInvocationResult.Denied(ToolDenial(item.block.callId, item.block.name, reason))),
+                operationId: Some(operation), operationPlan: Some(plan)))
+        }
+        match ((preparation.approvalPrepared, preparation.approvalCall)) {
+            case (Some(prepared), Some(committed)) => outcomes.add(CoreToolOutcome(0, committed,
+                Result.Ok(ToolInvocationResult.Denied(ToolDenial(committed.block.callId, committed.block.name, reason))),
+                operationId: Some(prepared.operationId), operationPlan: Some(corePreparedOperationPlan204(prepared, context))))
+            case _ => ()
+        }
+        for (committed in preparation.deferred) {
+            let operation = OperationId("operation-batch-aborted-" + committed.decisionId.value + "-" +
+                committed.scopedToolCallId.value)
+            outcomes.add(CoreToolOutcome(0, committed,
+                Result.Ok(ToolInvocationResult.Denied(ToolDenial(committed.block.callId, committed.block.name, reason))),
+                operationId: Some(operation), operationPlan: Some(canonicalRejectedPlan(context, committed.block))))
+        }
+        for (outcome in outcomes) {
+            match (operationRuntime.prepare(outcome.operationId.getOrThrow(), context.runId,
+                outcome.committed, outcome.operationPlan.getOrThrow())) {
+                case Result.Err(error) => return unstartedBatchRecovery(cause, error)
+                case Result.Ok(_) => ()
+            }
+            match (commitCanonicalToolAttempt(control, outcome)) {
+                case Result.Err(error) => return unstartedBatchRecovery(cause, error)
+                case Result.Ok(_) => ()
+            }
+        }
+        Result.Ok(())
+    }
+
+    private func unstartedBatchRecovery(cause: AgentError, cleanup: AgentError): Result<Unit> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "operation.batch_settlement_incomplete",
+            "a rejected pre-dispatch batch could not persist all canonical results",
+            fields: [ErrorField("cause", cause.code), ErrorField("settlement_error", cleanup.code)]))
     }
 
     private func canonicalImmediatePlan(
@@ -4588,10 +4756,8 @@ public class AgentCore <: AgentRunner {
     ): NormalizedOperationPlan {
         let call = ToolCall(block.callId, block.name, block.arguments)
         try {
-            match (catalog.resolvedDescriptor(call, threadId: Some(ThreadId(context.sessionId.value)))) {
-                case Some(descriptor) => normalizedToolOperationPlan(
-                    context, call, descriptor
-                )
+            match (tools.canonicalImmediatePlan204(context, call)) {
+                case Some(plan) => plan
                 case None => canonicalRejectedPlan(context, block)
             }
         } catch (_: IllegalArgumentException) {
@@ -4698,7 +4864,20 @@ public class AgentCore <: AgentRunner {
         let receiptId = "receipt-" + operationId.value
         let canonicalResult: Result<ToolInvocationResult> = match (outcome.result) {
             case Result.Ok(value) => Result.Ok(canonicalRootToolResult(operationId, value))
-            case Result.Err(error) => Result.Err(error)
+            case Result.Err(error) =>
+                if (outcome.attemptStage == OperationAttemptStage.Prepared &&
+                    (error.kind == AgentErrorKind.RecoveryRequired || error.kind == AgentErrorKind.PermissionDenied ||
+                        (error.kind == AgentErrorKind.Conflict && error.code == "plan.admission_denied"))) {
+                    // A failed admission transaction may have committed before
+                    // its caller saw the failure. This is only a CANDIDATE:
+                    // the canonical sink must prove exact unstarted ownership
+                    // in its commit transaction, otherwise it refuses it.
+                    Result.Ok(ToolInvocationResult.Denied(ToolDenial(outcome.block.callId,
+                        outcome.block.name, AgentError(AgentErrorKind.Conflict,
+                            "tool.execution_not_admitted", "execution admission did not return successfully",
+                            fields: [ErrorField("cause", error.code), ErrorField("started", "false"),
+                                ErrorField("plan_digest", plan.bindingDigest)]))))
+                } else { Result.Err(error) }
         }
         // Projection persistence may fail after the canonical SQLite/in-memory
         // commit. Retrying the same approval must replay that semantic fact,
@@ -4744,7 +4923,7 @@ public class AgentCore <: AgentRunner {
             agentUtcMillis(),
             knownParentSource:match(outcome.knownParentPrepared){case Some(actual)=>
                 if(outcome.attemptStage==OperationAttemptStage.Executing &&
-                    (isPluginLivePolicyParentPlan(actual.operationPlan) || isManagedChannelOwnedParentPlan(actual.operationPlan))){
+                    (isPluginLivePolicyParentPlan(actual.borrowOperationPlanForCore204(control)) || isManagedChannelOwnedParentPlan(actual.borrowOperationPlanForCore204(control)))){
                     match(outcome.result){case Result.Ok(ToolInvocationResult.Completed(_))=>actual.source.operationRoot
                         case _=>None}
                 }else{None}
@@ -6086,6 +6265,10 @@ public class AgentCore <: AgentRunner {
         decision: ModelDecision,
         sink: AgentEventSink
     ): Result<AgentRunOutcome> {
+        match (coreRequirePlanComplete(tools, catalog, request)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(request, context, control, error, sink, counter: Some(counter))
+        }
         let completed = RunSnapshot(
             request.runId, request.sessionId, RunState.Completed,
             sequence: context.currentSequence(),
@@ -6109,6 +6292,10 @@ public class AgentCore <: AgentRunner {
                 AgentError(AgentErrorKind.RecoveryRequired, "run.owned_work_unsettled",
                     "owned work prevented successful Run settlement"),
                 sink, counter: Some(counter))
+        }
+        match (coreFinishPlan(tools, catalog, request)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(request, context, control, error, sink, counter: Some(counter))
         }
         match (runs.save(completed)) {
             case Result.Ok(_) => ()
@@ -6441,6 +6628,7 @@ public class AgentCore <: AgentRunner {
             reserveBudget(control, context, charge, sink)
         })
         context.bindPaidExecutionFailureSink173(control)
+        control.bindPlanCopyCatalog204(catalog)
         context.setOwnedTaskHandler({ name, task => control.runtime.ownTask(name, task,
             expectedRunId: Some(context.runId), expectedEpoch: Some(context.epoch)) })
         context.setDerivedToolFrameHandler({ parent, child, name, entering =>
@@ -6717,8 +6905,11 @@ public class AgentCore <: AgentRunner {
             let runtime = match (threadRuntimes.acquire(ThreadId(parent.sessionId.value), coreWorkspaceId(parent))) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
             control = CoreRunControl(parent.runId, parent.budget, runtime, callerCancellation180: parent.callerCancellation180,
-                recoveryPolicy180: modelAttemptRecoveryForSettings180(parent.toolContext.executionSettings180, modelAttemptRecovery))
-            match (controls.add(control)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                recoveryPolicy180: modelAttemptRecoveryForSettings180(parent.toolContext.executionSettings180, modelAttemptRecovery),
+                requestCustody204: parent.planRequestCustody204)
+            match (controls.add(control)) { case Result.Err(error) =>
+                control.rejectBeforeRuntimeInvocation204(); control.close(); return Result.Err(error)
+                case Result.Ok(_) => () }
             control.bindCancellation(model, tools)
             let admission = runtime.startInternalModelTurn(SemanticTurnId("turn-" + parent.runId.value), parent.runId,
                 ItemId("maintenance-" + parent.runId.value), coreInternalMaintenanceLane(parent), parent.contextSnapshot,
@@ -6857,7 +7048,7 @@ public class AgentCore <: AgentRunner {
         initialUsage!: ?ExecutionUsage = None
     ): Result<CoreRunControl> {
         match (controls.find(request.runId)) {
-            case Some(value) => Result.Ok(value)
+            case Some(value) => value.retainPlanRequestCustody204(request.planRequestCustody204); Result.Ok(value)
             case None =>
                 let runtime = match (threadRuntimes.recover(
                     ThreadId(request.sessionId.value),
@@ -6903,7 +7094,8 @@ public class AgentCore <: AgentRunner {
                     initial: if (modelRecovery) { RunState.Running } else { RunState.WaitingApproval },
                     turns: snapshot.turns,
                     modelRequests: restoredModelRequests, callerCancellation180: request.callerCancellation180,
-                    recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery)
+                    recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery),
+                    requestCustody204: request.planRequestCustody204
                 )
                 // Budget continuity across crash/resume: prefer the exact
                 // durable checkpoint usage over the coarser Run snapshot so a
@@ -6938,7 +7130,8 @@ public class AgentCore <: AgentRunner {
                 }
                 match (controls.add(control)) {
                     case Result.Ok(_) => ()
-                    case Result.Err(error) => control.close(); return Result.Err(error)
+                    case Result.Err(error) =>
+                        control.rejectBeforeRuntimeInvocation204(); control.close(); return Result.Err(error)
                 }
                 control.bindCancellation(model, tools)
                 Result.Ok(control)
@@ -7247,27 +7440,54 @@ public class AgentCore <: AgentRunner {
 
     public func startOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
-        let result = start(request, sink)
-        let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
-        ownedCheckpointFailureResult113(request.runId, result)
+        withPlanRequestFrame204(request, { =>
+            let result = start(request, sink)
+            let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
+            ownedCheckpointFailureResult113(request.runId, result)
+        })
+    }
+    public func startRestrictedOwnedCheckpointFailure113(request: AgentRunRequest,
+        restriction: AgentRunStartRestriction111, events: AgentEventSink): OwnedAgentRunResult113 {
+        withPlanRequestFrame204(request, { =>
+            let result = startOwned(request, events, None, restriction: Some(restriction))
+            let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
+            ownedCheckpointFailureResult113(request.runId, result)
+        })
     }
     public func resumeContextBoundaryOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
-        let result = resumeContextBoundary(request, sink)
-        let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
-        ownedCheckpointFailureResult113(request.runId, result)
+        withPlanRequestFrame204(request, { =>
+            let result = resumeContextBoundary(request, sink)
+            let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
+            ownedCheckpointFailureResult113(request.runId, result)
+        })
     }
     public func resumeOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
-        let result = resume(request, sink)
-        let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
-        ownedCheckpointFailureResult113(request.runId, result)
+        withPlanRequestFrame204(request, { =>
+            let result = resume(request, sink)
+            let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
+            ownedCheckpointFailureResult113(request.runId, result)
+        })
     }
     public func decideOwnedCheckpointFailure113(request: AgentRunRequest, approval: ApprovalRequest,
         decision: ApprovalDecision, sink: AgentEventSink): OwnedAgentRunResult113 {
-        let result = decide(request, approval, decision, sink)
-        let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
-        ownedCheckpointFailureResult113(request.runId, result)
+        withPlanRequestFrame204(request, { =>
+            let result = decide(request, approval, decision, sink)
+            let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
+            ownedCheckpointFailureResult113(request.runId, result)
+        })
+    }
+    private func withPlanRequestFrame204(request: AgentRunRequest,
+        invoke: () -> OwnedAgentRunResult113): OwnedAgentRunResult113 {
+        let answer = withPlanRequestCustodyFrame204(request.planRequestCustody204, invoke)
+        // The complete start/resume/decide callback has returned. Product's
+        // separate request frame remains paid until its own whole return.
+        controls.collectReturnedModelInputs159()
+        match (controls.find(request.runId)) {
+            case Some(value) => if (isTerminalRunState(value.state())) { finishControl(request.runId) }
+            case None => () }
+        answer
     }
     // Explicit polling transfers another actual error from a committed wave;
     // it does not re-execute a tool, repeat an observer or allocate a sequence.
@@ -7311,7 +7531,11 @@ public class AgentCore <: AgentRunner {
         let control = match (controls.find(run)) {
             case None => return OwnedAgentRunResult113.Existing(original)
             case Some(value) => value }
-        if (!control.hasCheckpointFailure113()) { return OwnedAgentRunResult113.Existing(original) }
+        if (!control.hasCheckpointFailure113()) {
+            control.collectReturnedModelInputs159()
+            if (isTerminalRunState(control.state())) { finishControl(run) }
+            return OwnedAgentRunResult113.Existing(original)
+        }
         var selected = control.checkpointFailureHead113()
         while (selected.isSome()) {
             let entry = selected.getOrThrow()
@@ -7344,6 +7568,7 @@ public class AgentCore <: AgentRunner {
         }
         let _ = control.retireCheckpointFailures113()
         if (control.hasCheckpointFailure113()) { return OwnedAgentRunResult113.Held }
+        control.collectReturnedModelInputs159()
         finishControl(run)
         OwnedAgentRunResult113.Existing(original)
     }
@@ -7513,12 +7738,20 @@ public class AgentCore <: AgentRunner {
     public func flushOwnedCheckpointFailures113(run: RunId,
         events!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>): Result<Unit> {
         let control = match (controls.find(run)) { case None => return Result<Unit>.Ok(()); case Some(value) => value }
-        if (!control.hasCheckpointFailure113()) { return Result<Unit>.Ok(()) }
+        if (!control.hasCheckpointFailure113()) {
+            // A real caller may have ACKed the last publication after the
+            // original managed callback returned. Empty queue is not a
+            // reason to skip querying its existing task/input/frame proofs.
+            control.collectReturnedModelInputs159()
+            if (isTerminalRunState(control.state())) { finishControl(run) }
+            return Result<Unit>.Ok(())
+        }
         // A typed observer may inspect/poll reentrantly. Its current Unit
         // consumer must return before the ordered event lock is reacquired.
         if (control.hasCheckpointConsumerFrame113()) { return Result.Err(coreOwnedCheckpointFailurePending113()) }
         let delivered = control.serializeEvent({ => deliverCheckpointFailureQueue113(control, events) })
         let retired = control.retireCheckpointFailures113()
+        control.collectReturnedModelInputs159()
         if (!control.hasCheckpointFailure113()) { finishControl(run) }
         match (delivered) { case Result.Err(error) => Result<Unit>.Err(error); case Result.Ok(_) => retired }
     }
@@ -7553,6 +7786,7 @@ public class AgentCore <: AgentRunner {
         sink: AgentEventSink,
         counter!: ?BudgetCounter = None
     ): Result<AgentRunOutcome> {
+        control.retainPlanRequestCustody204(request.planRequestCustody204)
         if (control.isCheckpointFailureMarker113(error)) {
             return failOwnedCheckpointFailure113(request, context, control, sink, counter) }
         if(control.outerErrorData333().isSome()){
@@ -7678,7 +7912,8 @@ public class AgentCore <: AgentRunner {
                     request.budget,
                     runtime,
                     initial: RunState.Running, callerCancellation180: request.callerCancellation180,
-                    recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery)
+                    recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery),
+                    requestCustody204: request.planRequestCustody204
                 )
                 if (!runtime.hasActiveRun159()) {
                     // An already described continuation cannot be recreated as
@@ -8136,7 +8371,7 @@ public class AgentCore <: AgentRunner {
             contextSnapshotPayload: contextSnapshotValue(request.contextSnapshot),
             contextWindow: request.contextWindow,
             providerSafetyMargin: request.providerSafetyMargin,
-            toolContextPayload: toolContextDescriptorValue(request.toolContext),
+            toolContextPayload: coreContinuationToolContext(request),
             executionLaneId: request.executionLaneId
         )
         let restartEvent: ?AgentEvent = match (restartParent) {
@@ -8370,7 +8605,7 @@ func continuationFromRequest(
         contextSnapshotPayload: contextSnapshotValue(request.contextSnapshot),
         contextWindow: request.contextWindow,
         providerSafetyMargin: request.providerSafetyMargin,
-        toolContextPayload: toolContextDescriptorValue(request.toolContext),
+        toolContextPayload: coreContinuationToolContext(request),
         executionLaneId: request.executionLaneId
     )
 }
@@ -8378,7 +8613,8 @@ func continuationFromRequest(
 func requestFromContinuation(
     value: RunContinuation,
     interactions!: ?AgentInteractionSource = None,
-    toolContext!: ToolContextDescriptor = ToolContextDescriptor()
+    toolContext!: ToolContextDescriptor = ToolContextDescriptor(),
+    planRequestCustody204!: ?PlanRequestCustody204 = None<PlanRequestCustody204>
 ): AgentRunRequest {
     AgentRunRequest(
         value.runId,
@@ -8421,7 +8657,9 @@ func requestFromContinuation(
         },
         contextWindow: value.contextWindow,
         providerSafetyMargin: value.providerSafetyMargin,
-        executionLaneId: value.executionLaneId
+        executionLaneId: value.executionLaneId,
+        planContextFacts: value.toolContextPayload.field("plan_context_facts") ?? objectValue([]),
+        planRequestCustody204: planRequestCustody204
     )
 }
 
@@ -8465,6 +8703,7 @@ func toolContextDescriptorValue(value: ToolContextDescriptor): AgentValue {
         ValueField("environment", listValue(environment.toArray())),
         ValueField("services", listValue(services.toArray()))])
     if (value.executionSettings180.unifiedKind != ValueKind.Null) { fields.add(ValueField("execution_settings", value.executionSettings180)) }
+    if (value.planReviewControl) { fields.add(ValueField("plan_review_control", boolValue(true))) }
     objectValue(fields.toArray())
 }
 
@@ -8487,6 +8726,10 @@ func toolContextDescriptorFromValue(value: AgentValue): ToolContextDescriptor {
     ToolContextDescriptor(
         workspaceRoot: requiredCoreTextField(value, "workspace_root"),
         cwd: requiredCoreTextField(value, "cwd"),
+        planReviewControl: match (value.field("plan_review_control")) {
+            case Some(flag) => flag.asBool()
+            case None => false
+        },
         environment: ToolEnvironmentView(entries: environment.toArray()),
         services: ToolServiceView(descriptors: services.toArray()),
         executionSettings180: value.field("execution_settings").getOrDefault({ => nullValue() })
@@ -8811,82 +9054,6 @@ func errorHasField(error: AgentError, name: String): Bool {
 }
 
 
-func attemptPolicyValue(policy: AttemptPolicy): AgentValue {
-    let fields = ArrayList<ValueField>()
-    fields.add(ValueField("model", textValue(policy.model)))
-    fields.add(ValueField("thinking", textValue(thinkingLevelName(policy.thinking))))
-    fields.add(ValueField("tool_choice", textValue(modelToolChoiceName(policy.toolChoice))))
-    fields.add(ValueField("max_output_tokens", integerValue(policy.maxOutputTokens)))
-    fields.add(ValueField("reason", textValue(attemptPolicyReasonName(policy.reason))))
-    fields.add(ValueField("soft_deadline_ms", integerValue(policy.softDeadlineMillis)))
-    fields.add(ValueField("hard_deadline_ms", integerValue(policy.hardDeadlineMillis)))
-    fields.add(ValueField("stream_idle_ms", integerValue(policy.streamIdleMillis)))
-    match (policy.resolvedPolicy) {
-        case Some(value) =>
-            fields.add(ValueField(
-                "policy_resolution_version",
-                integerValue(Int64(value.policyResolutionVersion))
-            ))
-            fields.add(ValueField(
-                "capability_snapshot_version",
-                integerValue(Int64(value.capabilitySnapshotVersion))
-            ))
-            fields.add(ValueField(
-                "capability_fingerprint", textValue(value.capabilityFingerprint)
-            ))
-            fields.add(ValueField(
-                "capability_snapshot_payload", textValue(value.capabilitySnapshotPayload)
-            ))
-            fields.add(ValueField(
-                "min_visible_response_tokens", integerValue(value.minVisibleResponseTokens)
-            ))
-            fields.add(ValueField(
-                "thinking_source", textValue(thinkingPreferenceSourceName(value.thinkingSource))
-            ))
-            match (value.userRequestedThinking) {
-                case Some(level) => fields.add(ValueField(
-                    "user_requested_thinking", textValue(thinkingLevelName(level))
-                ))
-                case None => ()
-            }
-            fields.add(ValueField(
-                "thinking_requested",
-                textValue(thinkingLevelName(value.thinking.requested))
-            ))
-            fields.add(ValueField(
-                "thinking_effective",
-                textValue(thinkingLevelName(value.thinking.effective))
-            ))
-            fields.add(ValueField(
-                "thinking_mode",
-                textValue(thinkingControlModeName(value.thinking.mode))
-            ))
-            match (value.thinking.budgetTokens) {
-                case Some(tokens) => fields.add(ValueField(
-                    "thinking_budget_tokens", integerValue(tokens)
-                ))
-                case None => ()
-            }
-            fields.add(ValueField(
-                "thinking_constraints",
-                resolutionConstraintsValue(value.thinking.constraints)
-            ))
-            fields.add(ValueField(
-                "output_requested_hard_limit",
-                integerValue(value.output.requestedHardLimit)
-            ))
-            fields.add(ValueField(
-                "output_effective_wire_limit",
-                integerValue(value.output.effectiveWireLimit)
-            ))
-            fields.add(ValueField(
-                "output_constraints",
-                resolutionConstraintsValue(value.output.constraints)
-            ))
-        case None => ()
-    }
-    objectValue(fields.toArray())
-}
 
 func modelRequestCheckpointValue(request: ModelRequest): AgentValue {
     modelRequestSnapshotValue(request)
@@ -8975,26 +9142,7 @@ func modelAttemptReplayBarrierNameForCore(value: ModelAttemptReplayBarrier): Str
     }
 }
 
-func thinkingPreferenceSourceName(value: ThinkingPreferenceSource): String {
-    match (value) {
-        case ThinkingPreferenceSource.ExplicitUser => "explicit_user"
-        case ThinkingPreferenceSource.ModePreference => "mode_preference"
-        case ThinkingPreferenceSource.ModelDefault => "model_default"
-    }
-}
 
-func resolutionConstraintsValue(values: Array<ResolutionConstraint>): AgentValue {
-    let result = ArrayList<AgentValue>()
-    for (value in values) {
-        result.add(objectValue([
-            ValueField("target", textValue(resolutionConstraintTargetName(value.target))),
-            ValueField("kind", textValue(resolutionConstraintKindName(value.kind))),
-            ValueField("before", resolutionValueValue(value.before)),
-            ValueField("after", resolutionValueValue(value.after))
-        ]))
-    }
-    listValue(result.toArray())
-}
 
 func resolutionConstraintsFromValue(value: AgentValue): Array<ResolutionConstraint> {
     let result = ArrayList<ResolutionConstraint>()
@@ -9044,39 +9192,9 @@ func resolutionValueFromValue(
     }
 }
 
-func resolutionValueValue(value: ResolutionValue): AgentValue {
-    match (value) {
-        case ResolutionValue.TokenLimit(tokens) => integerValue(tokens)
-        case ResolutionValue.ThinkingValue(level) => textValue(thinkingLevelName(level))
-    }
-}
 
-func resolutionConstraintTargetName(value: ResolutionConstraintTarget): String {
-    match (value) {
-        case ResolutionConstraintTarget.OutputLimit => "output_limit"
-        case ResolutionConstraintTarget.ThinkingLevel => "thinking_level"
-    }
-}
 
-func resolutionConstraintKindName(value: ResolutionConstraintKind): String {
-    match (value) {
-        case ResolutionConstraintKind.ModelOutputLimit => "model_output_limit"
-        case ResolutionConstraintKind.EndpointOutputLimit => "endpoint_output_limit"
-        case ResolutionConstraintKind.ModelSupportedLevel => "model_supported_level"
-        case ResolutionConstraintKind.AttemptRecoveryCeiling => "attempt_recovery_ceiling"
-        case ResolutionConstraintKind.AvailableThinkingBudget => "available_thinking_budget"
-    }
-}
 
-func thinkingControlModeName(value: ThinkingControlMode): String {
-    match (value) {
-        case ThinkingControlMode.NoThinking => "none"
-        case ThinkingControlMode.Toggle => "toggle"
-        case ThinkingControlMode.Effort => "effort"
-        case ThinkingControlMode.Budget => "budget"
-        case ThinkingControlMode.Adaptive => "adaptive"
-    }
-}
 
 func attemptPolicyReasonName(value: AttemptPolicyReason): String {
     match (value) {

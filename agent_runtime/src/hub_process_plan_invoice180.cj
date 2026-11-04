@@ -59,7 +59,8 @@ public class HubProcessPlanInvoice180 {
         }else{throw LogicalJsonPayloadError("unsupported original process plan value")}
     }
     public func includePlan(plan: NormalizedOperationPlan): Unit {
-        text(plan.toolName); graph(plan.canonicalArguments); text(plan.cwd)
+        text(plan.toolName); text(plan.policyVersion); graph(plan.canonicalArguments); text(plan.cwd)
+        for (value in plan.approvedWriteRoots) { text(value) }
         text(plan.idempotencyKey); text(plan.bindingDigest)
         text(plan.implementation.toolId); text(plan.implementation.toolVersion)
         text(plan.implementation.implementationFingerprint); text(plan.implementation.schemaDigest)

@@ -895,13 +895,22 @@ public func networkAddressDeniedError(
         fields: fields
     )
 }
-public func networkGatewayUnavailableError(): AgentError {
+public func networkGatewayUnavailableError(
+    stage!: String = "unavailable",
+    diagnostics!: Array<ErrorField> = []
+): AgentError {
+    let fields = ArrayList<ErrorField>()
+    fields.add(ErrorField("failure_class", "infrastructure_unavailable"))
+    fields.add(ErrorField("stage", stage))
+    fields.add(ErrorField("started", "false"))
+    fields.add(all: diagnostics)
     AgentError(
         AgentErrorKind.Transport,
         "network.gateway_unavailable",
         "mediated network access requires an available network gateway",
         retryable: false,
-        fallbackAllowed: false
+        fallbackAllowed: false,
+        fields: fields.toArray()
     )
 }
 

@@ -213,12 +213,24 @@ public class ContextCompiler {
                 "context.intent_not_visible", "current Turn intent is absent from selected Items"
             )
         }
+        // Materialize only inside the original catalog DATA loan. The same
+        // paid catalog remains live until the complete manifest SQL frame returns.
+        let frozenCatalog = match (catalog) {
+            case Some(value) => value.materialize159()
+            case None => toolCatalogSnapshotValue(input.lane.toolSet)
+        }
+        let requestView = match (validateRenderedRequestCatalogView(frozenCatalog, input.renderedRequest)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let factFields = ArrayList<ValueField>()
+        for (field in input.namedFactVersions.fields where field.name != "request_tool_view") { factFields.add(field) }
+        factFields.add(ValueField("request_tool_view", requestView))
         let base = ModelContextManifest(
             input.manifestId, input.threadId, input.laneId, input.turnId, input.stepId,
             input.projection.threadRevision, itemIds.toArray(), input.currentIntentItemId,
-            input.namedFactVersions, input.activeSkillIds, input.memoryReferences,
-            input.promptContributions, match (catalog) { case Some(value) => value.materialize159()
-                case None => toolCatalogSnapshotValue(input.lane.toolSet) },
+            objectValue(factFields.toArray()), input.activeSkillIds, input.memoryReferences,
+            input.promptContributions, frozenCatalog,
             input.lane.contextWindow - input.lane.outputReserve - input.lane.providerSafetyMargin,
             input.projection.estimatedInputTokens, input.renderedRequest, version,
             checkpointId: match (input.projection.checkpoint) {
@@ -237,6 +249,165 @@ public func reconstructModelRequest(manifest: ModelContextManifest): Result<Agen
         )
     } else {
         Result.Ok(manifest.renderedRequest)
+    }
+}
+
+// The Run's full catalog remains immutable. A request is allowed to expose a
+// subset only by reusing those exact frozen definitions and capabilities.
+public func selectRequestToolSet(
+    frozen: ToolSetSnapshot,
+    allowedNames: Array<String>
+): Result<ToolSetSnapshot> {
+    let entries = ArrayList<ToolSnapshotEntry>()
+    for (name in allowedNames) {
+        for (entry in entries where entry.name == name) {
+            return contextCompileError("context.tool_view_duplicate", "Request tool view contains duplicate names")
+        }
+        var found = false
+        for (entry in frozen.entries where entry.name == name && entry.availableAtSnapshot) {
+            entries.add(entry)
+            found = true
+        }
+        if (!found) {
+            return contextCompileError("context.tool_view_outside_snapshot",
+                "Request tool view exceeds the frozen Run catalog")
+        }
+    }
+    Result.Ok(ToolSetSnapshot(frozen.id, entries.toArray(), hookHandlers: frozen.hookHandlers))
+}
+
+// Verify the exact provider-visible catalog before sealing its manifest. Names
+// alone are insufficient: substituted schemas or descriptions change the
+// model's contract while retaining the same executor name.
+public func validateRenderedRequestToolView(
+    frozen: ToolSetSnapshot,
+    renderedRequest: AgentValue
+): Result<AgentValue> {
+    validateRenderedRequestCatalogView(toolCatalogSnapshotValue(frozen), renderedRequest)
+}
+
+func validateRenderedRequestCatalogView(frozen: AgentValue, renderedRequest: AgentValue): Result<AgentValue> {
+    let tools = match (renderedRequest.field("tools")) {
+        case Some(value) => value
+        case None => return contextCompileError("context.request_tools_missing", "Rendered request has no tools catalog")
+    }
+    if (tools.unifiedKind != ValueKind.List) {
+        return contextCompileError("context.request_tools_invalid", "Rendered tools catalog is not a list")
+    }
+    let names = ArrayList<String>()
+    for (tool in tools.items) {
+        let name = match (tool.field("name")) {
+            case Some(value) => if (value.unifiedKind == ValueKind.Text) { value.text } else { "" }
+            case None => ""
+        }
+        if (name == "" || names.contains(name)) {
+            return contextCompileError("context.request_tool_identity_invalid", "Request tool identity is empty or duplicated")
+        }
+        var matched = false
+        for (entry in frozen.field("entries").getOrThrow().items) {
+            if (entry.field("name").getOrThrow().text != name ||
+                !entry.field("available_at_snapshot").getOrThrow().asBool()) { continue }
+            let schema = match (tool.field("input_schema")) {
+                case Some(value) => canonicalAgentValue(value)
+                case None => ""
+            }
+            let description = match (tool.field("description")) {
+                case Some(value) => if (value.unifiedKind == ValueKind.Text) { value.text } else { "" }
+                case None => ""
+            }
+            matched = schema == canonicalAgentValue(entry.field("input_schema").getOrThrow()) &&
+                description == entry.field("description").getOrThrow().text
+        }
+        if (!matched) {
+            return contextCompileError("context.request_tool_changed", "Request tool differs from the frozen Run catalog")
+        }
+        names.add(name)
+    }
+    Result.Ok(objectValue([
+        ValueField("frozen_snapshot_id", frozen.field("snapshot_id").getOrThrow()),
+        ValueField("tools", tools)
+    ]))
+}
+
+// The durable supervisor retains the full approved contract. A model request
+// needs progress plus the constraints of actions it can actually dispatch.
+// Keep those arguments actionable after history pruning, but do not repeat
+// already verified source bodies or executor implementation pins every turn.
+public func approvedPlanRequestView(state: AgentValue): AgentValue {
+    if (state.unifiedKind != ValueKind.Object) { return objectValue([]) }
+    let fields = ArrayList<ValueField>()
+    for (name in ["execution_id", "active", "complete", "sealed", "recovery_required", "steps", "allowed_tools"]) {
+        match (state.field(name)) {
+            case Some(value) => fields.add(ValueField(name, value))
+            case None => ()
+        }
+    }
+    let runnable = ArrayList<String>()
+    match (state.field("steps")) {
+        case Some(steps) => for (step in steps.items) {
+            let stepState = planRequestText(step, "state")
+            if (stepState != "runnable") { continue }
+            match (step.field("actions")) {
+                case Some(actions) => for (action in actions.items) {
+                    let status = planRequestText(action, "state")
+                    if (status == "runnable" || status == "retry") {
+                        runnable.add(planRequestText(action, "action_id"))
+                    }
+                }
+                case None => ()
+            }
+        }
+        case None => ()
+    }
+    let details = ArrayList<AgentValue>()
+    match (state.field("contract_view")) {
+        case Some(contract) =>
+            fields.add(ValueField("contract_digest", textValue(modelPolicySha256Text(canonicalAgentValue(contract)))))
+            for (name in ["target_roots", "participating_repositories"]) {
+                match (contract.field(name)) {
+                    case Some(value) => fields.add(ValueField(name, value))
+                    case None => ()
+                }
+            }
+            match (contract.field("steps")) {
+                case Some(steps) => for (step in steps.items) {
+                    match (step.field("actions")) {
+                        case Some(actions) => for (action in actions.items) {
+                            let id = planRequestText(action, "id")
+                            if (!runnable.contains(id)) { continue }
+                            details.add(approvedPlanRunnableActionValue204(planRequestText(step, "id"), action))
+                        }
+                        case None => ()
+                    }
+                }
+                case None => ()
+            }
+        case None => ()
+    }
+    fields.add(ValueField("runnable_actions", listValue(details.toArray())))
+    objectValue(fields.toArray())
+}
+
+public func approvedPlanRunnableActionValue204(stepId: String, action: AgentValue): AgentValue {
+    let selected = ArrayList<ValueField>()
+    selected.add(ValueField("step_id", textValue(stepId)))
+    selected.add(ValueField("action_id", textValue(planRequestText(action, "id"))))
+    selected.add(ValueField("action_digest", textValue(
+        modelPolicySha256Text(canonicalAgentValue(action)))))
+    for (name in ["tools", "network_modes", "effect_ceiling", "argument_constraints",
+        "exact_arguments", "max_attempts", "evidence", "artifact_digest", "delegated_action_ids"]) {
+        match (action.field(name)) {
+            case Some(value) => selected.add(ValueField(name, value))
+            case None => ()
+        }
+    }
+    objectValue(selected.toArray())
+}
+
+func planRequestText(value: AgentValue, field: String): String {
+    match (value.field(field)) {
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
+        case None => ""
     }
 }
 
@@ -282,7 +453,7 @@ public func toolCatalogSnapshotValue(value: ToolSetSnapshot): AgentValue {
                 ValueField("resource", textValue(capability.resource))
             ]))
         }
-        entries.add(objectValue([
+        let entryValue = objectValue([
             ValueField("name", textValue(entry.name)),
             ValueField("description", textValue(entry.description)),
             ValueField("input_schema", entry.inputSchema),
@@ -291,7 +462,9 @@ public func toolCatalogSnapshotValue(value: ToolSetSnapshot): AgentValue {
             ValueField("schema_digest", textValue(entry.schemaDigest)),
             ValueField("available_at_snapshot", boolValue(entry.availableAtSnapshot)),
             ValueField("required_capabilities", listValue(capabilities.toArray()))
-        ]))
+        ])
+        if (entry.planReviewSafe) { entryValue.put("plan_review_safe", boolValue(true)) }
+        entries.add(entryValue)
     }
     objectValue([
         ValueField("snapshot_id", textValue(value.id)),

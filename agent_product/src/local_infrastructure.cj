@@ -1300,6 +1300,7 @@ public class LocalProcessPort <: ProcessPort & agent_host_runtime.HostLifecycleP
     public func sandboxEnabled(): Bool { nativeOwner.sandboxEnabled() }
     public func sandboxResourceLimits(): SandboxResourceLimits { nativeOwner.sandboxResourceLimits() }
     public func execute(request: ProcessRequest): Result<ProcessResult> { nativeOwner.execute(request) }
+    public func executeProbe(request: ProcessRequest): Result<ProcessResult> { nativeOwner.executeProbe(request) }
     public func executePackageReadOnly(request: ProcessRequest, workspaceRoot: String): Result<ProcessResult> {
         nativeOwner.executePackageReadOnly(request, workspaceRoot)
     }

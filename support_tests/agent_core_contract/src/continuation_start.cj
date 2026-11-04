@@ -37,11 +37,13 @@ class ContinuationCoreModel <: ModelPort {
 
 class ContinuationCoreManifest <: ModelContextManifestRuntimePort {
     let database: SqliteDatabase
+    let requests = ArrayList<AgentValue>()
     init(database: SqliteDatabase) { this.database = database }
     public func recordBeforeModelEffect(request: AgentRunRequest, requestId: RequestId,
         turnId: SemanticTurnId, executionLaneId: LaneId, stepId: StepId, stepOrdinal: Int64,
         projection: ModelContextProjection, lane: ModelLane, rendered: AgentValue,
         estimated: Int64, observed: Int64): Result<Unit> {
+        requests.add(coreContextBoundaryRequestValue(request))
         var intent: ?ItemId = None
         for (item in projection.recentItems where item.turnId.value == turnId.value) {
             if (item.kind == ItemKind.UserMessage) { intent = Some(item.id) }
@@ -81,7 +83,7 @@ class ContinuationCoreAuthorizer <: ContinuationRunAuthorizer {
 }
 
 func continuationCoreContracts(): Unit {
-    for (scenario in ["complete", "paused", "rollback", "wrong-request", "token-exhausted", "reopen", "fork", "fork-again", "context-cut"]) {
+    for (scenario in ["complete", "paused", "rollback", "wrong-request", "token-exhausted", "reopen", "fork", "fork-again", "context-cut", "plan-facts", "plan-facts-binding"]) {
         let root = Directory.createTemp("/tmp").toString()
         let database = SqliteDatabase(root + "/continuation.db")
         try {
@@ -98,10 +100,11 @@ func continuationCoreContracts(): Unit {
                     Capability(CapabilityKind.WorkspaceRead), implementationVersion: "continuation-probe-v1",
                     implementationFingerprint: "continuation-probe-v1"), CutContextTool()).value().getOrThrow()
             }
+            let manifests = ContinuationCoreManifest(database)
             let core = AgentCore(model, runs, ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()), catalog,
                 threadRuntimes: Some(threads), operationRuntime: Some(operations),
                 modelDecisionRuntime: Some(SqliteModelDecisionStore(database)),
-                contextManifestRuntime: Some(ContinuationCoreManifest(database)))
+                contextManifestRuntime: Some(manifests))
             let session = SessionId("continuation-core")
             expect(core.start(AgentRunRequest(RunId("first"), session, "fixture", "real user request")).isOk(),
                 "continuation has a genuinely completed first canonical Run")
@@ -114,20 +117,52 @@ func continuationCoreContracts(): Unit {
             let runtime = threads.acquire(ThreadId(session.value), "").value().getOrThrow()
             let thread = runtime.threadSnapshot()
             let previousEpoch = Int64.parse(database.query("SELECT epoch FROM runs WHERE id='first'")[0].required(0))
+            let withPlanFacts = scenario == "plan-facts" || scenario == "context-cut" || scenario == "plan-facts-binding"
+            let planFacts = if (withPlanFacts) { objectValue([
+                ValueField("approval_hash", textValue("approved-fixture")),
+                ValueField("instruction_sources", listValue([objectValue([
+                    ValueField("hash", textValue(modelPolicySha256Text("approved-instructions")))
+                ])]))
+            ]) } else { objectValue([]) }
+            let expectedPlanFacts = canonicalAgentValue(planFacts)
             let request = AgentRunRequest(RunId("next"), session, "fixture", "frozen continuation prompt",
-                capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]))
+                capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+                toolContext: ToolContextDescriptor(planReviewControl: scenario == "plan-facts" || scenario == "plan-facts-binding"),
+                planContextFacts: planFacts)
             let frozen = core.prepareContinuation(request).value().getOrThrow()
+            if (withPlanFacts) {
+                let changed = frozen.requestCopy()
+                changed.planContextFacts.put("approval_hash", textValue("different-data"))
+                expect(core.prepareContinuation(changed).value().getOrThrow().requestDigest != frozen.requestDigest,
+                    "nonempty plan facts participate in the exact continuation request digest")
+                planFacts.put("approval_hash", textValue("mutated-original-data"))
+            } else {
+                expect(frozen.requestSnapshot().field("plan_context_facts").isNone() &&
+                    frozen.requestSnapshot().field("tool_context").getOrThrow().field("plan_review_control").isNone(),
+                    "default continuation v1 encoding omits empty facts and false review control")
+            }
             // Neither the caller's mutable array nor an exported copy can alter
             // the request captured in the transient admission or persisted claim.
             request.capabilities.values[0] = Capability(CapabilityKind.WorkspaceWrite)
             let exported = frozen.requestCopy()
             exported.capabilities.values[0] = Capability(CapabilityKind.ProcessSpawn)
+            if (withPlanFacts) {
+                exported.planContextFacts.put("approval_hash", textValue("mutated-export-data"))
+                expect(canonicalAgentValue(frozen.requestSnapshot().field("plan_context_facts").getOrThrow()) == expectedPlanFacts &&
+                    canonicalAgentValue(frozen.requestCopy().planContextFacts) == expectedPlanFacts,
+                    "continuation request, snapshot, and exported copy never share mutable plan JSON")
+            }
             let origin = ContinuationRunOrigin(session.value, "main", "workflow", "goal", control.allowanceId,
                 modelPolicySha256Text(raw), control.controlSourceDigest, "first", "next", "turn-next", "continuation-next",
                 if (scenario == "wrong-request") { modelPolicySha256Text("wrong") } else { frozen.requestDigest }, frozen.launchDigest,
                 control.generation, control.eventId, thread.thread.revision, previousEpoch + 1)
             let authority = ContinuationRunAuthority(ContinuationCoreAuthorizer(origin))
             let admission = authority.reserve().value().getOrThrow()
+            if (scenario == "plan-facts-binding") {
+                continuationInitialPlanFactsFence(database, runtime, catalog, frozen, admission)
+                expect(model.requests.size == 1, "plan-facts admission fences dispatch no continuation model Attempt")
+                continue
+            }
             if (scenario == "paused") {
                 authority.revoke()
                 database.transaction<Unit>({ tx => let _ = facts.appendControlFacts(tx, address, Some(control),
@@ -138,7 +173,7 @@ func continuationCoreContracts(): Unit {
             try {
                 rejected = core.startContinuation(AgentContinuationStart(frozen, admission), { _ => () }).isError()
             } catch (_: IllegalArgumentException) { rejected = true }
-            let positive = ["complete", "token-exhausted", "reopen", "fork", "fork-again", "context-cut"].contains(scenario)
+            let positive = ["complete", "token-exhausted", "reopen", "fork", "fork-again", "context-cut", "plan-facts"].contains(scenario)
             let attempts: Int64 = if (scenario == "context-cut") { 3 } else if (positive) { 2 } else { 1 }
             expect(rejected != positive, "real Core continuation result matches " + scenario)
             expect(database.scalarInt("SELECT COUNT(*) FROM model_attempts") == attempts &&
@@ -149,6 +184,15 @@ func continuationCoreContracts(): Unit {
                 database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='host_continuation_claim_consumed_v1'") == (if (positive) { 1 } else { 0 }),
                 "failed admission rolls back the claim; successful continuation never invents user input")
             if (!positive) { continue }
+            if (withPlanFacts) {
+                for (index in 1..manifests.requests.size) {
+                    let observed = coreContextBoundaryRequestFromValue(manifests.requests[index])
+                    expect(canonicalAgentValue(observed.planContextFacts) == expectedPlanFacts &&
+                        observed.toolContext.planReviewControl == (scenario == "plan-facts") &&
+                        !observed.capabilities.allows(CapabilityKind.NetworkAccess),
+                        "actual continuation and later context cut retain frozen plan data without gaining capabilities")
+                }
+            }
             let last = model.requests[1]
             var promptCount: Int64 = 0
             for (message in last.messages) { for (block in message.blocks where block.kind == ModelBlockKind.Text) {
@@ -244,5 +288,79 @@ func continuationCoreContracts(): Unit {
             }
         } finally { database.close() }
     }
-    println("Core continuation start contract passed: 9 real SQLite scenarios, exact frozen model input, context CAS, verified fork history and no fabricated UserMessage")
+    println("Core continuation start contract passed: 11 real SQLite scenarios, exact frozen model input, context CAS, verified fork history and no fabricated UserMessage")
+}
+
+// Start through the real Runtime private admission and Persistence allowance
+// consumer, then exercise Accepted binding before any model effect. The test
+// does not insert, copy, or reconstruct a consumed claim as authority.
+func continuationInitialPlanFactsFence(database: SqliteDatabase, runtime: AgentThreadRuntime,
+    catalog: ToolCatalog, frozen: CoreContinuationPreparation, admission: ContinuationRunAdmission): Unit {
+    let request = frozen.requestCopy()
+    let original = frozen.requestSnapshot()
+    let previous = database.query("SELECT lane_snapshot,budget FROM runs WHERE id='first'")[0]
+    let lane = modelLaneReplacingToolSet(modelLaneFromSnapshotValue(decodeStoredValue(previous.required(0))),
+        catalog.toolSetSnapshot("catalog-" + request.runId.value, request.capabilities,
+            threadId: Some(ThreadId(request.sessionId.value))))
+    let launchBudget = decodeStoredValue(previous.required(1))
+    expect(continuationRunLaunchDigest(modelLaneSnapshotValue(lane), contextSnapshotValue(request.contextSnapshot), launchBudget) ==
+        frozen.launchDigest, "the actual frozen catalog and unchanged canonical budget reproduce the prepared launch identity")
+    let active = runtime.startContinuationTurn(admission, original, lane, request.contextSnapshot, launchBudget,
+        createdAtMillis: agentUtcMillis()).value().getOrThrow()
+    expect(database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE run_id='next' AND kind='host_continuation_claim_consumed_v1'") == 1,
+        "the actual unused owner consumes its allowance claim with canonical next Run admission")
+    database.readTransaction<Unit>({ tx => requireConsumedContinuationRun(tx, ThreadId(request.sessionId.value),
+        SemanticTurnId(admission.origin.turnId), request.runId, active.epoch) })
+    let accepted = objectValue([
+        ValueField("schema", textValue("axyndra.accepted-context-request/v1")),
+        ValueField("run_id", textValue(request.runId.value)), ValueField("session_id", textValue(request.sessionId.value)),
+        ValueField("epoch", integerValue(active.epoch)), ValueField("model", textValue(request.model)),
+        ValueField("prompt", textValue(request.prompt)), ValueField("system", textValue(request.system)),
+        ValueField("skill_stack", original.field("context").getOrThrow()), ValueField("lane_id", original.field("lane_id").getOrThrow()),
+        ValueField("budget", launchBudget), ValueField("tool_context", original.field("tool_context").getOrThrow()),
+        ValueField("capabilities", original.field("capabilities").getOrThrow()),
+        ValueField("plan_context_facts", original.field("plan_context_facts").getOrThrow())
+    ])
+    let initial = database.query("SELECT payload,digest,revision FROM run_continuations WHERE run_id='next'")[0]
+    let claim = database.query("SELECT payload FROM audit_events WHERE run_id='next' AND kind='host_continuation_claim_consumed_v1'")[0].required(0)
+    for (mutation in ["approval", "roots", "missing"]) {
+        let altered = decodeStoredValue(encodeStoredValue(accepted))
+        var candidate = altered
+        if (mutation == "missing") {
+            let fields = ArrayList<ValueField>()
+            for (field in altered.fields where field.name != "plan_context_facts") { fields.add(field) }
+            candidate = objectValue(fields.toArray())
+        } else {
+            altered.field("plan_context_facts").getOrThrow().put(
+                if (mutation == "approval") { "approval_hash" } else { "target_roots" },
+                if (mutation == "approval") { textValue("changed-approval") } else { listValue([textValue("/unapproved")]) })
+        }
+        expect(isInitialContextRequest(candidate), "drift candidate reaches consumed-input binding rather than failing outer request shape")
+        let boundCandidate = candidate
+        var refusedConsumedInput = false
+        try {
+            database.transaction<Unit>({ tx => bindAcceptedContextRequestInTransaction(tx, request.runId, request.sessionId,
+                active.epoch, ThreadItemContent.SystemNote("Host continuation"), boundCandidate, agentUtcMillis()) })
+        } catch (error: Exception) {
+            refusedConsumedInput = error.message.contains("continuation context request differs from its consumed frozen input")
+        }
+        let after = database.query("SELECT payload,digest,revision FROM run_continuations WHERE run_id='next'")[0]
+        expect(refusedConsumedInput && after.required(0) == initial.required(0) && after.required(1) == initial.required(1) &&
+            after.required(2) == initial.required(2) && database.query(
+                "SELECT payload FROM audit_events WHERE run_id='next' AND kind='host_continuation_claim_consumed_v1'")[0].required(0) == claim &&
+            database.query("SELECT budget FROM runs WHERE id='next'")[0].required(0) == encodeStoredValue(launchBudget) &&
+            database.scalarInt("SELECT COUNT(*) FROM operations WHERE run_id='next'") == 0 &&
+            database.scalarInt("SELECT COUNT(*) FROM model_attempts WHERE run_id='next'") == 0 &&
+            database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE run_id='next' AND kind='initial_context_request_bound'") == 0,
+            "changed approval, roots, or missing facts cannot alter a real consumed continuation, allowance claim, budget, or work")
+    }
+    database.transaction<Unit>({ tx => bindAcceptedContextRequestInTransaction(tx, request.runId, request.sessionId,
+        active.epoch, ThreadItemContent.SystemNote("Host continuation"), accepted, agentUtcMillis()) })
+    let revision = database.scalarInt("SELECT revision FROM run_continuations WHERE run_id='next'")
+    database.transaction<Unit>({ tx => bindAcceptedContextRequestInTransaction(tx, request.runId, request.sessionId,
+        active.epoch, ThreadItemContent.SystemNote("Host continuation"), accepted, agentUtcMillis()) })
+    expect(database.scalarInt("SELECT revision FROM run_continuations WHERE run_id='next'") == revision &&
+        database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE run_id='next' AND kind='initial_context_request_bound'") == 1 &&
+        database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE run_id='next' AND kind='host_continuation_claim_consumed_v1'") == 1,
+        "matching facts bind idempotently through the actual consumed claim without consuming it twice")
 }

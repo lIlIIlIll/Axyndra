@@ -619,7 +619,7 @@ class HostCanonicalProjectionConfigurationCache173 {
                     return hostPluginResourceError("plugin.canonical_projection_selection_invalid",
                         "canonical-data selection must be an exact bounded regular file") }
                 payment.ensureRetainedPeak(1048576 + names * 8 + bytes * 16)
-                let temporary = Directory.createTemp("/tmp")
+                let temporary = hostConfigurationTemporaryDirectory204()
                 let encoded: String
                 try {
                     let target = temporary.join("canonical-data-selection")
@@ -714,7 +714,7 @@ class HostCanonicalProjectionConfigurationCache173 {
                     return hostPluginResourceError("plugin.canonical_projection_selection_invalid",
                         "canonical-data selection must be an exact bounded regular file") }
                 payment.ensureRetainedPeak(1048576 + names * 8 + bytes * 16)
-                let temporary = Directory.createTemp("/tmp")
+                let temporary = hostConfigurationTemporaryDirectory204()
                 let encoded: String
                 try {
                     let target = temporary.join("canonical-data-selection")

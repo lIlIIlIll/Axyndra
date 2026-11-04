@@ -143,6 +143,7 @@ main(): Int64 {
     activeSkillStackContract()
     invalidSkillContextCannotCreateRunContract()
     toolBudgetPreparationFailureContract()
+    planBatchAdmissionFailureContract()
     conflictingToolDependencyContract()
     parallelToolWaveContract()
     orderedConflictWaveContract()
@@ -219,6 +220,7 @@ main(): Int64 {
     childBudgetPoolSchedulingGatesContract()
     budgetModeOrthogonalToApprovalContract()
     usageAccountingContract()
+    rejectedReplyUsageContract()
     failedAttemptUsageObeysRequestBudgetContract()
     timeoutAttemptUsageIsSettledContract()
 
@@ -227,6 +229,7 @@ main(): Int64 {
     contextBoundaryContract()
     continuationCoreContracts()
     durableCoreTrajectoriesContract()
+    durableOutputLimitRecoveryContract()
     println("agent_core contract passed")
     0
 }
@@ -3285,6 +3288,11 @@ func contextBoundaryContract(): Unit {
         !budgetedWindow.overBudget && budgetedWindow.estimatedTokens <= 1200,
         "request budget includes system prompt, tool definitions, framing, and conversation messages"
     )
+    let laneBoundedWindow = buildRequestContext(oversized,
+        ResourceBudget(maxInputTokens: 1200), inputTokenLimit: 600)
+    expect(!laneBoundedWindow.overBudget && laneBoundedWindow.estimatedTokens <= 600 &&
+        isToolProtocolComplete(laneBoundedWindow.messages),
+        "immutable Model Lane input allowance also bounds context without changing resource policy")
     let oversizedPrompt = buildRequestContext(
         [ModelMessage(ModelRole.User, [ModelBlock(ModelBlockKind.Text, text: huge)])],
         ResourceBudget(maxInputTokens: 500)

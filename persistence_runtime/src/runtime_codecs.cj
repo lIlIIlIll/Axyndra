@@ -128,7 +128,10 @@ func continuationAcceptsDecision(
 
 func sameToolContextBinding(left: AgentValue, right: AgentValue): Bool {
     if (textOr(left, "workspace_root") != textOr(right, "workspace_root") ||
-        textOr(left, "cwd") != textOr(right, "cwd")) { return false }
+        textOr(left, "cwd") != textOr(right, "cwd") ||
+        boolOr(left, "plan_review_control") != boolOr(right, "plan_review_control") ||
+        encodeAgentValue(left.field("plan_context_facts").getOrDefault({ => objectValue([]) })) !=
+            encodeAgentValue(right.field("plan_context_facts").getOrDefault({ => objectValue([]) }))) { return false }
     sameUnorderedValueList(
         valueListOrEmpty(left, "environment"), valueListOrEmpty(right, "environment")
     ) && sameUnorderedValueList(

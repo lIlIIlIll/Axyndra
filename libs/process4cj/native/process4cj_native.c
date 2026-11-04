@@ -56,7 +56,7 @@ static int p4_close_fd_range(unsigned int first, unsigned int last) {
 }
 
 static int p4_close_all_except(const int *keep, size_t keep_count) {
-    int sorted[16];
+    int sorted[512];
     size_t count = 0;
     for (size_t index = 0; index < keep_count; ++index) {
         int value = keep[index];
@@ -201,7 +201,8 @@ static void p4_supervisor_exec_child(
     int status_read,
     int status_write,
     int error_write,
-    const p4_owned_namespaces *namespaces
+    const p4_owned_namespaces *namespaces,
+    const int32_t *passed_fds, int32_t passed_count
 ) {
     pid_t parent_pid = getppid();
     int error = 0;
@@ -235,6 +236,12 @@ static void p4_supervisor_exec_child(
     p4_close_if_open(err_write);
     p4_close_if_open(status_read);
     p4_close_if_open(status_write);
+    for (int32_t i = 0; i < passed_count; ++i) {
+        int flags = fcntl(passed_fds[i], F_GETFD);
+        if (flags < 0 || fcntl(passed_fds[i], F_SETFD, flags & ~FD_CLOEXEC) < 0) {
+            (void)p4_write_spawn_error(error_write, errno); _exit(127);
+        }
+    }
     error = p4_exec_with_path(executable, argv, envp);
     (void)p4_write_spawn_error(error_write, error);
     p4_close_if_open(error_write);
@@ -255,7 +262,8 @@ static void p4_supervisor_child(
     int status_read,
     int status_write,
     int error_write,
-    const p4_owned_namespaces *namespaces
+    const p4_owned_namespaces *namespaces,
+    const int32_t *passed_fds, int32_t passed_count
 ) {
     if (setsid() < 0) {
         (void)p4_write_spawn_error(error_write, errno);
@@ -274,7 +282,7 @@ static void p4_supervisor_child(
      * Keep only the endpoints needed by this supervisor and its command;
      * otherwise an orphaned supervisor can keep a dead broker endpoint alive.
      */
-    int inherited_fds[] = {
+    int inherited_fds[269] = {
         in_read,
         in_write,
         out_read,
@@ -289,9 +297,10 @@ static void p4_supervisor_child(
         namespaces == NULL ? -1 : namespaces->fds[2],
         namespaces == NULL ? -1 : namespaces->fds[3]
     };
+    for (int32_t i = 0; i < passed_count; ++i) inherited_fds[13 + i] = passed_fds[i];
     int close_error = p4_close_all_except(
         inherited_fds,
-        sizeof(inherited_fds) / sizeof(inherited_fds[0])
+        13 + (size_t)passed_count
     );
     if (close_error != 0) {
         (void)p4_write_spawn_error(error_write, close_error);
@@ -318,7 +327,7 @@ static void p4_supervisor_child(
             status_read,
             status_write,
             error_write,
-            namespaces
+            namespaces, passed_fds, passed_count
         );
         _exit(127);
     }
@@ -332,6 +341,7 @@ static void p4_supervisor_child(
     p4_close_if_open(status_read);
     p4_close_if_open(error_write);
 
+    for (int32_t i = 0; i < passed_count; ++i) p4_close_if_open(passed_fds[i]);
     int command_status = 127;
     int command_reaped = 0;
     int status_sent = 0;
@@ -372,7 +382,8 @@ static int p4_spawn_supervisor(
     int status_pipe[2],
     int error_pipe[2],
     pid_t *pid_out,
-    const p4_owned_namespaces *namespaces
+    const p4_owned_namespaces *namespaces,
+    const int32_t *passed_fds, int32_t passed_count
 ) {
     pid_t parent_pid = getpid();
     pid_t supervisor = fork();
@@ -401,7 +412,7 @@ static int p4_spawn_supervisor(
             status_pipe[0],
             status_pipe[1],
             error_pipe[1],
-            namespaces
+            namespaces, passed_fds, passed_count
         );
         _exit(127);
     }
@@ -454,8 +465,14 @@ static int32_t p4_spawn_process_internal(
     int32_t *stdout_out,
     int32_t *stderr_out,
     int32_t *status_out,
-    const p4_owned_namespaces *namespaces
+    const p4_owned_namespaces *namespaces,
+    const int32_t *passed_fds, int32_t passed_count
 ) {
+    if (passed_count < 0 || passed_count > 256 || (passed_count && passed_fds == NULL)) return EINVAL;
+    for (int32_t i = 0; i < passed_count; ++i) {
+        if (passed_fds[i] <= STDERR_FILENO || fcntl(passed_fds[i], F_GETFD) < 0) return EBADF;
+        for (int32_t j = 0; j < i; ++j) if (passed_fds[j] == passed_fds[i]) return EINVAL;
+    }
     int in_pipe[2] = {-1, -1};
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
@@ -506,7 +523,7 @@ static int32_t p4_spawn_process_internal(
             status_pipe,
             error_pipe,
             &pid,
-            namespaces
+            namespaces, passed_fds, passed_count
         );
         if (result != 0) goto cleanup;
         p4_close_if_open(in_pipe[0]); in_pipe[0] = -1;
@@ -528,6 +545,9 @@ static int32_t p4_spawn_process_internal(
         (result = posix_spawn_file_actions_addclose(&actions, in_pipe[1])) != 0 ||
         (result = posix_spawn_file_actions_addclose(&actions, out_pipe[0])) != 0 ||
         (result = posix_spawn_file_actions_addclose(&actions, err_pipe[0])) != 0) goto cleanup;
+    for (int32_t i = 0; i < passed_count; ++i) {
+        if ((result = posix_spawn_file_actions_adddup2(&actions, passed_fds[i], passed_fds[i])) != 0) goto cleanup;
+    }
     /* Do not let forked descendants retain the original pipe endpoints. */
     if (in_pipe[0] != STDIN_FILENO &&
         (result = posix_spawn_file_actions_addclose(&actions, in_pipe[0])) != 0) goto cleanup;
@@ -565,14 +585,21 @@ cleanup:
     return (int32_t)result;
 }
 
-int32_t process4cj_spawn(
+static int32_t p4_spawn_with_fds(
     const char *executable, char *const argv[], char *const envp[],
     const char *working_directory, int32_t new_session, int64_t *pid_out,
     int32_t *stdin_out, int32_t *stdout_out, int32_t *stderr_out, int32_t *status_out
 ) {
     return p4_spawn_process_internal(executable, argv, envp, working_directory,
-        new_session, pid_out, stdin_out, stdout_out, stderr_out, status_out, NULL);
+        new_session, pid_out, stdin_out, stdout_out, stderr_out, status_out, NULL, NULL, 0);
 }
+
+/* Additional descriptors are supplied only by trusted host composition. */
+int32_t process4cj_spawn_with_fds(
+    const char *executable, char *const argv[], char *const envp[], const char *cwd,
+    int32_t session, int64_t *pid, int32_t *input, int32_t *out, int32_t *err, int32_t *status,
+    const int32_t *fds, int32_t count
+) { return p4_spawn_process_internal(executable, argv, envp, cwd, session, pid, input, out, err, status, NULL, fds, count); }
 
 int64_t process4cj_read(int32_t fd, uint8_t *buffer, int64_t length) {
     ssize_t result;
@@ -2228,6 +2255,40 @@ int32_t process4cj_random_bytes(uint8_t *buffer, int64_t length) {
     return 0;
 }
 
+/* Pin directory capabilities without following symlinks. Relative lookups
+ * are rooted in an already pinned workspace descriptor, so a path replacement
+ * cannot turn a scoped mount into a bind of an unrelated host directory. */
+int32_t process4cj_pin_directory(int32_t base_fd, const char *path) {
+    if (path == NULL || (base_fd < 0 && path[0] != '/') ||
+        (base_fd >= 0 && path[0] == '/')) return -EINVAL;
+    int current = base_fd < 0 ? open("/", O_PATH | O_DIRECTORY | O_CLOEXEC) :
+        fcntl(base_fd, F_DUPFD_CLOEXEC, 3);
+    if (current < 0) return -errno;
+    char *copy = strdup(path);
+    if (copy == NULL) { close(current); return -ENOMEM; }
+    char *save = NULL;
+    for (char *part = strtok_r(copy, "/", &save); part != NULL; part = strtok_r(NULL, "/", &save)) {
+        if (strcmp(part, ".") == 0 || strcmp(part, "..") == 0) {
+            free(copy); close(current); return -EINVAL;
+        }
+        int next = openat(current, part, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        if (next < 0) {
+            int error = errno; free(copy); close(current); return -error;
+        }
+        close(current); current = next;
+    }
+    free(copy);
+    return current;
+}
+
+int64_t process4cj_directory_identity(int32_t fd, int32_t part) {
+    struct stat value;
+    if (fstat(fd, &value) != 0 || !S_ISDIR(value.st_mode)) return -1;
+    return part == 0 ? (int64_t)value.st_dev : (int64_t)value.st_ino;
+}
+
+int64_t process4cj_self_pid(void) { return (int64_t)getpid(); }
+
 
 /* Generic read-view resource identity/copy. No search, hashline or editor
  * semantics. Never follow a link, open a device, or preserve executable bits.
@@ -2802,10 +2863,11 @@ int32_t process4cj_namespace_close_checked(int64_t handle) {
     return 0;
 }
 
-int32_t process4cj_spawn_in_namespace(
+static int32_t p4_spawn_in_namespace_with_fds(
     int64_t handle, const char *executable, char *const argv[], char *const envp[],
     const char *working_directory, int64_t *pid_out, int32_t *stdin_out,
-    int32_t *stdout_out, int32_t *stderr_out, int32_t *status_out
+    int32_t *stdout_out, int32_t *stderr_out, int32_t *status_out,
+    const int32_t *passed_fds, int32_t passed_count
 ) {
     if (handle <= 0) return EINVAL;
     p4_owned_namespaces *copy = NULL;
@@ -2868,12 +2930,23 @@ int32_t process4cj_spawn_in_namespace(
         copy->defer_payload_user = 1;
     }
     error = p4_spawn_process_internal(executable, held_argv == NULL ? argv : held_argv,
-        envp, working_directory, 1, pid_out, stdin_out, stdout_out, stderr_out, status_out, copy);
+        envp, working_directory, 1, pid_out, stdin_out, stdout_out, stderr_out, status_out, copy, passed_fds, passed_count);
 complete:
     free(held_argv);
     p4_namespace_free(copy);
     return error;
 }
+
+int32_t process4cj_spawn_in_namespace_with_fds(
+    int64_t handle, const char *executable, char *const argv[], char *const envp[], const char *cwd,
+    int64_t *pid, int32_t *input, int32_t *out, int32_t *err, int32_t *status,
+    const int32_t *fds, int32_t count
+) { return p4_spawn_in_namespace_with_fds(handle, executable, argv, envp, cwd, pid, input, out, err, status, fds, count); }
+int32_t process4cj_spawn_in_namespace(
+    int64_t handle, const char *executable, char *const argv[], char *const envp[], const char *cwd,
+    int64_t *pid, int32_t *input, int32_t *out, int32_t *err, int32_t *status
+) { return p4_spawn_in_namespace_with_fds(handle, executable, argv, envp, cwd, pid, input, out, err, status, NULL, 0); }
+
 
 /* A payload projection is accepted only from the exact newly owned process
  * tree, in this service's actual namespace, after the requested executable
@@ -3569,7 +3642,8 @@ static void p4_owned_supervisor_child180(
     int status_write,
     int error_write,
     int fork_ready_write,
-    const p4_owned_namespaces *namespaces
+    const p4_owned_namespaces *namespaces,
+    const int32_t *passed_fds, int32_t passed_count
 ) {
     if (setsid() < 0) {
         (void)p4_write_spawn_error(error_write, errno);
@@ -3588,7 +3662,7 @@ static void p4_owned_supervisor_child180(
      * Keep only the endpoints needed by this supervisor and its command;
      * otherwise an orphaned supervisor can keep a dead broker endpoint alive.
      */
-    int inherited_fds[] = {
+    int inherited_fds[270] = {
         in_read,
         in_write,
         out_read,
@@ -3604,9 +3678,10 @@ static void p4_owned_supervisor_child180(
         namespaces == NULL ? -1 : namespaces->fds[2],
         namespaces == NULL ? -1 : namespaces->fds[3]
     };
+    for (int32_t i = 0; i < passed_count; ++i) inherited_fds[14 + i] = passed_fds[i];
     int close_error = p4_close_all_except(
         inherited_fds,
-        sizeof(inherited_fds) / sizeof(inherited_fds[0])
+        14 + (size_t)passed_count
     );
     if (close_error != 0) {
         (void)p4_write_spawn_error(error_write, close_error);
@@ -3634,10 +3709,11 @@ static void p4_owned_supervisor_child180(
             status_read,
             status_write,
             error_write,
-            namespaces
+            namespaces, passed_fds, passed_count
         );
         _exit(127);
     }
+    for (int32_t i = 0; i < passed_count; ++i) p4_close_if_open(passed_fds[i]);
     /* This private fixed record is issued ONLY after the actual command
      * fork returned. The parent must consume it before any post-fork close
      * or cancellation capture; two empty tree scans cannot prove a command
@@ -3772,12 +3848,18 @@ static int p4_owned_reap_after_echild180(int64_t *journal, int status_fd) {
     return result;
 }
 
-int32_t process4cj_spawn_owned180(
+static int32_t p4_spawn_owned_with_fds180(
     const char *executable, char *const argv[], char *const envp[],
     const char *working_directory, int32_t new_session, int64_t *pid_out,
     int32_t *stdin_out, int32_t *stdout_out, int32_t *stderr_out, int32_t *status_out,
-    int64_t *journal, int64_t journal_words
+    int64_t *journal, int64_t journal_words,
+    const int32_t *passed_fds, int32_t passed_count
 ) {
+    if (passed_count < 0 || passed_count > 256 || (passed_count && passed_fds == NULL)) return EINVAL;
+    for (int32_t i = 0; i < passed_count; ++i) {
+        if (passed_fds[i] <= STDERR_FILENO || fcntl(passed_fds[i], F_GETFD) < 0) return EBADF;
+        for (int32_t j = 0; j < i; ++j) if (passed_fds[j] == passed_fds[i]) return EINVAL;
+    }
     if (journal == NULL || journal_words != P4_OWNED_JOURNAL_WORDS180 ||
         pid_out == NULL || stdin_out == NULL || stdout_out == NULL ||
         stderr_out == NULL || status_out == NULL) return EINVAL;
@@ -3820,7 +3902,7 @@ int32_t process4cj_spawn_owned180(
         }
         p4_owned_supervisor_child180(executable, argv, envp, working_directory,
             in_pipe[0], in_pipe[1], out_pipe[0], out_pipe[1], err_pipe[0], err_pipe[1],
-            status_pipe[0], status_pipe[1], error_pipe[1], fork_ready_pipe[1], NULL);
+            status_pipe[0], status_pipe[1], error_pipe[1], fork_ready_pipe[1], NULL, passed_fds, passed_count);
         _exit(127);
     }
     /* This write precedes the exec handshake and every post-fork close. The
@@ -3904,6 +3986,17 @@ owned_cleanup:
     journal[5] = 1;
     return (int32_t)journal[3];
 }
+
+int32_t process4cj_spawn_owned_with_fds180(
+    const char *executable, char *const argv[], char *const envp[], const char *cwd,
+    int32_t session, int64_t *pid, int32_t *input, int32_t *out, int32_t *err, int32_t *status,
+    int64_t *journal, int64_t words, const int32_t *fds, int32_t count
+) { return p4_spawn_owned_with_fds180(executable, argv, envp, cwd, session, pid, input, out, err, status, journal, words, fds, count); }
+int32_t process4cj_spawn_owned180(
+    const char *executable, char *const argv[], char *const envp[], const char *cwd,
+    int32_t session, int64_t *pid, int32_t *input, int32_t *out, int32_t *err, int32_t *status,
+    int64_t *journal, int64_t words
+) { return p4_spawn_owned_with_fds180(executable, argv, envp, cwd, session, pid, input, out, err, status, journal, words, NULL, 0); }
 
 /* The owned Cj caller invokes this only after the whole native start/wrapper
  * helper returned with its original exception and BEFORE a waiter was spawned

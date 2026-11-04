@@ -8,6 +8,9 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "agent_cli" = { path = "../../agent_cli", output-type = "static" }
+  "agent_app_protocol" = { path = "../../agent_app_protocol", output-type = "static" }
+  "agent_history" = { path = "../../agent_history", output-type = "static" }
   "agent_host_runtime" = { path = "../../agent_host_runtime", output-type = "static" }
   "lsp4cj" = { path = "../../libs/lsp4cj", output-type = "static" }
   "process4cj" = { path = "../../libs/process4cj", output-type = "static" }
