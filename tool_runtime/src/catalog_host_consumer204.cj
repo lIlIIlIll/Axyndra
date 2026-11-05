@@ -1,6 +1,7 @@
 package tool_runtime
 
 import agent_domain.*
+import agent_runtime.*
 import std.sync.*
 
 private let toolCatalogConsumerDebts204 = ToolCatalogConsumerDebts204()
@@ -166,6 +167,40 @@ public class ToolCatalogHostConsumer204 {
             planReadCopies204 = value.next
             value.next = None<CatalogPlanReadAllocation204>
         }
+    }
+    // Independent canonical DATA belongs to this existing actual Host caller.
+    // Its original audit-frame ledger pays before copying, and its whole
+    // caller/Context/consumer return still governs retirement.
+    func copyCanonicalCall204(call: ToolCall, arguments: AgentValue): ToolCall {
+        lock.lock(); try {
+            let paid = canonicalCopyPayment204(); let meter = ToolSnapshotMeasure159(paid)
+            meter.addText159(call.callId); meter.addText159(call.name); meter.addValue159(arguments); meter.fund159()
+            ToolCall(copyTextData204(call.callId), copyTextData204(call.name), copyJsonData204(arguments))
+        } catch (error: Exception) { held = true; throw error } finally { lock.unlock() }
+    }
+    func copyCanonicalError204(value: AgentError): AgentError {
+        lock.lock(); try {
+            let paid = canonicalCopyPayment204(); let meter = ToolSnapshotMeasure159(paid)
+            meter.addText159(value.code); meter.addText159(value.message); meter.addSlots159(value.fields.size)
+            for (field in value.fields) { meter.addText159(field.name); meter.addText159(field.value) }; meter.fund159()
+            if (value.attemptFailure.isSome() || value.observation.isSome()) { held = true }
+            AgentError(value.kind, copyTextData204(value.code), copyTextData204(value.message),
+                retryable: value.retryable, fallbackAllowed: value.fallbackAllowed,
+                fields: value.fields.map { field => ErrorField(copyTextData204(field.name), copyTextData204(field.value)) },
+                attemptFailure: value.attemptFailure, observation: value.observation)
+        } catch (error: Exception) { held = true; throw error } finally { lock.unlock() }
+    }
+    private func canonicalCopyPayment204(): LogicalJsonOwnerReservation {
+        if (returned || collecting || frames == 0 || callerReturned || payment.isNone() || pendingWirePayment204.isSome()) {
+            throw IllegalStateException("canonical copy has no active Host consumer") }
+        let paid = payment.getOrThrow().deriveRetainedLease()
+        // Register before funding; prepay the link before its allocation.
+        // An unexpected refusal retains the exact pending payment.
+        pendingWirePayment204 = Some(paid)
+        paid.ensureRetainedPeak(131072)
+        planReadCopies204 = Some(CatalogPlanReadAllocation204(paid, planReadCopies204))
+        pendingWirePayment204 = None<LogicalJsonOwnerReservation>
+        paid
     }
     func copyPreparedPlanUtf8204(prepared: PreparedToolInvocation): OwnedPreparedPlanUtf8204 {
         requirePreparedBorrow204(prepared)

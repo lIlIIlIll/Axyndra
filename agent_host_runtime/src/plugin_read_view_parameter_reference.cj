@@ -85,7 +85,8 @@ func hostReadViewReferencedRequest(binding: AgentValue, input: AgentValue, expec
 
 func hostPrepareReferencedReadViewInvocation(host: HostJavaScriptPluginHost, descriptor: PluginPackageDescriptor,
     configuration: HostPluginHttpConfiguration, namespace: String, tool: String, generation: UInt64,
-    context: ToolInvocationContext, call: ToolCall): Result<AgentValue> {
+    context: ToolInvocationContext, call: ToolCall, owner: ?ToolCanonicalArgumentsOwner204,
+    payloadOwner: ?HostReadViewPreparationFrame204): Result<AgentValue> {
     let payload = configuration.toolPayloadLimits(tool)
     let extent = try { logicalJsonWriteReservationBytes(call.arguments, HOST_READ_VIEW_INPUT_BYTES) }
         catch (_: Exception) { return hostPluginResourceError("read_view.parameter_input_limit", "original input exceeds its existing bounded shape") }
@@ -114,6 +115,7 @@ func hostPrepareReferencedReadViewInvocation(host: HostJavaScriptPluginHost, des
             cancellation: context.cancellation, processLimits: context.budget.processLimits, timeoutMillis: 5000,
             expectedInstanceGeneration: generation, authorityScope: "pure-read-view:" + configuration.digest, toolPayloadLimits: payload)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        match (payloadOwner) { case Some(value) => value.capture(result); case None => () }
         if (result.isError || !httpIntentExactFields(result.value, ["intents"])) {
             return hostPluginResourceError("read_view.prepare_rejected", "native package did not return pure read-view intents") }
         let proposed = result.value.field("intents").getOrThrow()
@@ -134,13 +136,13 @@ func hostPrepareReferencedReadViewInvocation(host: HostJavaScriptPluginHost, des
         match (validateReadViewIntent(frozen)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (hostReadViewCancellation(context)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (configuration.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        return Result.Ok(objectValue([ValueField("input", call.arguments), ValueField("host_plan", objectValue([
+        return hostReadViewCanonicalData204(objectValue([ValueField("input", call.arguments), ValueField("host_plan", objectValue([
             ValueField("version", textValue(HOST_READ_VIEW_VERSION)), ValueField("plugin", textValue(namespace)),
             ValueField("package_digest", textValue(descriptor.contentDigest)), ValueField("generation", textValue(generation.toString())),
             ValueField("configuration_digest", textValue(configuration.digest)), ValueField("contribution", textValue(tool)),
             ValueField("read_granted", boolValue(configuration.ordinaryReadTools.contains(tool))),
             ValueField("tool_payload_limits", match (payload) { case Some(value) => value.value(); case None => nullValue() }),
-            ValueField("intents", listValue([frozen]))]))]))
+            ValueField("intents", listValue([frozen]))]))]), owner)
     } catch (_: Exception) {
         return hostPluginResourceError("read_view.parameter_input_invalid", "parameter metadata cannot represent the complete bounded original input")
     } finally { charge.close() }

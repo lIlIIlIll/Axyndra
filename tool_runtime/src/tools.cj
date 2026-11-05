@@ -2701,8 +2701,9 @@ public class ToolPipeline {
     private func canonicalizedInvocationCall204(context: ToolInvocationContext, call: ToolCall,
         descriptor: ToolDescriptor): Result<ToolCall> {
         if (!descriptor.hasOwnedCanonicalArguments204()) { return descriptor.canonicalizedCall(context, call) }
-        // The old direct/Host contract remains conservative. Only actual Core
-        // DATA consumers can accept this separate paid producer protocol.
+        match (hostConsumerForContext204(context)) {
+            case Some(scope) => return copyHostCanonicalArguments204(scope, context, call, descriptor)
+            case None => () }
         let scope = match (coreCatalogDataScope204(context)) { case Some(value) => value
             case None => return descriptor.canonicalizedCall(context, call) }
         let owner = match (descriptor.ownedCanonicalArguments204(context, call)) {
@@ -2714,6 +2715,30 @@ public class ToolPipeline {
         // outcome/call/DOM reference, has returned before this DATA-only ACK.
         owner.returnCopiedConsumerFrame204()
         copied
+    }
+    private func copyHostCanonicalArguments204(scope: ToolCatalogHostConsumer204,
+        context: ToolInvocationContext, call: ToolCall, descriptor: ToolDescriptor): Result<ToolCall> {
+        let owner = match (descriptor.ownedCanonicalArguments204(context, call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => scope.holdUnknown204(); return Result.Err(error) }
+        let copied = try { copyHostCanonicalOutcomeFrame204(scope, owner, call) }
+            catch (error: Exception) { owner.holdUnknownConsumer204(); scope.holdUnknown204(); throw error }
+        owner.returnCopiedConsumerFrame204()
+        copied
+    }
+    private func copyHostCanonicalOutcomeFrame204(scope: ToolCatalogHostConsumer204,
+        owner: ToolCanonicalArgumentsOwner204, call: ToolCall): Result<ToolCall> {
+        let source = match (catalog.reserveRegistryData180(4096)) {
+            case Some(value) => value
+            case None => throw IllegalStateException("owned canonical producer has no actual Catalog bank") }
+        try { owner.requireSameBank204(source) } finally { source.close() }
+        owner.beginConsumer204()
+        owner.withOutcome204<Result<ToolCall>>({ outcome => match (outcome) {
+            case Result.Ok(arguments) => if (arguments.unifiedKind == ValueKind.Object) {
+                Result.Ok(scope.copyCanonicalCall204(call, arguments))
+            } else { Result.Err(AgentError(AgentErrorKind.InvalidInput, "tool.normalized_arguments_invalid",
+                "normalized tool arguments must be an object")) }
+            case Result.Err(error) => Result.Err(scope.copyCanonicalError204(error)) } })
     }
     private func copyCanonicalOutcomeFrame204(scope: ToolCatalogCoreDataScope204,
         owner: ToolCanonicalArgumentsOwner204, call: ToolCall): Result<ToolCall> {

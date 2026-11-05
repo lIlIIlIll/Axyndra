@@ -252,7 +252,9 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                     canonicalArgumentsResolver: canonicalizer,
                     ownedCanonicalArgumentsResolver204: if (supervisedTask) { Some({ context, call =>
                         serviceRuntime.getOrThrow().childCanonicalizeOwned204(hostManager, identity.namespace, toolData.name,
-                            generation, documentImplementation, documentSchema, context, call) }) } else { None },
+                            generation, documentImplementation, documentSchema, context, call) }) } else if (readViewRequested) { Some({ context, call =>
+                        hostManager.prepareReadViewOwned204(context, call, identity.namespace,
+                            toolData.name, generation) }) } else { None },
                     networkPolicyResolver: Some({ call => if (httpRequested) {
                         hostPluginHttpRootNetworkPolicy(call, identity.namespace, identity.contentDigest)
                     } else { Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) } })

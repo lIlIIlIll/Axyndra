@@ -1597,6 +1597,11 @@ func runAstEditPluginContract(root: String, parentWorkspace: String): Unit {
     } finally { product.close() }
 }
 
+func serviceBrokerUsageText(): String {
+    let value = nativeControlMetadataUsage113()
+    value[0].toString() + ":" + value[1].toString()
+}
+
 func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): Unit {
     runPluginServiceBrokerContract(root, workspace, false)
     runPluginServiceBrokerContract(root, workspace, true)
@@ -1644,6 +1649,7 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
         "  });\n" +
         "}\n"
     if (!native) { File.writeTo(pluginRoot + "/service.js", javascript.toArray()) }
+    println("capacity before-open " + serviceBrokerUsageText())
     let product = openProduct(config: ProductConfig(
         settingsRoot: caseRoot + "/settings",
         stateRoot: stateRoot,
@@ -1655,7 +1661,9 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
         asyncEnabled: false
     )).value().getOrThrow()
     try {
+        println("capacity opened " + serviceBrokerUsageText())
         let readonlyShell = NativeReadonlyShellContractBinding(product)
+        println("capacity readonly " + serviceBrokerUsageText())
         let imported = product.importLocalPlugin(
             pluginRoot, PluginInstallScope.Workspace
         )
@@ -1695,6 +1703,7 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
             expect(budget.snapshot().toolCalls == 3 && budget.snapshot().activeTools == 0,
                 "Direct root and child charge the same explicit three-call budget and settle the single slot")
             releaseToolInvocationPayload(result)
+            println("capacity after-result " + serviceBrokerUsageText())
         } else {
             product.fixtureProbe.getOrThrow().enqueueToolCallReply(
                 caseName + "-root-call", toolName, rootArguments)
@@ -1904,6 +1913,7 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
             expect(twoCallBudget.snapshot().toolCalls == 2 && twoCallBudget.snapshot().activeTools == 0,
                 "no implicit tool-call budget expansion and the actual owner slot settles")
             releaseToolInvocationPayload(twoCallResult)
+            println("capacity after-twoCallResult " + serviceBrokerUsageText())
             let boundedDb = SqliteDatabase(stateRoot + "/state.db")
             try {
                 expect(boundedDb.query("SELECT id FROM runs WHERE thread_id=? AND state='completed'",[SqlParameter.Text(twoCallSession.value)]).isEmpty(),
@@ -1930,6 +1940,7 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
             expect(exhausted.snapshot().toolCalls == 1 && exhausted.snapshot().activeTools == 0,
                 "budget rejection restores the direct slot without spending a child call")
             releaseToolInvocationPayload(limited)
+            println("capacity after-limited " + serviceBrokerUsageText())
             let check = SqliteDatabase(stateRoot + "/state.db")
             try {
                 expect(check.query("SELECT a.operation_id FROM derived_operation_admissions a " +
@@ -1955,6 +1966,7 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
                     case _ => false
                 }, "Direct caller receives the structured failing child result")
                 releaseToolInvocationPayload(failedChild)
+                println("capacity after-failedChild " + serviceBrokerUsageText())
                 let failedDb = SqliteDatabase(stateRoot + "/state.db")
                 try {
                     let failedRuns = failedDb.query("SELECT state FROM runs WHERE thread_id='" +
@@ -2024,7 +2036,9 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
             }
         }
     } finally {
+        println("capacity before-close " + serviceBrokerUsageText())
         product.close()
+        println("capacity after-close " + serviceBrokerUsageText())
     }
 }
 main(): Int64 {

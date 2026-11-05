@@ -443,6 +443,10 @@ public open class HostJavaScriptPluginHost {
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
         hostPreparePluginReadViewInvocation(this, settingsRoot, namespace, tool, generation, context, call)
     }
+    func prepareReadViewOwned204(context: ToolInvocationContext, call: ToolCall,
+        namespace: String, tool: String, generation: UInt64): Result<ToolCanonicalArgumentsOwner204> {
+        hostPrepareReadViewOwned204(this, settingsRoot, namespace, tool, generation, context, call)
+    }
     public func readonlyDelegationTool(name: String): Bool {
         lock.lock()
         try {

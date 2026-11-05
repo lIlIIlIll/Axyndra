@@ -395,6 +395,12 @@ public class HostReadViewCollector {
 
 public func hostPreparePluginReadViewInvocation(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, tool: String, generation: UInt64, context: ToolInvocationContext, call: ToolCall): Result<AgentValue> {
+    hostPrepareReadViewFrame204(host, settingsRoot, namespace, tool, generation, context, call, None, None)
+}
+
+func hostPrepareReadViewFrame204(host: HostJavaScriptPluginHost, settingsRoot: String,
+    namespace: String, tool: String, generation: UInt64, context: ToolInvocationContext, call: ToolCall,
+    owner: ?ToolCanonicalArgumentsOwner204, payload: ?HostReadViewPreparationFrame204): Result<AgentValue> {
     let descriptor = match (host.servicePackageData81(namespace, generation)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
     }
@@ -405,17 +411,18 @@ public func hostPreparePluginReadViewInvocation(host: HostJavaScriptPluginHost, 
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
     }
     if (configuration.usesReadViewParameterReference(tool)) {
-        return hostPrepareReferencedReadViewInvocation(host, descriptor, configuration, namespace, tool, generation, context, call)
+        return hostPrepareReferencedReadViewInvocation(host, descriptor, configuration, namespace, tool, generation, context, call, owner, payload)
     }
-    let payload = configuration.toolPayloadLimits(tool)
+    let payloadLimits = configuration.toolPayloadLimits(tool)
     let arguments = objectValue([ValueField("input", call.arguments)])
     let identity = JavaScriptHostInvocationIdentity(threadId: context.sessionId.value, runId: context.runId.value,
         epoch: context.epoch, operationId: "", callId: call.callId, kind: "prepare")
     let result = match (host.invoke(namespace, tool, stringifyUnifiedJson(arguments), identity: identity,
         cancellation: context.cancellation, processLimits: context.budget.processLimits, timeoutMillis: 5000,
-        expectedInstanceGeneration: generation, authorityScope: "pure-read-view:" + configuration.digest, toolPayloadLimits: payload)) {
+        expectedInstanceGeneration: generation, authorityScope: "pure-read-view:" + configuration.digest, toolPayloadLimits: payloadLimits)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
     }
+    match (payload) { case Some(value) => value.capture(result); case None => () }
     if (result.isError || !httpIntentExactFields(result.value, ["intents"])) {
         return hostPluginResourceError("read_view.prepare_rejected", "native package did not return pure read-view intents")
     }
@@ -443,13 +450,13 @@ public func hostPreparePluginReadViewInvocation(host: HostJavaScriptPluginHost, 
         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
     match (validateReadViewIntent(frozen)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     match (configuration.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-    return Result.Ok(objectValue([ValueField("input", call.arguments), ValueField("host_plan", objectValue([
+    return hostReadViewCanonicalData204(objectValue([ValueField("input", call.arguments), ValueField("host_plan", objectValue([
         ValueField("version", textValue(HOST_READ_VIEW_VERSION)), ValueField("plugin", textValue(namespace)),
         ValueField("package_digest", textValue(descriptor.contentDigest)), ValueField("generation", textValue(generation.toString())),
         ValueField("configuration_digest", textValue(configuration.digest)), ValueField("contribution", textValue(tool)),
         ValueField("read_granted", boolValue(configuration.ordinaryReadTools.contains(tool))),
-        ValueField("tool_payload_limits", match (payload) { case Some(value) => value.value(); case None => nullValue() }),
-        ValueField("intents", listValue([frozen]))]))]))
+        ValueField("tool_payload_limits", match (payloadLimits) { case Some(value) => value.value(); case None => nullValue() }),
+        ValueField("intents", listValue([frozen]))]))]), owner)
 }
 
 public func hostPluginReadViewSideEffect(call: ToolCall): Bool {
