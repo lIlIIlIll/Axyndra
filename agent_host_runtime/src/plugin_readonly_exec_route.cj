@@ -97,6 +97,21 @@ public class HostPluginReadOnlyExecTarget {
     }
 
     func isNativeReadView(): Bool { readView.isSome() }
+    func derivedSelection(context: ToolInvocationContext): Result<ReadonlyExecDerivedSelection> {
+        let selected = match (readView) { case Some(value) => value; case None =>
+            return hostPluginResourceError("extension.exec_bridge_target_invalid", "bridge requires an actual Host read-view selection") }
+        Result.Ok(ReadonlyExecDerivedSelection(objectValue([
+            ValueField("schema", textValue("host-readonly-exec/v1")),
+            ValueField("run_id", textValue(context.runId.value)),
+            ValueField("thread_id", textValue(context.sessionId.value)),
+            ValueField("epoch", textValue(context.epoch.toString())),
+            ValueField("target", textValue(name)), ValueField("version", textValue(version)),
+            ValueField("fingerprint", textValue(fingerprint)), ValueField("schema_digest", textValue(schemaDigest)),
+            ValueField("package_digest", textValue(selected.packageDigest)),
+            ValueField("generation", textValue(selected.generation.toString())),
+            ValueField("configuration_digest", textValue(selected.configurationDigest))])))
+    }
+
     func context(root: PreparedToolInvocation, parent: ToolInvocationContext,
         ordinary: ToolInvocationContext): Result<ToolInvocationContext> {
         if (readView.isNone()) { return Result.Ok(ordinary) }

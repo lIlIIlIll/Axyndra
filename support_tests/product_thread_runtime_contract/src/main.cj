@@ -1604,10 +1604,14 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
     runPluginServiceBrokerContract(root, workspace, false, directPi: true)
 }
 
-func runPluginServiceBrokerContract(root: String, workspace: String, native: Bool, directNative!: Bool = false, directPi!: Bool = false): Unit {
+func runPluginServiceBrokerContract(root: String, workspaceParent: String, native: Bool, directNative!: Bool = false, directPi!: Bool = false, scenario!: String = "all"): Unit {
     let directRoot = directNative || directPi
     let caseName = if (directPi) { "direct-pi-service-broker" } else if (directNative) { "direct-native-service-broker" } else if (native) { "native-service-broker" } else { "javascript-service-broker" }
     let caseRoot = root + "/" + caseName
+    // Each scenario installs a workspace-scoped package. Sharing its Registry
+    // with the next scenario would test duplicate import instead of execution.
+    let workspace = workspaceParent + "/" + caseName
+    Directory.create(workspace, recursive: true)
     let pluginRoot = caseRoot + "/plugin"
     let stateRoot = caseRoot + "/state"
     Directory.create(pluginRoot, recursive: true)
@@ -1675,6 +1679,7 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
         } else { objectValue([]) }
         let sessionId = SessionId(caseName + "-contract")
         let progress = ArrayList<String>()
+        if (scenario == "all" || scenario == "positive") {
         if (directRoot) {
             let budget = ExecutionBudget(maxToolCalls: 3, maxConcurrentTools: 1)
             let result = product.vnext.executeCanonicalTool(sessionId,
@@ -1689,6 +1694,7 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
             }, "real Direct " + (if (directPi) { "Pi" } else { "native" }) + " root executes its read-only child through the broker")
             expect(budget.snapshot().toolCalls == 3 && budget.snapshot().activeTools == 0,
                 "Direct root and child charge the same explicit three-call budget and settle the single slot")
+            releaseToolInvocationPayload(result)
         } else {
             product.fixtureProbe.getOrThrow().enqueueToolCallReply(
                 caseName + "-root-call", toolName, rootArguments)
@@ -1700,9 +1706,21 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
                 }
             })
             let submitted = session.submit("Read the fixture through the plugin host service.")
-            expect(submitted.isOk() && submitted.value().getOrThrow().snapshot.isSome() &&
-                submitted.value().getOrThrow().snapshot.getOrThrow().status == RunState.Completed,
-                "Product completes the " + caseName + " Tool trajectory")
+            let completed = submitted.isOk() && submitted.value().getOrThrow().snapshot.isSome() &&
+                submitted.value().getOrThrow().snapshot.getOrThrow().status == RunState.Completed
+            if (!completed) {
+                match (submitted) { case Result.Err(error) => println("service submission error: " + error.describe()); case _ => () }
+                let diagnostic = SqliteDatabase(stateRoot + "/state.db")
+                try {
+                    for (row in diagnostic.query("SELECT o.state,e.tool_id,COALESCE(r.outcome,''),COALESCE(r.detail,'') " +
+                        "FROM operations o JOIN operation_effect_records e ON e.operation_id=o.id " +
+                        "LEFT JOIN operation_receipts r ON r.operation_id=o.id ORDER BY o.id")) {
+                        println("service Operation failure: " + row.required(0) + " " + row.required(1) + " " +
+                            row.required(2) + " " + row.required(3))
+                    }
+                } finally { diagnostic.close() }
+            }
+            expect(completed, "Product completes the " + caseName + " Tool trajectory")
         }
         var progressPublished = false
         for (delta in progress) {
@@ -1749,10 +1767,14 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
                 let lane = modelLaneFromSnapshotValue(decodeStoredValue(laneRows[0].required(0)))
                 expect(lane.toolSet.threadId.isSome() && lane.toolSet.threadId.getOrThrow().value == sessionId.value &&
                     lane.capabilities.tools, "Direct Pi lane freezes the actual same-thread published tool set")
+                let actualExecutor = product.vnext.javascriptPlugins.instanceExecutorVersion(
+                    supportRegistryDescriptor96(record,"namespace"),
+                    product.vnext.javascriptPlugins.instanceGeneration(supportRegistryDescriptor96(record,"namespace")))
+                    .value().getOrThrow()
                 var hasRoot = false
                 var hasExecTarget = false
                 for (entry in lane.toolSet.entries) {
-                    if (entry.name == toolName && entry.availableAtSnapshot && entry.executorVersion.contains(":instance:")) {
+                    if (entry.name == toolName && entry.availableAtSnapshot && entry.executorVersion == actualExecutor) {
                         hasRoot = true
                     }
                     if (entry.name == readonlyShell.name && entry.availableAtSnapshot) { hasExecTarget = true }
@@ -1861,7 +1883,9 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
         } finally {
             database.close()
         }
+        }
         if (directNative) {
+            if (scenario == "all" || scenario == "two-call") {
             // The old two-call successful shortcut is physically retired. The
             // actual Native child and worker remain separately charged. This
             // exact budget refuses before any worker execution handoff.
@@ -1870,10 +1894,16 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
             let twoCallResult = product.vnext.executeCanonicalTool(twoCallSession,
                 CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke), Capability(CapabilityKind.WorkspaceRead)]),
                 ToolCall("direct-two-call-root", toolName, rootArguments), budget: twoCallBudget)
-            expect(match (twoCallResult) { case Result.Ok(ToolInvocationResult.Completed(value)) => value.isError
+            expect(match (twoCallResult) { case Result.Ok(ToolInvocationResult.Completed(value)) =>
+                    // The Native fixture forwards the broker envelope. Its own
+                    // successful return must retain the child's error bit;
+                    // the durable Run below must still fail.
+                    value.isError || value.output.field("service_result").getOrThrow()
+                        .field("is_error").getOrThrow().asBool()
                 case Result.Err(_) => true; case _ => false }, "original two-call ceiling cannot execute a third actual worker")
             expect(twoCallBudget.snapshot().toolCalls == 2 && twoCallBudget.snapshot().activeTools == 0,
                 "no implicit tool-call budget expansion and the actual owner slot settles")
+            releaseToolInvocationPayload(twoCallResult)
             let boundedDb = SqliteDatabase(stateRoot + "/state.db")
             try {
                 expect(boundedDb.query("SELECT id FROM runs WHERE thread_id=? AND state='completed'",[SqlParameter.Text(twoCallSession.value)]).isEmpty(),
@@ -1884,6 +1914,8 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
                     [SqlParameter.Text(twoCallSession.value), SqlParameter.Text(HOST_READ_VIEW_TOOL)]).isEmpty(),
                     "the unbudgeted worker has no canonical execution handoff")
             } finally { boundedDb.close() }
+            }
+            if (scenario == "all" || scenario == "one-call") {
             let exhausted = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1)
             let limitedSession = SessionId(caseName + "-budget-denied")
             let limited = product.vnext.executeCanonicalTool(limitedSession,
@@ -1897,6 +1929,7 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
             }, "Direct broker cannot exceed the parent tool-call ceiling")
             expect(exhausted.snapshot().toolCalls == 1 && exhausted.snapshot().activeTools == 0,
                 "budget rejection restores the direct slot without spending a child call")
+            releaseToolInvocationPayload(limited)
             let check = SqliteDatabase(stateRoot + "/state.db")
             try {
                 expect(check.query("SELECT a.operation_id FROM derived_operation_admissions a " +
@@ -1904,6 +1937,8 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
                     "WHERE r.thread_id='" + limitedSession.value + "'").isEmpty(),
                     "budget rejection occurs before any child Operation admission")
             } finally { check.close() }
+            }
+            if (scenario == "all" || scenario == "failed-child") {
             // A broker result can carry is_error while the native root
             // successfully returns that structured response to its caller.
             remove(workspace + "/service-input.txt")
@@ -1919,12 +1954,18 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
                     case Result.Err(error) => throw IllegalStateException(error.describe())
                     case _ => false
                 }, "Direct caller receives the structured failing child result")
+                releaseToolInvocationPayload(failedChild)
                 let failedDb = SqliteDatabase(stateRoot + "/state.db")
                 try {
                     let failedRuns = failedDb.query("SELECT state FROM runs WHERE thread_id='" +
                         failedChildSession.value + "'")
                     expect(failedRuns.size == 1 && failedRuns[0].required(0) == "failed",
                         "a failed child prevents a successfully returning Direct parent from completing the Run")
+                    for(row in failedDb.query("SELECT e.tool_id,o.state,COALESCE(r.outcome,''),COALESCE(r.detail,'') " +
+                        "FROM operations o JOIN runs run ON run.id=o.run_id JOIN operation_effect_records e ON e.operation_id=o.id " +
+                        "LEFT JOIN operation_receipts r ON r.operation_id=o.id WHERE run.thread_id=?",
+                        [SqlParameter.Text(failedChildSession.value)])){
+                        println("failed-child Operation: "+row.required(0)+" "+row.required(1)+" "+row.required(2)+" "+row.required(3))}
                     expect(failedDb.scalarInt("SELECT COUNT(*) FROM operation_receipts receipt " +
                         "JOIN operations op ON op.id=receipt.operation_id JOIN runs run ON run.id=op.run_id " +
                         "WHERE run.thread_id='" + failedChildSession.value + "'") == 3,
@@ -1933,6 +1974,8 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
             } finally {
                 File.writeTo(workspace + "/service-input.txt", "SERVICE_FIXTURE_SENTINEL\n".toArray())
             }
+            }
+            if (scenario == "all" || scenario == "spent") {
             let spent = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1)
             spent.reserve(BudgetCharge(toolCalls: 1)).value().getOrThrow()
             let spentSession = SessionId(caseName + "-root-budget-denied")
@@ -1978,6 +2021,7 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
                     "' AND active_turn_id IS NOT NULL").isEmpty(),
                     "pre-handoff rejection leaves no active Thread or unresolved canonical ToolCall")
             } finally { spentDb.close() }
+            }
         }
     } finally {
         product.close()
@@ -2006,6 +2050,28 @@ main(): Int64 {
         if (workerArguments.contains("--direct-pi-service-snapshot-contract")) {
             runPluginServiceBrokerContract(root, workspace, false, directPi: true)
             println("actual Direct Pi service snapshot contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--pi-service-broker-contract")) {
+            runPluginServiceBrokerContract(root, workspace, false)
+            println("actual Pi service broker contract passed")
+            return 0
+        }
+        // Independent contract cases have independent raw result consumers.
+        // Compound "all" remains available and keeps its capacity failures;
+        // these options do not claim repeated-call retirement acceptance.
+        for (scenario in ["positive", "two-call", "one-call", "failed-child", "spent"]) {
+            if (workerArguments.contains("--direct-native-" + scenario + "-contract")) {
+                runPluginServiceBrokerContract(root, workspace, true, directNative: true, scenario: scenario)
+                println("actual Direct Native " + scenario + " contract passed")
+                return 0
+            }
+        }
+        if (workerArguments.contains("--native-service-broker-contract") ||
+            workerArguments.contains("--direct-native-service-broker-contract")) {
+            runPluginServiceBrokerContract(root, workspace, true,
+                directNative: workerArguments.contains("--direct-native-service-broker-contract"))
+            println("actual Native service broker contract passed")
             return 0
         }
         if (workerArguments.contains("--javascript-service-broker-contract")) {

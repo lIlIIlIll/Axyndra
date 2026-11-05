@@ -168,6 +168,15 @@ public interface OperationRuntimePort {
         Result.Err(AgentError(AgentErrorKind.PermissionDenied, "operation.derived_identity_unsupported",
             "this Operation port cannot preserve the actual derived call identity"))
     }
+    // Explicit Host readonly-exec bridge. Descriptive selection data alone
+    // never opts an ordinary port into another derived execution family.
+    func prepareReadonlyExecDerivedInvocation(operationId: OperationId, parentOperationId: OperationId,
+        runId: RunId, rootSource: OperationRootSource, requestKey: String, call: ToolCall,
+        plan: NormalizedOperationPlan, selection: ReadonlyExecDerivedSelection,
+        guard: () -> Result<Unit>): Result<OperationId> {
+        Result.Err(AgentError(AgentErrorKind.PermissionDenied, "operation.readonly_exec_bridge_unsupported",
+            "this Operation port cannot verify the complete Host readonly-exec bridge"))
+    }
     // Routing only. It cannot recover a Source, Prepared invocation or debt.
     // A Store with no opt-in family cannot ever execute the new descriptor.
     func requiresOwnedPluginLivePolicyApprovalOwner(operation:OperationId,run:RunId):Result<Bool>{Result.Ok(false)}

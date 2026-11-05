@@ -25,13 +25,15 @@ class ReadonlyDerivedNode {
     let call: ToolCall
     let provenance: ItemProvenance
     let state: String
+    let readonlyExecSelection: ?AgentValue
     init(operation: OperationId, parent: String, root: String, depth: Int64, callId: String,
         requestKey: String, plan: NormalizedOperationPlan, item: ItemId, thread: ThreadId,
-        turn: SemanticTurnId, epoch: Int64, call: ToolCall, provenance: ItemProvenance, state: String) {
+        turn: SemanticTurnId, epoch: Int64, call: ToolCall, provenance: ItemProvenance, state: String,
+        selection!: ?AgentValue = None<AgentValue>) {
         this.operation = operation; this.parent = parent; this.root = root; this.depth = depth
         this.callId = callId; this.requestKey = requestKey; this.plan = plan; this.item = item
         this.thread = thread; this.turn = turn; this.epoch = epoch; this.call = call
-        this.provenance = provenance; this.state = state
+        this.provenance = provenance; this.state = state; this.readonlyExecSelection = selection
     }
 }
 
@@ -92,7 +94,8 @@ func loadReadonlyDerivedNode(transaction: SqliteTransaction, operation: Operatio
     ReadonlyDerivedNode(operation, parent, root, depth,
         if (parent == "") { canonical.callId } else { childCall }, row.required(12), plan,
         ItemId(row.required(1)), ThreadId(row.required(3)), SemanticTurnId(row.required(4)),
-        Int64.parse(row.required(5)), canonical, provenance, row.required(2))
+        Int64.parse(row.required(5)), canonical, provenance, row.required(2),
+        selection: loadReadonlyExecSelection(transaction, operation, run))
 }
 
 func readonlyDerivedParentHandoff(plan: NormalizedOperationPlan, epoch: Int64): AgentValue {
@@ -111,7 +114,9 @@ func readonlyDerivedHandoffId(transaction: SqliteTransaction, node: ReadonlyDeri
     let rows = transaction.query("SELECT id,payload FROM audit_events WHERE operation_id=? AND run_id=? AND thread_id=? " +
         "AND kind='operation_execution_handoff'", [SqlParameter.Text(node.operation.value), SqlParameter.Text(run.value),
             SqlParameter.Text(node.thread.value)])
-    if (rows.size != 1 || rows[0].required(1) != encodeStoredValue(readonlyDerivedParentHandoff(node.plan, node.epoch))) {
+    let expected = if (node.parent == "" && isHostReadonlyExecRoot(node.plan)) { objectValue([]) }
+        else { readonlyDerivedParentHandoff(node.plan, node.epoch) }
+    if (rows.size != 1 || rows[0].required(1) != encodeStoredValue(expected)) {
         throw IllegalStateException("readonly ancestor lost its unique exact current-epoch handoff")
     }
     let receipts = transaction.query("SELECT receipt.id,receipt.outcome,effect.reserved_receipt_id " +
@@ -139,6 +144,7 @@ func readonlyDerivedEdgeAllowed(parent: ReadonlyDerivedNode, child: ReadonlyDeri
         return parent.parent == "" && readonlyDelegationChildAllowed(parent.plan, child.plan) &&
             child.requestKey == readonlyDelegationRequestKey(parent.callId, child.callId)
     }
+    if (child.readonlyExecSelection.isSome()) { return readonlyExecEdgeAllowed(parent, child) }
     // First rollout: an installed read-only contribution may consume only its
     // exact frozen read-view intent. HTTP/channel/file plans and recursive
     // delegate roots remain denied, regardless of a plugin's service string.
@@ -157,7 +163,8 @@ func readonlyDerivedEvidence(transaction: SqliteTransaction, run: RunId,
             ValueField("handoff_id", textValue(readonlyDerivedHandoffId(transaction, node, run, settlementOnly: ancestry.settlementOnly))),
             ValueField("plan_sha256", textValue(modelPolicySha256Text(encodeOperationPlan(node.plan))))]))
     }
-    objectValue([ValueField("authorization_source", textValue("readonly_delegation")),
+    let result = objectValue([ValueField("authorization_source", textValue(
+        if (isHostReadonlyExecRoot(root.plan)) { "host_readonly_exec" } else { "readonly_delegation" })),
         ValueField("thread_id", textValue(root.thread.value)), ValueField("turn_id", textValue(root.turn.value)),
         ValueField("run_id", textValue(run.value)), ValueField("epoch", integerValue(root.epoch)),
         ValueField("root_operation_id", textValue(root.operation.value)), ValueField("root_item_id", textValue(root.item.value)),
@@ -167,6 +174,11 @@ func readonlyDerivedEvidence(transaction: SqliteTransaction, run: RunId,
         ValueField("child_call_id", textValue(child.callId)), ValueField("depth", integerValue(child.depth)),
         ValueField("request_key", textValue(child.requestKey)),
         ValueField("child_plan_sha256", textValue(modelPolicySha256Text(encodeOperationPlan(child.plan))))])
+    match (child.readonlyExecSelection) { case Some(value) =>
+        if (httpIntentText(value, "run_id") != run.value) { throw IllegalStateException("readonly bridge selection belongs to another Run") }
+        result.put("readonly_exec_selection", value)
+        case None => () }
+    result
 }
 
 func requireReadonlyDerivedAudit(transaction: SqliteTransaction, run: RunId,
@@ -204,7 +216,7 @@ func requireReadonlyDerivedAncestors(transaction: SqliteTransaction, parent: Ope
     // The canonical call may precede a trusted pre-tool hook. Its immutable
     // normalized plan and exact handoff freeze the effective input; the
     // original Item/source still proves the actual call identity.
-    if (!isFrozenReadonlyDelegationParentPlan(root.plan) || root.plan.toolName != root.call.name) {
+    if ((!isFrozenReadonlyDelegationParentPlan(root.plan) && !isHostReadonlyExecRoot(root.plan)) || root.plan.toolName != root.call.name) {
         throw IllegalStateException("readonly tree has no exact frozen canonical delegation root")
     }
     let decisions = transaction.query("SELECT d.id,b.scoped_tool_call_id FROM decision_operations source " +
@@ -270,22 +282,27 @@ func readonlyDerivedCandidateParent(transaction: SqliteTransaction, parent: Oper
 }
 
 func readonlyDerivedProposedNode(ancestry: ReadonlyDerivedAncestry, operation: OperationId,
-    callId: String, requestKey: String, plan: NormalizedOperationPlan): ReadonlyDerivedNode {
+    callId: String, requestKey: String, plan: NormalizedOperationPlan,
+    selection!: ?AgentValue = None<AgentValue>): ReadonlyDerivedNode {
     let parent = ancestry.parent; let root = ancestry.root
     ReadonlyDerivedNode(operation, parent.operation.value, root.operation.value, parent.depth + 1,
-        callId, requestKey, plan, root.item, root.thread, root.turn, root.epoch, root.call, root.provenance, "prepared")
+        callId, requestKey, plan, root.item, root.thread, root.turn, root.epoch, root.call, root.provenance, "prepared", selection: selection)
 }
 
 func prepareReadonlyDerivedOperation(transaction: SqliteTransaction, operation: OperationId,
     parent: OperationId, run: RunId, source: OperationRootSource, requestKey: String,
-    call: ToolCall, plan: NormalizedOperationPlan): OperationId {
+    call: ToolCall, plan: NormalizedOperationPlan, selection!: ?AgentValue = None<AgentValue>): OperationId {
     let ancestry = requireReadonlyDerivedAncestors(transaction, parent, run, Some(source))
     let root = ancestry.root
-    let host = root.plan.canonicalArguments.field("host_plan").getOrThrow()
+    let delegated = isFrozenReadonlyDelegationParentPlan(root.plan)
+    let maxDepth = if (delegated) { readonlyDelegationInteger(root.plan.canonicalArguments.field("host_plan").getOrThrow(), "max_depth") } else { 2 }
+    let maxCalls = if (delegated) { readonlyDelegationInteger(root.plan.canonicalArguments.field("host_plan").getOrThrow(), "max_calls") } else { HOST_DERIVED_MAX_WIDTH }
+    if (isHostReadonlyExecRoot(root.plan) && ancestry.ancestors.size == 1 && selection.isNone()) {
+        throw IllegalStateException("ordinary plugin roots require the actual opt-in Host selection") }
     let encoded = encodeOperationPlan(plan)
-    let proposed = readonlyDerivedProposedNode(ancestry, operation, call.callId, requestKey, plan)
+    let proposed = readonlyDerivedProposedNode(ancestry, operation, call.callId, requestKey, plan, selection: selection)
     if (!readonlyDerivedEdgeAllowed(ancestry.parent, proposed) ||
-        proposed.depth > readonlyDelegationInteger(host, "max_depth") ||
+        proposed.depth > maxDepth ||
         canonicalAgentValue(call.arguments) != canonicalAgentValue(plan.canonicalArguments) || call.name != plan.toolName) {
         throw IllegalStateException("readonly child differs from its exact approved ancestor capability ceiling")
     }
@@ -315,7 +332,7 @@ func prepareReadonlyDerivedOperation(transaction: SqliteTransaction, operation: 
         "(SELECT COUNT(*) FROM derived_operation_admissions WHERE root_operation_id=?)",
         [SqlParameter.Text(parent.value), SqlParameter.Text(root.operation.value)])
     let width = Int64.parse(counts[0].required(0)); let total = Int64.parse(counts[0].required(1))
-    if (width >= readonlyDelegationInteger(host, "max_calls") || width >= HOST_DERIVED_MAX_WIDTH ||
+    if (width >= maxCalls || width >= HOST_DERIVED_MAX_WIDTH ||
         total >= HOST_DERIVED_MAX_OPERATIONS) {
         throw IllegalStateException("readonly tree exhausted its immutable width or total admission budget")
     }
@@ -353,7 +370,8 @@ func requireReadonlyDerivedIntent(transaction: SqliteTransaction, operation: Ope
     if (rows.isEmpty()) { return None }
     if (rows.size != 1) { throw IllegalStateException("readonly ancestry has duplicate admission") }
     let parent = OperationId(rows[0].required(0))
-    if (!readonlyDerivedCandidateParent(transaction, parent, run)) {
+    let selected = loadReadonlyExecSelection(transaction, operation, run)
+    if (selected.isNone() && !readonlyDerivedCandidateParent(transaction, parent, run)) {
         if (Int64.parse(rows[0].required(1)) > 1) { throw IllegalStateException("nested source is outside the supported readonly tree") }
         return None
     }
@@ -416,12 +434,13 @@ func requireReadonlyDerivedHistory(query: (String, Array<SqlParameter>) -> Array
         }
         reversed.add(ReadonlyDerivedNode(current, parent, root, depth, if (parent == "") { call.callId } else { childCall },
             row.required(12), plan, ItemId(row.required(1)), ThreadId(row.required(3)), SemanticTurnId(row.required(4)),
-            Int64.parse(row.required(5)), call, provenance, row.required(2)))
+            Int64.parse(row.required(5)), call, provenance, row.required(2),
+            selection: loadReadonlyExecSelectionQuery(query, current, run)))
         if (parent == "") { break }
         current = OperationId(parent)
     }
     let root = reversed[reversed.size - 1]
-    if (!isFrozenReadonlyDelegationParentPlan(root.plan) || root.call.name != root.plan.toolName) {
+    if ((!isFrozenReadonlyDelegationParentPlan(root.plan) && !isHostReadonlyExecRoot(root.plan)) || root.call.name != root.plan.toolName) {
         throw IllegalStateException("historical nested tree has no frozen readonly root")
     }
     let calls = HashSet<String>([root.callId])

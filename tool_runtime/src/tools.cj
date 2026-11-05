@@ -4548,6 +4548,16 @@ public class ToolPipeline {
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<OperationId> {
+        admitDerivedFrame(context, prepared, None<ReadonlyExecDerivedSelection>, { => Result<Unit>.Ok(()) })
+    }
+
+    public func admitReadonlyExecDerived(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        selection: ReadonlyExecDerivedSelection, guard: () -> Result<Unit>): Result<OperationId> {
+        admitDerivedFrame(context, prepared, Some(selection), guard)
+    }
+
+    private func admitDerivedFrame(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        selection: ?ReadonlyExecDerivedSelection, guard: () -> Result<Unit>): Result<OperationId> {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
@@ -4569,6 +4579,12 @@ public class ToolPipeline {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
+        match (selection) { case Some(value) =>
+            return operations.prepareReadonlyExecDerivedInvocation(prepared.operationId,
+                source.parentOperationId.getOrThrow(), source.runId, source.operationRoot.getOrThrow(), source.requestKey,
+                ToolCall(pipelineCall204(context, prepared).callId, pipelineCall204(context, prepared).name,
+                    prepared.borrowOperationPlanFrame204().canonicalArguments), prepared.borrowOperationPlanFrame204(), value, guard)
+            case None => () }
         operations.prepareDerivedInvocation(
             prepared.operationId, source.parentOperationId.getOrThrow(),
             source.runId, source.operationRoot.getOrThrow(), source.requestKey,

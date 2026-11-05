@@ -532,7 +532,8 @@ public class SqliteThreadCommitSink <: ThreadCommitSink & ReturningModelLaneComm
         }
         requireCancellationSettlementOutcome(transaction, transition, item, receipt)
         requireDirectPreparationRejectionOutcome(transaction, transition, item, receipt)
-        if (isFrozenReadonlyDelegationParentPlan(decodeOperationPlan(taskSource[0].required(1)))) {
+        if (isFrozenReadonlyDelegationParentPlan(decodeOperationPlan(taskSource[0].required(1))) ||
+            hasReadonlyExecChildren(transaction, receipt.operationId, runId)) {
             requireReadonlyDescendantsSettled(transaction, receipt.operationId, runId, receipt.outcome)
         }
         let observedState = rows[0].required(1)

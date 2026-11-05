@@ -1407,7 +1407,7 @@ public class HostJavaScriptPluginServiceBroker {
             case Result.Ok(_) => ()
         }
         let requestKey = prepared.source.requestKey
-        let replay = match (admitPrepared(prepared, executionContext)) {
+        let replay = match (admitPrepared(prepared, executionContext, execTarget)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return hostPluginServiceAgentError(error)
         }
@@ -1653,7 +1653,8 @@ public class HostJavaScriptPluginServiceBroker {
     }
 
     private func admitPrepared(
-        prepared: PreparedToolInvocation, executionContext: ToolInvocationContext
+        prepared: PreparedToolInvocation, executionContext: ToolInvocationContext,
+        execTarget: ?HostPluginReadOnlyExecTarget
     ): Result<?VNextOperationReceipt> {
         match (operations.loadPlan(prepared.operationId, rootContext.runId)) {
             case Result.Ok(_) => return hostPluginServiceAgentResult<?VNextOperationReceipt>(AgentError(
@@ -1665,7 +1666,16 @@ public class HostJavaScriptPluginServiceBroker {
                 return Result.Err(error)
             }
         }
-        let admitted = match (pipeline.admitDerived(executionContext, prepared)) {
+        let admission = match (execTarget) {
+            case Some(target) => if (target.isNativeReadView()) {
+                let selection = match (target.derivedSelection(rootContext)) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                pipeline.admitReadonlyExecDerived(executionContext, prepared, selection,
+                    { => target.validate(catalog, rootContext, prepared) })
+            } else { pipeline.admitDerived(executionContext, prepared) }
+            case None => pipeline.admitDerived(executionContext, prepared)
+        }
+        let admitted = match (admission) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }

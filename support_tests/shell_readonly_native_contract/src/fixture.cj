@@ -81,10 +81,17 @@ public class NativeReadonlyShellContractBinding {
         if(business.size!=1){throw IllegalStateException("actual readonly Native child inventory")}
         let child=business[0];let childId=OperationId(child.required(0))
         if(child.required(1)!=rootId || child.required(2)!="1" || child.required(3)!="1" || child.required(4)=="" ||
-            !child.required(5).startsWith("javascript-service:") || child.required(6).size!=64 || child.required(7)!="committed" ||
+            !child.required(5).startsWith("javascript-service:") || child.required(6)!=store.loadPlan(childId,run).value().getOrThrow().bindingDigest || child.required(7)!="committed" ||
             child.required(8)!=name || child.required(9)!=child.required(10) || child.required(11)!="completed" ||
             child.required(12)!=child.required(13) || store.loadCall(childId,run).value().getOrThrow().callId!=child.required(4)){
-            throw IllegalStateException("actual readonly Native Source/call/Root/Receipt binding")}
+            throw IllegalStateException("actual readonly Native Source/call/Root/Receipt binding: " +
+                "root=" + (child.required(1)==rootId).toString() + " depth=" + child.required(2) +
+                " ordinal=" + child.required(3) + " call=" + (child.required(4)!="").toString() +
+                " request=" + child.required(5).startsWith("javascript-service:").toString() +
+                " digest_bytes=" + child.required(6).size.toString() + " state=" + child.required(7) +
+                " tool=" + child.required(8) + " receipt=" + (child.required(9)==child.required(10)).toString() +
+                " outcome=" + child.required(11) + " plan=" + (child.required(12)==child.required(13)).toString() +
+                " call_matches=" + (store.loadCall(childId,run).value().getOrThrow().callId==child.required(4)).toString())}
         let parent=store.loadPlan(childId,run).value().getOrThrow()
         if(!isReadonlyDelegatedChildPlan(parent)){throw IllegalStateException("actual Native ReadOnly/Denied resource parent")}
         let worker=database.query("SELECT a.operation_id,a.root_operation_id,a.depth,a.call_sequence,a.child_call_id,a.request_key,a.request_digest,"+
@@ -95,10 +102,35 @@ public class NativeReadonlyShellContractBinding {
         if(worker.size!=1){throw IllegalStateException("actual worker child inventory")}
         let leaf=worker[0];let leafId=OperationId(leaf.required(0))
         if(leaf.required(1)!=rootId || leaf.required(2)!="2" || leaf.required(3)!="1" || leaf.required(4)=="" ||
-            !leaf.required(5).startsWith("javascript-service:") || leaf.required(6).size!=64 || leaf.required(7)!="committed" ||
+            !leaf.required(5).startsWith("javascript-service:") || leaf.required(6)!=store.loadPlan(leafId,run).value().getOrThrow().bindingDigest || leaf.required(7)!="committed" ||
             leaf.required(8)!=HOST_READ_VIEW_TOOL || leaf.required(9)!=leaf.required(10) || leaf.required(11)!="completed" ||
             leaf.required(12)!=leaf.required(13) || store.loadCall(leafId,run).value().getOrThrow().callId!=leaf.required(4)){
             throw IllegalStateException("actual Host worker Derived Source/call/Root/Receipt binding")}
+        // Historical inspection remains descriptive and validates every
+        // recorded Host selection pin. These corruptions never mint a Source.
+        let audit=database.query("SELECT id,payload FROM audit_events WHERE operation_id=? " +
+            "AND kind='operation_parent_intent_authorized'",[SqlParameter.Text(childId.value)])
+        if(audit.size!=1){throw IllegalStateException("actual Host selection audit")}
+        let original=decodeStoredValue(audit[0].required(1))
+        let selected=original.field("readonly_exec_selection").getOrThrow()
+        for(changed in ["schema","run_id","thread_id","epoch","target","version","fingerprint",
+            "schema_digest","package_digest","generation","configuration_digest"]){
+            let pins=ArrayList<ValueField>()
+            for(field in selected.fields){pins.add(ValueField(field.name,
+                if(field.name==changed){textValue("tampered")}else{field.value}))}
+            let fields=ArrayList<ValueField>()
+            for(field in original.fields){fields.add(ValueField(field.name,
+                if(field.name=="readonly_exec_selection"){objectValue(pins.toArray())}else{field.value}))}
+            database.execute("UPDATE audit_events SET payload=? WHERE id=?",
+                [SqlParameter.Text(encodeStoredValue(objectValue(fields.toArray()))),SqlParameter.Text(audit[0].required(0))])
+            try{
+                if(store.loadCall(childId,run).isOk() || store.loadCall(leafId,run).isOk()){
+                    throw IllegalStateException("historical bridge accepted changed Host selection: "+changed)}
+            }finally{database.execute("UPDATE audit_events SET payload=? WHERE id=?",
+                [SqlParameter.Text(audit[0].required(1)),SqlParameter.Text(audit[0].required(0))])}
+        }
+        if(store.loadCall(childId,run).isError() || store.loadCall(leafId,run).isError()){
+            throw IllegalStateException("original completed bridge history remains readable")}
         let plan=store.loadPlan(leafId,run).value().getOrThrow()
         if(!readViewServiceChildAllowed(parent,plan)){
             throw IllegalStateException("actual worker exact ParentIntent and unchanged permission intersection")}

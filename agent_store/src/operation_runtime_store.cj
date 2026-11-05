@@ -770,9 +770,24 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
         prepareDerivedIdentity(operationId, parentOperationId, runId, rootSource, requestKey, plan, Some(call))
     }
 
+    public func prepareReadonlyExecDerivedInvocation(operationId: OperationId, parentOperationId: OperationId,
+        runId: RunId, rootSource: OperationRootSource, requestKey: String, call: ToolCall,
+        plan: NormalizedOperationPlan, selection: ReadonlyExecDerivedSelection,
+        guard: () -> Result<Unit>): Result<OperationId> {
+        match (validateDerivedInvocationCall(call, plan)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        if (!isReadonlyDelegatedChildPlan(plan)) {
+            return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                "operation.readonly_exec_target_invalid", "Host readonly exec requires a frozen Native read-view target")) }
+        prepareDerivedIdentity(operationId, parentOperationId, runId, rootSource, requestKey,
+            plan, Some(call), readonlyExec: Some(selection), selectionGuard: guard)
+    }
+
     private func prepareDerivedIdentity(operationId: OperationId, parentOperationId: OperationId,
         runId: RunId, rootSource: OperationRootSource, requestKey: String,
-        plan: NormalizedOperationPlan, boundCall: ?ToolCall): Result<OperationId> {
+        plan: NormalizedOperationPlan, boundCall: ?ToolCall,
+        readonlyExec!: ?ReadonlyExecDerivedSelection = None<ReadonlyExecDerivedSelection>,
+        selectionGuard!: () -> Result<Unit> = { => Result<Unit>.Ok(()) }): Result<OperationId> {
         match (rootSource) {
             case OperationRootSource.Direct(value) => match (value.validateLiveSource()) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
@@ -812,10 +827,21 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
         }
         try {
             database.transaction { transaction =>
-                if (readonlyDerivedCandidateParent(transaction, parentOperationId, runId)) {
+                // executePrepared rechecks an already admitted invocation through
+                // the ordinary port. Only that exact durable identity may reuse
+                // the Host selection; a new child still requires the live guard.
+                let replaySelection = if (readonlyExec.isNone()) {
+                    readonlyExecReplaySelection(transaction, operationId, parentOperationId, runId, requestKey)
+                } else { None<AgentValue> }
+                if (readonlyExec.isSome() || replaySelection.isSome() ||
+                    readonlyDerivedCandidateParent(transaction, parentOperationId, runId)) {
+                    if (readonlyExec.isSome()) {
+                        match (selectionGuard()) { case Result.Err(error) => throw IllegalStateException(error.code); case Result.Ok(_) => () }
+                    }
                     if (!readonlyCandidate) { throw IllegalStateException("readonly tree requires its actual host-bound child call") }
                     Result.Ok(prepareReadonlyDerivedOperation(transaction, operationId, parentOperationId,
-                        runId, rootSource, requestKey, boundCall.getOrThrow(), plan))
+                        runId, rootSource, requestKey, boundCall.getOrThrow(), plan,
+                        selection: match (readonlyExec) { case Some(value) => Some(value.value); case None => replaySelection }))
                 } else {
                 let existing = transaction.query(
                     "SELECT a.operation_id,a.request_digest,o.run_id,o.tool_call_item_id," +
@@ -2699,7 +2725,8 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
                     return Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "operation.derived_identity_invalid",
                         "derived call provenance is incomplete or exceeds the bounded tree"))
                 }
-                if (!legacy && (row.required(3) != row.required(5) || row.required(4) != "1")) {
+                if (!legacy && (row.required(3) != row.required(5) || row.required(4) != "1" ||
+                    isReadonlyDelegatedChildPlan(plan))) {
                     let root = requireReadonlyDerivedHistory({ sql, parameters => database.query(sql, parameters) }, operationId, runId)
                     if (root.value != row.required(3)) { throw IllegalStateException("historical child changed its canonical root") }
                 }
