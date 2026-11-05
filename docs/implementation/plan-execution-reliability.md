@@ -357,3 +357,178 @@ Final commit preparation removes one extra trailing empty line from each of
 No executable token or dependency-lock byte changes. The behavioral results
 above remain tied to their recorded inputs; tests were not rerun for this
 whitespace-only cleanup and record update.
+
+## GC, timeout and readonly bridge follow-up
+
+The approved follow-up raises the minimum SDK to compiler
+`1.3.0-alpha.20261104001050`, CJPM `1.3.0-alpha.09` and its matching stdx.
+This is a support migration, not a claim that SDK 1.1.3 was repaired.
+Runtime startup deadlines, permission boundaries, canonical evidence and
+144 MiB aggregate accounting remain acceptance requirements.
+
+| ID | Required observable result | Implementation and evidence | Status | Remaining work |
+| --- | --- | --- | --- | --- |
+| GF1 | Rebuilt pinned toolchain has no observed GC crash in repeated cases and complete Product/App runs | Verified official archives; fresh Product and App artifacts still crash in GC | Not accepted | Operator keeps the official SDK and excludes runtime builds; crash-free acceptance remains incomplete |
+| GF2 | Complete Memory fixture fits composed budgets; cancellation reaps nested sessions | 138/138 Native units, 40/40 protocol cases, 1010.16 s; four process-budget regressions | Accepted for this fixture | Full workspace/release acceptance is separate |
+| GF3 | Control requests respond before unrelated plugins start; model Runs freeze the full required ready Catalog | Owner readiness coordinator and actual preparation before model/command execution | Partial implementation; acceptance failed | Three preparation cases crash; final provider, read and ACP blackboxes fail at original deadlines |
+| GF4 | Real Pi and Native roots execute the exact readonly plugin and Host ReadView through a canonical three-node tree | Four independent real entries pass; 11 selection-field corruptions reject; four Direct Native fault/budget cases pass | Focused contracts accepted; full lifecycle acceptance partial | Compound process still exhausts retained capacity; disable/cancel/restart matrix remains unverified |
+| GF5 | Final candidate, full original gates and latest-commit CI agree | Final production build and fresh nine-plugin Coding package pass; Store 256/256, App 38/40 | Not accepted | Original blackboxes and GC acceptance fail; complete Product/release gates and hosted CI are not green |
+
+### Follow-up implementation checkpoint
+
+GF1 now uses SHA-256-verified official SDK and stdx archives. The SDK check
+accepts the independent pinned compiler and CJPM versions and rejects SDK
+1.1.3 by default. The first real application build on the new SDK passed.
+Its result predates the final readiness integration tests and is not final
+acceptance. All 116 tracked locks retain their original dependency entry
+sets in format 1, including the root llm4cj and macro closure.
+
+GF2 now composes the Memory build/unit/protocol execution budgets
+(900/900/240 seconds) plus a 60-second metadata allowance. The dedicated
+watcher bounds physical cleanup separately. Four real-process budget tests,
+41 existing watcher regressions, seven SDK-check tests, three verified
+archive tests and two canonical-target tests pass. Timeout records retain
+their pre-cleanup survivor evidence even after the final reaping witness
+confirms physical cleanup; timeout is still FAIL. The full Memory fixture
+has not yet been rerun.
+
+GF3 and GF4 have partial implementations. The existing Owner now defers
+execution assembly, and model preparation joins its complete real mounts.
+A failed parallel mount joins every started Future before returning. The
+Host readonly-exec bridge has a default-closed port and Store ancestry
+checks using the actual ordinary root handoff and canonical audit. New
+Product readiness scenarios and real bridge execution remain unverified.
+Overall status remains **not fully complete**.
+
+### Current real-run results
+
+The complete fresh Memory latest-context package passes on the fixed SDK:
+138/138 Native unit cases and 40/40 protocol cases, with no skips. Total
+fixture time is 1010.16 seconds. Each child retained its original execution
+cap, and the composed parent completed with no remaining or unknown
+processes. This closes the observed single-900-second parent-budget defect;
+it does not complete unrelated Product or release acceptance.
+
+Test compilation needs the same `--export-for-test` dependency profile.
+Bounded test-profile stages completed for Runtime (238.89 s), Tool (104.97 s),
+Store (356.89 s), Core (122.45 s) and Host (557.22 s). An ordinary production
+build is not interchangeable with this preparation. Existing unit artifacts
+are preserved before target unit recompilation: the SDK's incremental
+command otherwise retained a stale executable after a test-only edit.
+The gate now resolves its actual target through `pinned_cangjie`, rebuilds
+target unit metadata, retains -O2 and gives preparation zero unit-test credit.
+The expanded Python gate regressions pass 27/27.
+
+The current Product corpus contains 1073 cases. Its fresh target unit
+compilation passes. Of five new readiness cases, three pass (concurrent
+waiters share real preparation, close-before-start, stable preparation
+failure). Two crash in the fixed SDK collector (cancelled-waiter then
+preparation, and first-model initial context). The actual executable SHA-256
+is `f440a56d2572dbf3d6860ce5341e18f2971a7568929141fc46cd1e302285eb41`.
+GDB catches SIGSEGV before the handler, through GcPhaseEnum, GCTib field
+visitation and stack-root scanning. Official SDK metadata identifies
+runtime commit `95054a86164a`; the four IsStackAddr-to-CheckAndPush branches
+remain in that source. This is not yet proof of the exact invalid slot, and
+no SDK/runtime repair is claimed. The operator explicitly declined runtime builds and requires retaining the
+official SDK. GC therefore remains incomplete; no compiler or runtime was built.
+
+The complete Coding package builds with nine freshly compiled plugins.
+Initial blackboxes needed short private temporary paths to avoid Unix
+socket length and implicit-home write failures. With those corrected,
+clean-environment functional assertions pass; its long-lived Owner is a
+separate process-custody observation. Provider and entry execution report
+Owner peer disconnection, and ACP gets through initialization but fails
+during prompt execution. These remain failures pending diagnosis; no
+timeout, GC, lifecycle or release acceptance is inferred from packaging.
+
+The implementation checkpoints are `a521970e` (verified toolchain),
+`35c61b10` (Memory budgets), `ce936dea` (current unit artifacts), `ddde3140`
+(readonly bridge) and `95f4ee16` (Owner preparation). The last includes only
+indentation after the recorded final normal build. Validation boundaries
+remain as stated below. PR stays Draft and the overall task remains
+**not fully complete**.
+
+
+### Latest fixed-SDK delivery evidence
+
+The operator decision keeps the official November 4 SDK and leaves GC
+unresolved. It does not waive GC acceptance or authorize SDK source builds.
+The final production sources build at the original -O2 configuration through
+Store (472.03 s), Core (102.19 s), Host (564.93 s), Product (563.92 s) and App
+(363.42 s), each within its existing 900-second cap. The preceding cold App
+build timed out at 900 seconds; its cleanup completed and the failure remains
+recorded. A fresh Coding candidate, including nine independently rebuilt
+plugins, completes packaging in 648.63 seconds without remaining processes.
+Its executable SHA-256 is
+`4cb9bd38479c3c25e79135aaf9acf4490c0597db2752b298d2cc6017b97f1ef7`.
+
+The readonly bridge now revalidates an existing admission using only its
+exact persisted Operation/parent/request identity. This observation cannot
+mint a new child or bypass the original Source, current epoch, handoff,
+capability intersection or immutable audit. New admissions still require
+the actual Host selection guard. History loading checks first-level bridge
+selection as well as nested ancestry; it never recreates execution authority.
+
+Independent real-process contracts pass for Pi and Native model roots and
+both Direct roots. Each checks three actual Operations, host-minted child
+calls, reserved Receipts and read-only/denied-network plans. Corrupting each
+of 11 Host selection fields rejects both Native-child and worker historical
+reads; restoring the original audit restores readability. Direct Native
+also passes independent two-call, one-call, missing-file and spent-root
+budget cases. The missing-file case retains three actual Receipts and a
+failed Run. Tests now compare the stored request digest with the frozen
+plan's actual binding digest, and compare the exact registered executor
+version; the former assumptions of 64 bytes and an `:instance:` substring
+were incorrect. A parent may return a structured child failure successfully;
+the budget test still requires a failed Run and no unbudgeted worker handoff.
+
+These independent cases do not prove continuous-call retirement. The
+original compound entry remains available and still exhausts the shared
+capacity. No quota, floor, SUM accounting, permission or retirement guard was
+relaxed. Test-only explicit result consumption uses the existing release
+API; that alone did not resolve compound retention. Further lifecycle and
+compound acceptance therefore remains open.
+
+The current Store test artifact passes all 256 cases, with no skips. The
+App artifact runs all 40 cases: 38 pass and two plan-review cases crash with
+exit 11. The final readiness test artifact contains 1074 Product cases;
+its six selected readiness cases produce three passes and three GC crashes,
+with 1068 filter exclusions. The thrown-preparation case confirms one cached
+failure and a joinable close. The Product/App test artifacts precede only
+the later cleanup of unreturned secondary parallel-mount errors; they are
+not represented as complete final-source test acceptance. The final normal
+production build includes that cleanup. Exact artifact hashes and process
+receipts are retained in the evidence bundle.
+
+The final candidate preserves the original blackbox deadlines. Setup passes.
+Clean-environment functional assertions pass, but the process supervisor
+finds a long-lived Owner, so the combined result fails. Provider profiles
+report `owner.peer_disconnected`; `read` exceeds its original 10 seconds;
+ACP initializes but times out during prompt execution and reports an invalid
+Owner frame on shutdown. These are actual failures. A bounded GDB process-
+tree diagnostic did not establish their root cause and is not acceptance
+proof; they are not automatically attributed to GC.
+
+The test gate prepares eight existing dependency stages, including RPC,
+without unit-test credit, and preserves prior test executables and metadata
+before fresh compilation. Other selected members resolve their package name
+from the manifest, including nested library paths. The target resolver has
+three passing tests; gate preparation/freshness has 28 passing Python tests.
+The final affected Python regression group passes 100/100. Dependency,
+documentation, library/plugin boundaries and test inventory checks pass.
+All 116 lock files retain their complete reviewed dependency graphs after
+build-generated pruning is removed.
+
+Private evidence names below are relative to the retained evidence bundle;
+no local machine path is part of this repository record:
+
+- `bridge-pins-cases.json`, `bridge-case-results.json`: real entry and fault cases.
+- `readiness-product-final/tests-sequential.log`: six readiness cases.
+- `current-corpus-results.json`: Store and App artifact hashes and outcomes.
+- `final-production-*.log.process.json`: bounded final production stages.
+- `candidate-final-build.json`, `candidate-final-blackboxes.json`: final package and original blackboxes.
+- `memory-latest-fixture.process.json`: complete Memory fixture and physical cleanup.
+
+The PR remains Draft. Overall conclusion: **not fully complete**. No Issue
+closure, release readiness, complete Product run, repeated crash-free run,
+full cancellation/restart matrix or hosted-CI success is claimed.
