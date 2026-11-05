@@ -1,5 +1,12 @@
-version = 0
+version = 1
 
-[requires]
-  yjson = {git = "https://github.com/lIlIIlIll/yjson.git", commitId = "54b4965dee0f0b96710cbc678ec5ec9a126b055c", tag = "0.1.0", output-type = "static"}
-  yjson_macros = {git = "https://github.com/lIlIIlIll/yjson_macros.git", commitId = "fec0adce41f73d037d876cbac7a28aee8108bb5c"}
+[requires."yjson"]
+version = "0.1.0"
+source = "git+https://github.com/lIlIIlIll/yjson.git?tag=0.1.0#54b4965dee0f0b96710cbc678ec5ec9a126b055c"
+output-type = "static"
+dependencies = []
+
+[requires."yjson_macros"]
+version = "0.1.0"
+source = "git+https://github.com/lIlIIlIll/yjson_macros.git#fec0adce41f73d037d876cbac7a28aee8108bb5c"
+dependencies = []

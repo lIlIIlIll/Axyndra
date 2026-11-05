@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-minimum_version=${AXYNDRA_MIN_CJC_VERSION:-1.1.0}
-minimum_cjpm_version=${AXYNDRA_MIN_CJPM_VERSION:-1.1.0}
+configured_cjpm_version=${AXYNDRA_CI_EXPECTED_CJPM_VERSION:-}
+source "$(dirname -- "${BASH_SOURCE[0]}")/ci_toolchain.env"
+AXYNDRA_CI_EXPECTED_CJPM_VERSION=${configured_cjpm_version:-$AXYNDRA_CI_EXPECTED_CJPM_VERSION}
+minimum_version=${AXYNDRA_MIN_CJC_VERSION:-$AXYNDRA_CI_CANGJIE_VERSION}
+minimum_cjpm_version=${AXYNDRA_MIN_CJPM_VERSION:-$AXYNDRA_CI_EXPECTED_CJPM_VERSION}
 exact_toolchain=${AXYNDRA_REQUIRE_EXACT_TOOLCHAIN:-0}
-expected_version=${AXYNDRA_CI_EXPECTED_CJC_VERSION:-1.1.3}
-expected_cjpm_version=${AXYNDRA_CI_EXPECTED_CJPM_VERSION:-1.1.3}
+expected_version=${AXYNDRA_CI_EXPECTED_CJC_VERSION:-$AXYNDRA_CI_CANGJIE_VERSION}
+expected_cjpm_version=$AXYNDRA_CI_EXPECTED_CJPM_VERSION
 sdk_root=${AXYNDRA_SDK_ROOT:-${CANGJIE_SDK_ROOT:-}}
 
 if [[ -z "$sdk_root" ]]; then

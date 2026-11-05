@@ -29,7 +29,9 @@ class CheckSdkTest(unittest.TestCase):
 
     def run_check(self, sdk: Path, **extra: str) -> subprocess.CompletedProcess[str]:
         environment = {
-            **os.environ,
+            **{key: value for key, value in os.environ.items() if key not in (
+                "AXYNDRA_REQUIRE_EXACT_TOOLCHAIN", "AXYNDRA_MIN_CJC_VERSION", "AXYNDRA_MIN_CJPM_VERSION",
+                "AXYNDRA_CI_EXPECTED_CJC_VERSION", "AXYNDRA_CI_EXPECTED_CJPM_VERSION")},
             "AXYNDRA_SDK_ROOT": str(sdk),
             "AXYNDRA_SDK_CHECK_CACHE_DIR": str(sdk.parent / "cache"),
             **extra,
@@ -37,7 +39,7 @@ class CheckSdkTest(unittest.TestCase):
         return subprocess.run([str(CHECK)], text=True, capture_output=True, env=environment)
 
     def test_accepts_newer_sts_and_nightly_versions(self) -> None:
-        for version in ["1.1.4", "1.2.0-alpha.20260915010101"]:
+        for version in ["1.3.0-alpha.20261104001050", "1.3.0", "1.4.0-alpha.1"]:
             with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
                 sdk = self.make_sdk(Path(directory), version, version)
                 result = self.run_check(sdk)
@@ -48,14 +50,14 @@ class CheckSdkTest(unittest.TestCase):
             sdk = self.make_sdk(Path(directory), "1.0.9", "1.1.0")
             result = self.run_check(sdk)
             self.assertEqual(result.returncode, 2)
-            self.assertIn("require >= 1.1.0", result.stderr)
+            self.assertIn("require >= 1.3.0-alpha.20261104001050", result.stderr)
 
     def test_rejects_prerelease_of_stable_minimum(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sdk = self.make_sdk(Path(directory), "1.1.0-alpha.1", "1.1.0-alpha.1")
             result = self.run_check(sdk)
             self.assertEqual(result.returncode, 2)
-            self.assertIn("require >= 1.1.0", result.stderr)
+            self.assertIn("require >= 1.3.0-alpha.20261104001050", result.stderr)
 
     def test_compares_prerelease_identifiers_for_configured_minimum(self) -> None:
         cases = [
@@ -75,17 +77,28 @@ class CheckSdkTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, returncode, result.stderr)
 
+    def test_actual_pinned_sdk_has_independent_cjpm_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = self.make_sdk(Path(directory), "1.3.0-alpha.20261104001050", "1.3.0-alpha.09")
+            result = self.run_check(sdk, AXYNDRA_REQUIRE_EXACT_TOOLCHAIN="1")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_previously_supported_sdk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = self.make_sdk(Path(directory), "1.1.3", "1.1.3")
+            self.assertEqual(self.run_check(sdk).returncode, 2)
+
     def test_exact_release_mode_keeps_reproducible_pin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            sdk = self.make_sdk(Path(directory), "1.1.4", "1.1.4")
+            sdk = self.make_sdk(Path(directory), "1.3.1", "1.3.1")
             result = self.run_check(
                 sdk,
                 AXYNDRA_REQUIRE_EXACT_TOOLCHAIN="1",
-                AXYNDRA_CI_EXPECTED_CJC_VERSION="1.1.3",
-                AXYNDRA_CI_EXPECTED_CJPM_VERSION="1.1.3",
+                AXYNDRA_CI_EXPECTED_CJC_VERSION="1.3.0-alpha.20261104001050",
+                AXYNDRA_CI_EXPECTED_CJPM_VERSION="1.3.0-alpha.09",
             )
             self.assertEqual(result.returncode, 2)
-            self.assertIn("release toolchain requires cjc 1.1.3", result.stderr)
+            self.assertIn("release toolchain requires cjc 1.3.0-alpha.20261104001050", result.stderr)
 
 
 if __name__ == "__main__":

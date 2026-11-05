@@ -1,4 +1,7 @@
-version = 0
+version = 1
 
-[requires]
-  yjson = {git = "https://github.com/lIlIIlIll/yjson.git", commitId = "54b4965dee0f0b96710cbc678ec5ec9a126b055c", tag = "0.1.0", output-type = "static"}
+[requires."yjson"]
+version = "0.1.0"
+source = "git+https://github.com/lIlIIlIll/yjson.git?tag=0.1.0#54b4965dee0f0b96710cbc678ec5ec9a126b055c"
+output-type = "static"
+dependencies = []

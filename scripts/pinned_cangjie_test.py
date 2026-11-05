@@ -44,7 +44,9 @@ class PinnedCangjieTest(unittest.TestCase):
         if selected_compiler is None:
             self.skipTest("clang is unavailable")
         environment = {
-            **os.environ,
+            **{key: value for key, value in os.environ.items() if key not in (
+                "AXYNDRA_REQUIRE_EXACT_TOOLCHAIN", "AXYNDRA_MIN_CJC_VERSION", "AXYNDRA_MIN_CJPM_VERSION",
+                "AXYNDRA_CI_EXPECTED_CJC_VERSION", "AXYNDRA_CI_EXPECTED_CJPM_VERSION")},
             "AXYNDRA_SDK_ROOT": str(sdk),
             "AXYNDRA_SDK_CHECK_CACHE_DIR": str(root / "sdk-cache"),
             "AXYNDRA_NATIVE_CC": selected_compiler,
@@ -65,8 +67,8 @@ class PinnedCangjieTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "invocations.log"
-            first_sdk = self.make_sdk(root, "1.1.3", log)
-            second_sdk = self.make_sdk(root, "1.2.0", log)
+            first_sdk = self.make_sdk(root, "1.3.0-alpha.20261104001050", log)
+            second_sdk = self.make_sdk(root, "1.3.0", log)
 
             first = self.run_wrapper(first_sdk, root, log)
             repeated = self.run_wrapper(first_sdk, root, log)
@@ -84,7 +86,7 @@ class PinnedCangjieTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "invocations.log"
-            sdk = self.make_sdk(root, "1.1.3", log)
+            sdk = self.make_sdk(root, "1.3.0-alpha.20261104001050", log)
             compiler = root / "clang"
 
             def write_compiler(version: int) -> None:

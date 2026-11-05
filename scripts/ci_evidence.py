@@ -171,6 +171,8 @@ def main() -> int:
                 "cangjie_version": os.environ.get("AXYNDRA_CI_CANGJIE_VERSION"),
                 "expected_cjc_version": os.environ.get("AXYNDRA_CI_EXPECTED_CJC_VERSION"),
                 "expected_cjpm_version": os.environ.get("AXYNDRA_CI_EXPECTED_CJPM_VERSION"),
+                "sdk_sha256": os.environ.get("AXYNDRA_CI_SDK_SHA256"),
+                "sdk_actual_sha256": os.environ.get("AXYNDRA_CI_SDK_ACTUAL_SHA256"),
                 "stdx_sha256": os.environ.get("AXYNDRA_CI_STDX_SHA256"),
                 "stdx": stdx_evidence(repo),
                 "sdk_root": str(selected_sdk()) if selected_sdk() else None,
