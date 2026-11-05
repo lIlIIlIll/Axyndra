@@ -15,6 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CASES = 51
+EXPECTED_SERVER_CASES = 20
 
 
 def digest(path):
@@ -45,6 +46,46 @@ def run(command, log, timeout, environment=None):
     if code != 0:
         raise ValueError(f'fixture command failed ({code}); see {log}')
     return text
+
+
+def prepare_server(package, evidence, environment):
+    """Full installs include the actual independent powerless server sibling."""
+    plugin = ROOT / 'plugins/mcp_server'
+    sources = [ast.parse((plugin / name).read_text()) for name in ('check.py', 'check_payload.py')]
+    cases = [node.name for source in sources for node in ast.walk(source)
+             if isinstance(node, ast.FunctionDef) and node.name.startswith('test_')]
+    if len(cases) != EXPECTED_SERVER_CASES or len(set(cases)) != EXPECTED_SERVER_CASES:
+        raise ValueError('review the independent MCP server protocol test inventory')
+    text = run(['bash', str(plugin / 'build-package.sh'), '--output', str(package)],
+               evidence / 'server-build.log', 900)
+    if 'cjpm build success' not in text or has_compiler_error(text):
+        raise ValueError('actual server compiler success is missing')
+    manifest = json.loads((package / 'axyndra.plugin.json').read_text())
+    if manifest != json.loads((plugin / 'axyndra.plugin.json').read_text()):
+        raise ValueError('packaged server manifest differs from source')
+    entry = (package / manifest['entrypoint']).resolve(strict=True)
+    if not entry.is_relative_to(package) or not entry.is_file():
+        raise ValueError('packaged server entrypoint escapes its directory')
+    provenance = json.loads((package / 'package-provenance.json').read_text())
+    if provenance['plugin_sha256'] != digest(entry):
+        raise ValueError('packaged server binary hash differs from provenance')
+    for directory, field in [('lib', 'bundled_libraries_sha256'), ('licenses', 'bundled_licenses_sha256')]:
+        actual = {path.name: digest(path) for path in sorted((package / directory).iterdir()) if path.is_file()}
+        if actual != provenance[field]:
+            raise ValueError(f'packaged server {directory} differs from provenance')
+    before = files(package)
+    text = run([sys.executable, str(plugin / 'check.py'), '--package', str(package)],
+               evidence / 'server-protocol.log', 240, environment)
+    observed = re.findall(r'^test_\w+ .*? \.\.\. (ok|skipped.*?)$', text, re.M)
+    if len(observed) != EXPECTED_SERVER_CASES or any(item != 'ok' for item in observed) or \
+            not re.search(rf'^Ran {EXPECTED_SERVER_CASES} tests in [0-9.]+s$', text, re.M) or \
+            not re.search(r'^OK$', text, re.M) or 'FAILED' in text or 'ERROR:' in text or 'skipped' in text.lower():
+        raise ValueError('MCP server protocol fixture must execute every case without failure or skip')
+    if before != files(package):
+        raise ValueError('server package changed during protocol verification')
+    return dict(status='PASS', cases=cases, protocol_counts=dict(total=EXPECTED_SERVER_CASES,
+        passed=EXPECTED_SERVER_CASES, failed=0, errors=0, skipped=0), package_files=before,
+        entrypoint_sha256=digest(entry), package_provenance=provenance)
 
 
 def prepare(output=None):
@@ -100,6 +141,7 @@ def prepare(output=None):
             raise ValueError('MCP protocol fixture must execute every case without failure or skip')
         if before != files(package):
             raise ValueError('package changed during protocol verification')
+        record['server'] = prepare_server(package.parent / 'mcp_server', evidence, environment)
         record.update(status='PASS', protocol_counts={'total': EXPECTED_CASES, 'passed': EXPECTED_CASES,
                       'failed': 0, 'errors': 0, 'skipped': 0}, package_files=before,
                       entrypoint_sha256=digest(entry), package_provenance=provenance)
