@@ -6,10 +6,12 @@ import tool_runtime.*
 import std.convert.*
 
 import agent_domain.*
+import agent_domain as domain
 import agent_extension_runtime.*
 import agent_store.*
 import std.env.*
 import std.fs.*
+import std.sync.*
 import std.unittest.*
 import std.unittest.testmacro.*
 import yjson.*
@@ -43,10 +45,11 @@ class CodingDistributionFixture {
                 ValueField("recipe", textValue("profiles/coding-context.json")), ValueField("sha256", textValue(modelPolicySha256Text(recipe)))]))])).toArray())
         this.bundle = target; this.digest = descriptor.contentDigest
     }
-    func open(workspace: String, approval!: ApprovalMode = ApprovalMode.Yolo, bundled!: Bool = true): Result<ProductRuntime> {
+    func open(workspace: String, approval!: ApprovalMode = ApprovalMode.Yolo, bundled!: Bool = true,
+        startupMode!: ProductStartupMode = ProductStartupMode.Full): Result<ProductRuntime> {
         openProduct(config: ProductConfig(workspaceRoot: workspace, settingsRoot: root + "/settings",
             stateRoot: root + "/state", fixture: true, approvalMode: approval,
-            distributionRoot: if (bundled) { bundle } else { "" }))
+            distributionRoot: if (bundled) { bundle } else { "" }, startupMode: startupMode))
     }
     func close(): Unit { remove(root, recursive: true) }
 }
@@ -264,6 +267,108 @@ class CodingDistributionTests {
                 }
                 @Expect(product.fixtureProbe.getOrThrow().lastRequest.isNone())
             } finally { product.close() }
+        } finally { f.close() }
+    }
+}
+
+func readinessSnapshotCount(product: ProductRuntime): Int64 {
+    let records = product.pluginSnapshots()
+    try { records.size } finally { records.close() }
+}
+
+func readinessOpenOwner(f: CodingDistributionFixture): Result<ProductRuntime> {
+    if (!exists(Path(f.root + "/workspace"))) { Directory.create(f.root + "/workspace", recursive: true) }
+    f.open(f.root + "/workspace", startupMode: ProductStartupMode.Owner)
+}
+
+@Test
+class CodingDistributionReadinessTests {
+    @TestCase
+    func thrownPreparationIsStableAndCanBeJoinedDuringClose(): Unit {
+        let readiness = ProductExecutionReadiness()
+        let attempts = AtomicInt64(0)
+        readiness.configure({ _ =>
+            let _ = attempts.fetchAdd(1)
+            throw IllegalStateException("preparation fixture failure")
+            Result<Unit>.Ok(())
+        })
+        @Expect(readiness.ensure(None<domain.CancellationToken>).isError())
+        @Expect(readiness.ensure(None<domain.CancellationToken>).isError())
+        @Expect(attempts.load(), 1)
+        readiness.close()
+        @Expect(readiness.ensure(None<domain.CancellationToken>).isError())
+    }
+    @TestCase
+    func ownerControlsDoNotMountAndConcurrentWaitersShareActualReadyCatalog(): Unit {
+        let f = CodingDistributionFixture()
+        try {
+            let product = lifecycleTestRequire(readinessOpenOwner(f))
+            try {
+                @Expect(readinessSnapshotCount(product), 0)
+                @Expect(product.vnext.javascriptPlugins.instanceGeneration("axyndra:skills"), 0u64)
+                let first = spawn { => product.ensureExecutionReady() }
+                let second = spawn { => product.ensureExecutionReady() }
+                @Expect(first.get().isOk()); @Expect(second.get().isOk())
+                @Expect(product.ensureExecutionReady().isOk())
+                @Expect(readinessSnapshotCount(product), 1)
+                @Expect(product.vnext.javascriptPlugins.instanceGeneration("axyndra:skills") > 0u64)
+            } finally { let _ = product.close() }
+        } finally { f.close() }
+    }
+
+    @TestCase
+    func cancelledWaiterDoesNotStartOrCancelAnotherRequestPreparation(): Unit {
+        let f = CodingDistributionFixture()
+        try {
+            let product = lifecycleTestRequire(readinessOpenOwner(f))
+            try {
+                let cancelled = domain.CancellationSource(); cancelled.cancel()
+                @Expect(product.ensureExecutionReady(cancellation: Some(cancelled.token)).isError())
+                @Expect(readinessSnapshotCount(product), 0)
+                @Expect(product.ensureExecutionReady().isOk())
+                @Expect(product.vnext.javascriptPlugins.instanceGeneration("axyndra:skills") > 0u64)
+            } finally { let _ = product.close() }
+        } finally { f.close() }
+    }
+
+    @TestCase
+    func closeBeforeFirstRequestDoesNotLaunchAndNeverReopens(): Unit {
+        let f = CodingDistributionFixture()
+        try {
+            let product = lifecycleTestRequire(readinessOpenOwner(f))
+            @Expect(readinessSnapshotCount(product), 0)
+            @Expect(product.close().isOk())
+            @Expect(product.ensureExecutionReady().isError())
+        } finally { f.close() }
+    }
+
+    @TestCase
+    func deferredFailureIsStableAndCannotPublishAnExecutionCatalog(): Unit {
+        let f = CodingDistributionFixture()
+        try {
+            File.writeTo(f.bundle + "/distribution.json", "{}".toArray())
+            let product = lifecycleTestRequire(readinessOpenOwner(f))
+            try {
+                @Expect(product.ensureExecutionReady().isError())
+                @Expect(product.ensureExecutionReady().isError())
+                @Expect(readinessSnapshotCount(product), 0)
+                @Expect(product.vnext.javascriptPlugins.instanceGeneration("axyndra:skills"), 0u64)
+            } finally { let _ = product.close() }
+        } finally { f.close() }
+    }
+
+    @TestCase
+    func firstOwnerModelRequestUsesActualInitialContextBeforeFreezingRun(): Unit {
+        let f = CodingDistributionFixture()
+        try {
+            writeObservedSkill(f.root + "/workspace/.omp/skills", "DEFERRED-OWNER-CONTEXT")
+            let product = lifecycleTestRequire(readinessOpenOwner(f))
+            try {
+                @Expect(product.vnext.javascriptPlugins.instanceGeneration("axyndra:skills"), 0u64)
+                @Expect(product.applicationSession().submit("$review").isOk())
+                @Expect(product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("DEFERRED-OWNER-CONTEXT"))
+                @Expect(product.vnext.javascriptPlugins.instanceGeneration("axyndra:skills") > 0u64)
+            } finally { let _ = product.close() }
         } finally { f.close() }
     }
 }

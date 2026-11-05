@@ -13,6 +13,7 @@ import agent_runtime.*
 import tool_runtime.*
 import yjson_support.*
 import std.fs.*
+import std.env.getVariable
 import std.collection.*
 import std.convert.*
 import std.unittest.*
@@ -1654,7 +1655,7 @@ class PluginRuntimeContractTests {
         let installed87 = PluginRuntimeInstalledFixture87()
         try {
 
-        let cacheRoot = homeDirectory() + "/.cache/agent-tmp"
+        let cacheRoot = pluginContractTemporaryBase()
         if (!exists(Path(cacheRoot))) { Directory.create(cacheRoot, recursive: true) }
         let root = cacheRoot + "/axyndra-pi-isolation-" +
             DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()
@@ -2463,7 +2464,7 @@ class PluginRuntimeContractTests {
 
     @TestCase
     func productJavaScriptHostUsesOSIsolationWithoutNodePermissions(): Unit {
-        let cacheRoot = homeDirectory() + "/.cache/agent-tmp"
+        let cacheRoot = pluginContractTemporaryBase()
         if (!exists(Path(cacheRoot))) { Directory.create(cacheRoot, recursive: true) }
         let root = cacheRoot + "/axyndra-plugin-os-sandbox-" +
             DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()
@@ -3034,8 +3035,16 @@ class PluginRuntimeContractTests {
     }
 }
 
+func pluginContractTemporaryBase(): String {
+    match (getVariable("TMPDIR")) {
+        case Some(value) => if (value.trimAscii() != "") { return value }
+        case None => ()
+    }
+    homeDirectory() + "/.cache/agent-tmp"
+}
+
 func pluginContractTemp(label: String): String {
-    let base = homeDirectory() + "/.cache/agent-tmp/axyndra-issues-34-35-36"
+    let base = pluginContractTemporaryBase()
     if (!exists(Path(base))) { Directory.create(base, recursive: true) }
     base + "/plugin-contract-" + label + "-" +
         DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()

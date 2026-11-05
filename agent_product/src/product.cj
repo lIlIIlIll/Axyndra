@@ -234,6 +234,7 @@ public class ProductRuntime {
     private let taskRuntime: ProductTaskRuntime
     private let askRuntime: AskRuntime
     private let pluginRuntime: ProductPluginRuntime
+    private let executionReadiness = ProductExecutionReadiness()
     private let nativeFrontendLock=Mutex()
     private let nativeFrontendInvocations=ArrayList<ProductNativeToolInvocation>()
     private var nativeFrontendsClosing=false
@@ -366,6 +367,14 @@ public class ProductRuntime {
         productRegistryEscapedCopies83.beginProduct()
     }
 
+    func configureDeferredExecution(action: (domain.CancellationToken) -> Result<Unit>): Unit {
+        executionReadiness.configure(action)
+    }
+
+    public func ensureExecutionReady(cancellation!: ?domain.CancellationToken = None<domain.CancellationToken>): Result<Unit> {
+        executionReadiness.ensure(cancellation)
+    }
+
     func activateStartupPlugins(): Result<Unit> {
         for (record in productRegistryRecords83(pluginRuntime.startupEffectiveRecords())) {
             match (activateProductPlugin(record)) {
@@ -487,6 +496,8 @@ public class ProductRuntime {
         inheritedModelSettings180!: ?ToolContextDescriptor = None<ToolContextDescriptor>
     ): Result<AgentRunRequest> {
         match (callerCancellation180) { case Some(token) => match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
+        match (ensureExecutionReady(cancellation: callerCancellation180)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let targetSession = match (sessionId) {
             case Some(value) => value
             case None => ids.nextSessionId()
@@ -882,6 +893,8 @@ public class ProductRuntime {
         cancellation: domain.CancellationToken,
         noticeSink: ProductJavaScriptPluginNoticeSink
     ): Result<Unit> {
+        match (ensureExecutionReady(cancellation: Some(cancellation))) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         vnext.invokeJavaScriptPluginCommand(
             routeName, arguments, sessionId, commandId, cancellation, noticeSink
         )
@@ -889,6 +902,8 @@ public class ProductRuntime {
 
     func invokeScopedPluginCommand(routeName: String, arguments: String, scope: ProductPluginCommandScope,
         noticeSink: ProductJavaScriptPluginNoticeSink): Result<Unit> {
+        match (ensureExecutionReady(cancellation: Some(scope.cancellation))) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         vnext.invokeScopedPluginCommand(routeName, arguments, scope, noticeSink)
     }
 
@@ -1450,12 +1465,22 @@ public class ProductRuntime {
                 let record = records[position]
                 futures.add(spawn { => activateProductPluginVerified(record, verifyContent: false, serialize: false) })
             }
+            var firstFailure: ?PluginRegistryOwnedError = None<PluginRegistryOwnedError>
+            var firstThrown: ?Exception = None<Exception>
             for (future in futures) {
-                match (future.get()) {
-                    case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
-                    case PluginRegistryResult.Ok(_) => ()
-                }
+                try {
+                    match (future.get()) {
+                        case PluginRegistryResult.Err(error) => if (firstFailure.isNone()) { firstFailure = Some(error) }
+                            else { error.close() }
+                        case PluginRegistryResult.Ok(_) => ()
+                    }
+                } catch (error: Exception) { if (firstThrown.isNone()) { firstThrown = Some(error) } }
             }
+            match (firstThrown) { case Some(error) =>
+                match (firstFailure) { case Some(failure) => failure.close(); case None => () }
+                throw error
+                case None => () }
+            match (firstFailure) { case Some(error) => return PluginRegistryResult.Err(error); case None => () }
             index = end
         }
         PluginRegistryResult.Ok(())
@@ -2047,6 +2072,7 @@ public class ProductRuntime {
     }
 
     public func close(): Result<Unit> {
+        executionReadiness.close()
         if (taskRuntime.hasPluginChildDebt111()) {
             // This exact live continuation still needs the mounted Native
             // artifact and its original Registry custody to finish. Do not
@@ -5225,17 +5251,30 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
     // supervisor storage initialization before any startup plugin activation.
     match (ownerRoot180) { case Some(owner) => product.vnext.bindCanonicalOwner180(owner, product, config); case None => () }
     product.freezeConfiguredModelSettings180(config.modelStreamFaultProfile, config.modelAttemptRecovery)
-    match (product.activateStartupPlugins()) {
-        case Result.Ok(_) => ()
-        case Result.Err(error) =>
-            let _ = product.close()
-            return Result.Err(error)
-    }
-    if ((!localMaintenance || ownerMode180) && config.distributionRoot != "") {
-        match (applyProductDistributionDefaults(product, config.distributionRoot)) {
+    let prepareExecution: (domain.CancellationToken) -> Result<Unit> = { token: domain.CancellationToken =>
+        match (token.check()) { case Result.Err(error) => return Result<Unit>.Err(error); case Result.Ok(_) => () }
+        match (product.activateStartupPlugins()) {
             case Result.Ok(_) => ()
-            case Result.Err(error) => let _ = product.close(); return Result.Err(error)
+            case Result.Err(error) =>
+                return Result<Unit>.Err(error)
         }
+        if ((!localMaintenance || ownerMode180) && config.distributionRoot != "") {
+            match (applyProductDistributionDefaults(product, config.distributionRoot)) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result<Unit>.Err(error)
+            }
+        }
+        match (token.check()) { case Result.Err(error) => Result<Unit>.Err(error); case Result.Ok(_) => Result<Unit>.Ok(()) }
+    }
+    if (ownerMode180) {
+        // Control/protocol metadata is usable without starting unrelated
+        // plugins. Every model request joins the same full real preparation.
+        product.configureDeferredExecution(prepareExecution)
+    } else {
+        let preparation = domain.CancellationSource()
+        match (prepareExecution(preparation.token)) {
+            case Result.Err(error) => let _ = product.close(); return Result<ProductRuntime>.Err(error)
+            case Result.Ok(_) => () }
     }
     taskRuntime.attach(product, ProductTaskPersistence(vnextDatabase), ownerRoot180: ownerRoot180)
     registryTransferred = true

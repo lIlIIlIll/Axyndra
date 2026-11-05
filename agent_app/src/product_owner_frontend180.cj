@@ -11,6 +11,14 @@ import yjson.*
 class AppProductOwnerFrontend180 <: ProductOwnerFrontend180 {
     public func serveOwnerFrontend180(product: ProductRuntime, request: AgentValue,
         peer: ProductOwnerPeer180): Result<Unit> {
+        let frontend = ownerFrontendText180(request, "frontend")
+        let command = ownerFrontendText180(request, "command")
+        // Commands that execute or mutate plugin state join real preparation.
+        // Metadata-only controls and protocol initialization need no mount.
+        if (frontend == "cli" && command != "models" && command != "config" && command != "token") {
+            match (product.ensureExecutionReady()) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        }
         if (ownerFrontendText180(request, "frontend") == "tui") {
             return serveOwnedProductTui180(product, request, peer) }
         let scope = OwnerApplicationFrontend180(product, request, peer)
