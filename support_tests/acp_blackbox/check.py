@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -22,6 +23,7 @@ _FRAME_QUEUES: dict[int, queue.Queue[dict[str, Any]]] = {}
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="axyndra-acp-") as directory:
         workspace = Path(directory).resolve()
+        environment = dict(os.environ, AXYNDRA_HOME=str(workspace / "settings"))
         process = subprocess.Popen(
             [
                 str(BINARY),
@@ -31,7 +33,7 @@ def main() -> None:
                 str(workspace),
             ],
             cwd=workspace,
-            env=os.environ.copy(),
+            env=environment,
             text=True,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -286,10 +288,15 @@ def main() -> None:
             )
             assert unknown["error"]["code"] == -32601
         finally:
+            # A cleanup assertion must not replace the first protocol failure.
+            failing = sys.exc_info()[0] is not None
             process.stdin.close()
             process.wait(timeout=5)
             stderr = process.stderr.read() if process.stderr else ""
-            assert process.returncode == 0, stderr
+            if not failing:
+                assert process.returncode == 0, (process.returncode, stderr)
+            elif process.returncode != 0:
+                print("ACP cleanup also failed:", process.returncode, stderr, file=sys.stderr)
 
     print("ACP blackbox passed")
 
