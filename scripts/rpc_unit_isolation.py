@@ -144,7 +144,7 @@ def run_isolated_agent_rpc(root, output_dir, log):
             raise ValueError('RPC isolation cannot bind redirected build inputs: ' + key)
     base = [str(root / 'scripts/pinned_cangjie'), 'cjpm', 'test', '-m', 'agent_rpc']
     dry_log = output_dir / 'agent_rpc.dry-run.log'
-    command = base + ['--dry-run', '--parallel', '1', '--timeout-each=60s', '--no-color', '--no-progress']
+    command = base + ['--incremental', '--dry-run', '--parallel', '1', '--timeout-each=60s', '--no-color', '--no-progress']
     record = dict(member='agent_rpc', command=command, log=log.name,
                   dry_run_log=dry_log.name, exit_code=1, status='FAIL', case_logs=[],
                   runtime_total_seconds=900, original_case_seconds=60,

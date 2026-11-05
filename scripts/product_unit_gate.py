@@ -57,6 +57,77 @@ def run_logged(command, log, cwd, timeout=900):
             return 124
 
 
+def preserve_previous_unit_artifacts(target, output_dir, member):
+    """Keep old evidence, but require a genuinely fresh target unit binary.
+
+    CJPM incremental mode can otherwise retain an existing unit executable
+    after a test-only source change. Dependency artifacts are untouched.
+    """
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', member):
+        raise ValueError('invalid workspace package identity')
+    directory = target / 'release/unittest_bin'
+    if directory.is_symlink():
+        raise ValueError('unit artifact directory must not be a symlink')
+    destination = output_dir / 'previous-unit-artifacts' / member
+    moved = []
+    for name in (member, member + '$test.cjo'):
+        path = directory / name
+        if path.is_symlink():
+            raise ValueError('unit artifact must not be a symlink')
+        if path.exists():
+            if not path.is_file():
+                raise ValueError('unit artifact must be a regular file')
+            destination.mkdir(parents=True, exist_ok=True)
+            saved = destination / name
+            if saved.exists():
+                raise ValueError('fresh evidence directory required before preserving old unit artifacts')
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            path.rename(saved)
+            moved.append(dict(name=name, sha256=digest, saved=saved.relative_to(output_dir).as_posix()))
+    return moved
+
+
+def resolve_compilation_target(root):
+    resolved = subprocess.run([str(root / 'scripts/pinned_cangjie'), '--print-cjpm-target'], cwd=root,
+                              check=True, capture_output=True, text=True)
+    target = Path(resolved.stdout.strip())
+    if not target.is_absolute() or target.is_symlink():
+        raise ValueError('wrapper must resolve the exact absolute compilation target')
+    return target
+
+
+def preserve_member_unit_artifacts(root, target, output_dir, member):
+    name = tomllib.loads((root / member / 'cjpm.toml').read_text())['package']['name']
+    return preserve_previous_unit_artifacts(target, output_dir, name)
+
+
+def prepare_workspace_dependencies(root, output_dir):
+    """Prepare the existing DAG in bounded stages, with no unit-test credit.
+
+    CJPM test defaults to rebuilding dependencies. A killed monolithic build
+    does not commit its incremental index, so repeating it cannot advance.
+    Test dependencies use --export-for-test, so ordinary production builds
+    cannot prime this cache. Existing layer boundaries commit successful
+    test-profile cache steps, without executing or crediting any test case.
+    The later inventory and cases still validate all current sources at -O2.
+    """
+    from rpc_case_process_watch import run_compilation
+    target = resolve_compilation_target(root)
+    records = []
+    for member in ('agent_runtime', 'tool_runtime', 'agent_store', 'agent_core', 'agent_host_runtime', 'agent_product', 'agent_rpc', 'agent_app'):
+        preserved = preserve_previous_unit_artifacts(target, output_dir, member)
+        log = output_dir / (member + '.dependency-build.log')
+        command = [str(root / 'scripts/pinned_cangjie'), 'cjpm', 'test', '--incremental', '--no-run', '-m', member]
+        process = run_compilation(command, log, seconds=900, cwd=root)
+        record = dict(member=member, command=command, log=log.name, process=process,
+                      unit_test_credit=0, previous_unit_artifacts=preserved, status='PASS' if process['exit_code'] == 0 else 'FAIL')
+        records.append(record)
+        (output_dir / 'dependency-preparation.json').write_text(json.dumps(records, indent=2) + '\n')
+        if process['exit_code'] != 0:
+            raise ValueError(f'{member} dependency preparation failed; see {log.name}')
+    return records
+
+
 def dry_run_cases(text):
     suite = None
     cases = []
@@ -165,7 +236,7 @@ def isolated_case_timeouts(name):
 def run_isolated_agent_product(root, output_dir, log, case_prefix=None):
     base = [str(root / 'scripts/pinned_cangjie'), 'cjpm', 'test', '-m', 'agent_product']
     dry_log = output_dir / 'agent_product.dry-run.log'
-    dry_command = base + ['--dry-run', '--no-color', '--no-progress']
+    dry_command = base + ['--incremental', '--dry-run', '--no-color', '--no-progress']
     dry_exit = run_logged(dry_command, dry_log, root)
     record = {
         'member': 'agent_product',
@@ -249,7 +320,7 @@ def run_isolated_agent_host_runtime(root, output_dir, log):
     member = 'agent_host_runtime'
     base = [str(root / 'scripts/pinned_cangjie'), 'cjpm', 'test', '-m', member]
     dry_log = output_dir / (member + '.dry-run.log')
-    command = base + ['--dry-run', '--no-color', '--no-progress']
+    command = base + ['--incremental', '--dry-run', '--no-color', '--no-progress']
     record = dict(member=member, command=command, log=log.name, dry_run_log=dry_log.name,
                   exit_code=1, status='FAIL', case_logs=[], runtime_total_seconds=900,
                   case_timeout_seconds=60, case_process_seconds=90,
@@ -280,7 +351,7 @@ def run_isolated_agent_host_runtime(root, output_dir, log):
             raise ValueError('Host original launcher runtime is incomplete')
         os.environ.update(runtime)
         base = [str(Path(runtime['CANGJIE_HOME']) / 'tools/bin/cjpm'), 'test', '-m', member, '--timeout-each=60s']
-        command = base + ['--dry-run', '--no-color', '--no-progress']
+        command = base + ['--incremental', '--dry-run', '--no-color', '--no-progress']
         record['command'] = command
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -467,6 +538,7 @@ def main():
         result['scope'] = requested_scope(found, expected, args.package, args.case_prefix, args.inventory_only)
         result['sources'] = {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for files in found.values() for p in files}
         if not args.inventory_only:
+            result['dependency_preparation'] = prepare_workspace_dependencies(ROOT, args.output_dir)
             read_view_exit = run_logged([
                 sys.executable, str(ROOT / 'libs/process4cj/native/test_read_view_native.py'),
                 '--source', str(ROOT / 'libs/process4cj/native/process4cj_native.c'),
@@ -521,7 +593,12 @@ def main():
                     manifest_directory=manifest_directory
                 ))
                 (args.output_dir / 'summary.json').write_text(json.dumps(result, indent=2) + '\n')
+            prepared_members = {row['member'] for row in result['dependency_preparation']}
+            compilation_target = resolve_compilation_target(ROOT)
             for member in result['scope']['selected_packages']:
+                if member not in prepared_members:
+                    result.setdefault('previous_unit_artifacts', {})[member] = preserve_member_unit_artifacts(
+                        ROOT, compilation_target, args.output_dir, member)
                 log = args.output_dir / (member.replace('/', '__') + '.log')
                 print(f'unit tests: {member}', flush=True)
                 if member == 'agent_product':
@@ -544,7 +621,7 @@ def main():
                         result['scope']['enumerated_cases'][member] = record['scope']['enumerated']
                         result['scope']['selected_cases'][member] = record['scope']['selected']
                 else:
-                    command = [str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test', '-m', member, '--no-color']
+                    command = [str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test', '--incremental', '-m', member, '--no-color']
                     record = {'member': member, 'command': command, 'log': log.name}
                     record['exit_code'] = run_logged(command, log, ROOT)
                     try:

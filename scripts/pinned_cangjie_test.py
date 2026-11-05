@@ -39,7 +39,7 @@ class PinnedCangjieTest(unittest.TestCase):
         cjpm.chmod(0o755)
         return sdk
 
-    def run_wrapper(self, sdk: Path, root: Path, log: Path, compiler: Path | None = None) -> str:
+    def run_wrapper(self, sdk: Path, root: Path, log: Path, compiler: Path | None = None, command=("cjpm", "build")) -> str:
         selected_compiler = str(compiler) if compiler is not None else shutil.which("clang")
         if selected_compiler is None:
             self.skipTest("clang is unavailable")
@@ -54,14 +54,30 @@ class PinnedCangjieTest(unittest.TestCase):
             "AXYNDRA_CANONICAL_TARGET_ROOT": str(root / "targets"),
         }
         result = subprocess.run(
-            [str(WRAPPER), "cjpm", "build"],
+            [str(WRAPPER), *command],
             cwd=ROOT,
             env=environment,
             text=True,
             capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        if command == ("--print-cjpm-target",):
+            return result.stdout.strip()
         return log.read_text(encoding="utf-8").splitlines()[-1]
+
+    def test_print_target_matches_build_without_invoking_cjpm_build(self) -> None:
+        import shlex
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "invocations.log"
+            sdk = self.make_sdk(root, "1.3.0-alpha.20261104001050", log)
+            invocation = shlex.split(self.run_wrapper(sdk, root, log))
+            expected = invocation[invocation.index("--target-dir") + 1]
+            before = log.read_text()
+            actual = self.run_wrapper(sdk, root, log, command=("--print-cjpm-target",))
+            self.assertTrue(Path(actual).is_absolute())
+            self.assertEqual(actual, expected)
+            self.assertEqual(log.read_text(), before)
 
     def test_canonical_target_changes_with_sdk_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

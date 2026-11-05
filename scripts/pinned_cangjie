@@ -92,6 +92,12 @@ if [[ -n "$native_compiler" ]]; then
 fi
 
 command=("$@")
+print_cjpm_target=false
+if [[ "${command[0]:-}" == --print-cjpm-target ]]; then
+  print_cjpm_target=true
+  command=(cjpm build)
+fi
+target_dir="$(pwd -P)/target"
 explicit_target=false
 for argument in "${command[@]}"; do
   case "$argument" in --target-dir|--target-dir=*) explicit_target=true ;; esac
@@ -113,4 +119,8 @@ if [[ "$explicit_target" != true && -n "${AXYNDRA_CANONICAL_TARGET_ROOT:-}" && $
   command+=(--target-dir "$target_dir")
 fi
 
+if [[ "$print_cjpm_target" == true ]]; then
+  printf '%s\n' "$target_dir"
+  exit 0
+fi
 exec "${command[@]}"

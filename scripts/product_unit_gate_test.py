@@ -418,4 +418,61 @@ class HostIsolationGateTest(unittest.TestCase):
             self.assertTrue(process_custody_closed(result))
             self.assertFalse(result['physical_exit_is_data_consumption_ACK'])
 
-if __name__ == '__main__': unittest.main()
+
+
+class DependencyPreparationTests(unittest.TestCase):
+    def test_dependency_preparation_has_no_test_credit_and_commits_bounded_stages(self):
+        from product_unit_gate import prepare_workspace_dependencies
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch('product_unit_gate.subprocess.run', return_value=type('Resolved', (), {'stdout': str(root / 'target')})()), patch('rpc_case_process_watch.run_compilation', return_value={'exit_code': 0}) as run:
+                rows = prepare_workspace_dependencies(root, root)
+            self.assertEqual(len(rows), 8)
+            self.assertTrue(all(row['unit_test_credit'] == 0 for row in rows))
+            self.assertTrue(all(call.kwargs['seconds'] == 900 for call in run.call_args_list))
+            self.assertTrue(all('--incremental' in call.args[0] and '--no-run' in call.args[0] for call in run.call_args_list))
+
+    def test_failed_dependency_stage_stops_without_claiming_following_work(self):
+        from product_unit_gate import prepare_workspace_dependencies
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch('product_unit_gate.subprocess.run', return_value=type('Resolved', (), {'stdout': str(root / 'target')})()), patch('rpc_case_process_watch.run_compilation', return_value={'exit_code': 124}) as run:
+                with self.assertRaises(ValueError):
+                    prepare_workspace_dependencies(root, root)
+            self.assertEqual(run.call_count, 1)
+            rows = json.loads((root / 'dependency-preparation.json').read_text())
+            self.assertEqual(rows[0]['status'], 'FAIL')
+            self.assertEqual(rows[0]['unit_test_credit'], 0)
+
+    def test_nested_workspace_member_uses_manifest_package_identity(self):
+        from product_unit_gate import preserve_member_unit_artifacts
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            member = root / 'libs/example'; member.mkdir(parents=True)
+            (member / 'cjpm.toml').write_text('[package]\nname = "example_package"\n')
+            unit = root / 'target/release/unittest_bin'; unit.mkdir(parents=True)
+            (unit / 'example_package').write_bytes(b'old-unit')
+            rows = preserve_member_unit_artifacts(root, root / 'target', root / 'evidence', 'libs/example')
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['name'], 'example_package')
+            self.assertFalse((unit / 'example_package').exists())
+
+    def test_old_unit_binary_is_preserved_and_test_metadata_cannot_remain_stale(self):
+        from product_unit_gate import preserve_previous_unit_artifacts
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); target = root / 'target'; output = root / 'evidence'
+            unit = target / 'release/unittest_bin'; unit.mkdir(parents=True)
+            (unit / 'agent_product').write_bytes(b'old-unit')
+            (unit / 'agent_product$test.cjo').write_bytes(b'old-test-metadata')
+            rows = preserve_previous_unit_artifacts(target, output, 'agent_product')
+            self.assertEqual(len(rows), 2)
+            self.assertFalse((unit / 'agent_product').exists())
+            self.assertFalse((unit / 'agent_product$test.cjo').exists())
+            self.assertEqual((output / rows[0]['saved']).read_bytes(), b'old-unit')
+            self.assertFalse((target / 'release/agent_product').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()
