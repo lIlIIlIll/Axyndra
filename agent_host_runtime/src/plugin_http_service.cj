@@ -148,8 +148,8 @@ class HostPluginHttpServiceExecutor <: ToolExecutor {
             let boundedTimeout = timeout
             let scoped = hostPluginProcessCancellationContext(context, cancellation.token)
             let result = match (hostProcessOperations(processes, "plugin-http").execute(scoped, prepared, { _ =>
-                processes.execute(ProcessRequest("/usr/bin/curl", operationId: prepared.operationId,
-                    arguments: argv, workingDirectory: descriptor.root, timeoutMillis: boundedTimeout,
+                processes.execute(ProcessRequest("/usr/bin/env", operationId: prepared.operationId,
+                    arguments: hostPluginHttpSandboxArguments(argv), workingDirectory: descriptor.root, timeoutMillis: boundedTimeout,
                     sandboxMode: ProcessSandboxMode.IsolatedReadOnly, filesystemRoot: descriptor.root,
                     networkPolicy: Some(prepared.operationPlan.networkPolicy), redactedValues: secrets.toArray(),
                     processLimits: hostPluginHttpProcessLimits(context.budget.processLimits)))

@@ -38,7 +38,11 @@ def main():
     assert args.ca_bundle.resolve().is_file() and args.protocol_fixture.resolve().is_file()
     package_before = {p.relative_to(package).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in package.rglob("*") if p.is_file()}
-    cli = original.Cli(binary, root)
+    # Exercise installed-package HOME beyond the curl default SSH-path bound.
+    # This remains the actual isolated HTTP path, with unchanged grants/caps.
+    cli_root = root / ("installed-model-context-" + "x" * 80)
+    cli_root.mkdir()
+    cli = original.Cli(binary, cli_root)
     completed = []
     absent = cli.call("infer", "missing-thread", "absent-provider", "absent", runtime=True, code=2)
     assert absent["code"] == "model.provider_plugin_missing"

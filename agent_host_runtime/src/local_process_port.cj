@@ -214,8 +214,8 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
             maxOutputBytes: if (limits.maxOutputBytes > 0) { min(wireLimit, limits.maxOutputBytes) } else { wireLimit },
             addressSpaceBytes: limits.addressSpaceBytes, fileSizeBytes: limits.fileSizeBytes,
             openFiles: limits.openFiles, processes: limits.processes, cpuSeconds: limits.cpuSeconds)
-        let request = ProcessRequest("/usr/bin/curl", resourceOwner: Some(resourceOwner),
-            arguments: launch.arguments, workingDirectory: packageRoot, timeoutMillis: timeout,
+        let request = ProcessRequest("/usr/bin/env", resourceOwner: Some(resourceOwner),
+            arguments: hostPluginHttpSandboxArguments(launch.arguments), workingDirectory: packageRoot, timeoutMillis: timeout,
             sandboxMode: ProcessSandboxMode.IsolatedReadOnly, filesystemRoot: packageRoot,
             networkPolicy: Some(policy), redactedValues: launch.secrets, processLimits: boundedLimits)
         let launchStarted = AtomicBool(false)
