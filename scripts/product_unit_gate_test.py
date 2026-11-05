@@ -473,6 +473,30 @@ class DependencyPreparationTests(unittest.TestCase):
             self.assertEqual((output / rows[0]['saved']).read_bytes(), b'old-unit')
             self.assertFalse((target / 'release/agent_product').exists())
 
+    def test_cross_filesystem_evidence_retains_verified_old_artifact(self):
+        import errno
+        from product_unit_gate import preserve_previous_unit_artifacts
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); unit = root / 'target/release/unittest_bin'
+            unit.mkdir(parents=True); old = unit / 'agent_product'; old.write_bytes(b'old-unit')
+            with patch.object(Path, 'rename', side_effect=OSError(errno.EXDEV, 'different filesystem')):
+                rows = preserve_previous_unit_artifacts(root / 'target', root / 'evidence', 'agent_product')
+            self.assertFalse(old.exists())
+            self.assertEqual((root / 'evidence' / rows[0]['saved']).read_bytes(), b'old-unit')
+            self.assertEqual(rows[0]['sha256'], hashlib.sha256(b'old-unit').hexdigest())
+
+    def test_failed_cross_filesystem_copy_cannot_remove_old_artifact(self):
+        import errno
+        from product_unit_gate import preserve_previous_unit_artifacts
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); unit = root / 'target/release/unittest_bin'
+            unit.mkdir(parents=True); old = unit / 'agent_product'; old.write_bytes(b'old-unit')
+            with patch.object(Path, 'rename', side_effect=OSError(errno.EXDEV, 'different filesystem')), \
+                    patch('product_unit_gate.shutil.copyfileobj', side_effect=OSError('copy failed')):
+                with self.assertRaisesRegex(OSError, 'copy failed'):
+                    preserve_previous_unit_artifacts(root / 'target', root / 'evidence', 'agent_product')
+            self.assertEqual(old.read_bytes(), b'old-unit')
+
 
 if __name__ == '__main__':
     unittest.main()

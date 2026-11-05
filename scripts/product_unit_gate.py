@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Execute every inventoried workspace unit-test package and retain summaries."""
 import argparse
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -82,7 +84,19 @@ def preserve_previous_unit_artifacts(target, output_dir, member):
             if saved.exists():
                 raise ValueError('fresh evidence directory required before preserving old unit artifacts')
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            path.rename(saved)
+            try:
+                path.rename(saved)
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
+                # Evidence may live on another filesystem or bind mount.
+                # Keep the original until both complete byte sets are verified.
+                with path.open('rb') as source, saved.open('xb') as copy:
+                    shutil.copyfileobj(source, copy)
+                if (hashlib.sha256(saved.read_bytes()).hexdigest() != digest or
+                        hashlib.sha256(path.read_bytes()).hexdigest() != digest):
+                    raise ValueError('old unit artifact changed during evidence preservation')
+                path.unlink()
             moved.append(dict(name=name, sha256=digest, saved=saved.relative_to(output_dir).as_posix()))
     return moved
 
