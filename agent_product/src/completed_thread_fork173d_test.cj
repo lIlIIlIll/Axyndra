@@ -101,12 +101,14 @@ class InstalledCompletedThreadFork173dTests {
         for (wide in [false, true]) {
             let f = CompactionPolicyFixture(hybrid: false, seedDefaultHistory: false)
             try {
-                let seed = reserveNativeControlMetadata(67108864)
+                // This API charges eight physical bytes per logical byte:
+                // 8 MiB prepays the original 64 MiB oracle, on the same bank.
+                let seed = reserveNativeControlMetadata(8388608)
                 try { seedFullOriginalCorpusFrame173d(f, wide) } finally { seed.close() }
                 let before = completedForkExecutionCount173d(f.database)
                 let target = SessionId("full-corpus-fork173d")
                 @Expect(f.product.forkSession(f.session, target).isOk())
-                let oracle = reserveNativeControlMetadata(67108864)
+                let oracle = reserveNativeControlMetadata(8388608)
                 try { requireFullOriginalCorpusFrame173d(f, target, wide) } finally { oracle.close() }
                 expectCompletedForkCounts173d(f.database, before)
             } finally { f.close() }

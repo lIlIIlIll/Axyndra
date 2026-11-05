@@ -1,5 +1,6 @@
 package agent_product
 
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -118,7 +119,11 @@ class LocalInfrastructureContractTests {
 }
 
 func localInfrastructureTestTemp(label: String): String {
-    let base = homeDirectory() + "/.cache/agent-tmp/axyndra-local-infrastructure-tests"
+    let parent = match (getVariable("TMPDIR")) {
+        case Some(value) => value
+        case None => homeDirectory() + "/.cache/agent-tmp"
+    }
+    let base = parent + "/axyndra-local-infrastructure-tests"
     if (!exists(Path(base))) { Directory.create(base, recursive: true) }
     base + "/" + label + "-" +
         DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()

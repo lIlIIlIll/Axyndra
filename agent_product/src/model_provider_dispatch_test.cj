@@ -214,9 +214,14 @@ class ModelProviderProductFixture {
             contextManifestRuntime: Some(ProductContextManifestRuntime(db)))
     }
     func run(autoRetry!: Bool = false): Result<AgentRunOutcome> {
-        core.start(AgentRunRequest(RunId("provider-run"), SessionId("provider-thread"), "fixture-model", "hello",
+        let result = core.start(AgentRunRequest(RunId("provider-run"), SessionId("provider-thread"), "fixture-model", "hello",
             thinking: ThinkingLevel.Off, modelCapabilitiesSnapshot: Some(capabilities), autoRetry: autoRetry,
             budget: ResourceBudget(maxModelRequests: if (autoRetry) { 2 } else { 1 }, maxWallMillis: 10000, maxIdleMillis: 10000)))
+        match (result.error()) {
+            case Some(error) => println("PROVIDER_FIXTURE_FAILURE " + error.describe())
+            case None => ()
+        }
+        result
     }
     func directRequest(): ModelRequest { ModelRequest("fixture-model", [ModelMessage(ModelRole.User,
         [ModelBlock(ModelBlockKind.Text, text: "hello")])], thinking: ThinkingLevel.Off, requestId: "unclaimed-request") }

@@ -4,6 +4,7 @@ import agent_domain.*
 import agent_store.*
 import agent_runtime.*
 import yjson_support.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -129,7 +130,11 @@ func seedInspectionRun(database: SqliteDatabase): Unit {
 }
 
 func runInspectionTestTemp(label: String): String {
-    let base = homeDirectory() + "/.cache/agent-tmp/axyndra-run-inspection-tests"
+    let parent = match (getVariable("TMPDIR")) {
+        case Some(value) => value
+        case None => homeDirectory() + "/.cache/agent-tmp"
+    }
+    let base = parent + "/axyndra-run-inspection-tests"
     if (!exists(Path(base))) { Directory.create(base, recursive: true) }
     base + "/" + label + "-" +
         DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()

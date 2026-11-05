@@ -35,7 +35,8 @@ class CompletedForkPaidPostcondition173d2Tests {
             let f = CompactionPolicyFixture()
             let session = f.product.applicationSession(sessionId: Some(f.session))
             let capture = ForkPostconditionConsumer173d2()
-            let oracle = reserveNativeControlMetadata(67108864)
+            // 8 MiB logical bytes prepay the full 64 MiB physical oracle.
+            let oracle = reserveNativeControlMetadata(8388608)
             try {
                 seedActualCompletedForkCheckpoint173d2(f)
                 let operations = f.database.scalarInt("SELECT COUNT(*) FROM operations")

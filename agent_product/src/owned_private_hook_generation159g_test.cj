@@ -15,7 +15,7 @@ private func hookGenerationRecord159g(value: PluginRegistryResult<ProductPluginR
     }
 }
 private func writeHookGenerationPackage159g(path: String, version: String): Unit {
-    Directory.create(path + "/extensions", recursive: true)
+    if (!exists(Path(path + "/extensions"))) { Directory.create(path + "/extensions", recursive: true) }
     File.writeTo(path + "/package.json", ("{\"name\":\"generation159g\",\"version\":\"" + version +
         "\",\"pi\":{\"extensions\":[\"extensions/index.js\"]}}").toArray())
     File.writeTo(path + "/extensions/index.js", "throw new Error('NOT_AN_EXECUTION_CONTROL');".toArray())
