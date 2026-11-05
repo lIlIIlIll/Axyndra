@@ -78,7 +78,10 @@ def prepare(output=None):
                    evidence / 'build.log', MEMORY_STAGE_SECONDS['build'])
         if 'cjpm build success' not in text or has_compiler_error(text):
             raise ValueError('actual compiler success is missing')
-        unit = summary(run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test'], evidence / 'unit.log', MEMORY_STAGE_SECONDS['unit'],
+        # Same complete Native corpus and isolated two-worker runner as the
+        # ordinary Memory fixture. No case, assertion or deadline is removed.
+        unit = summary(run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test', '--parallel', '2',
+                            '--no-progress'], evidence / 'unit.log', MEMORY_STAGE_SECONDS['unit'],
                            working_directory=plugin))
         # The built and executed corpus must be exactly the source tree's
         # corpus: same total, nothing skipped, nothing failed. A grown corpus
