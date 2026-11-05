@@ -15,9 +15,10 @@ import sys
 import time
 
 CLEANUP_SECONDS = .25
-_PROCESS_CAPS = {'case': 60, 'compilation': 900, 'host-case': 900}
+_PROCESS_CAPS = {'case': 60, 'compilation': 900, 'host-case': 900, 'fixture-stage': 900, 'fixture': 2100}
 _WORKER_MODES = {'case': '--owned-worker', 'compilation': '--owned-compilation-worker',
-                 'host-case': '--owned-host-worker'}
+                 'host-case': '--owned-host-worker', 'fixture-stage': '--owned-fixture-stage-worker',
+                 'fixture': '--owned-fixture-worker'}
 
 
 def _cell(raw):
@@ -356,7 +357,7 @@ def _actual_clean_worker_receipt(result, execution_deadline, seconds):
         and result.get('unreaped_owned_processes') == [] and result.get('unknown_process_observations') == [])
 
 
-def _run_owned(command, log, seconds, cwd=None, purpose='case'):
+def _run_owned(command, log, seconds, cwd=None, purpose='case', environment=None):
     """The CI parent never becomes subreaper or reaps a shared child's handle."""
     maximum = _PROCESS_CAPS.get(purpose, 0)
     if sys.platform != 'linux' or not 0 < seconds <= maximum:
@@ -377,7 +378,7 @@ def _run_owned(command, log, seconds, cwd=None, purpose='case'):
             worker_mode = _WORKER_MODES[purpose]
             witness = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), worker_mode,
                 str(log), str(receipt), str(seconds), repr(execution_deadline), '--', *command], cwd=cwd,
-                stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                stdout=output, stderr=subprocess.STDOUT, start_new_session=True, env=environment)
             witness_start = None
             try:
                 witness_start = _cell(Path('/proc', str(witness.pid), 'stat').read_text())['start']
@@ -442,6 +443,14 @@ def run_compilation(command, log, seconds=900, cwd=None):
 
 def run_host_case(command, log, seconds, cwd=None):
     return _run_owned(command, log, seconds, cwd=cwd, purpose='host-case')
+
+
+def run_fixture_stage(command, log, seconds, cwd=None, environment=None):
+    return _run_owned(command, log, seconds, cwd=cwd, purpose='fixture-stage', environment=environment)
+
+
+def run_fixture(command, log, seconds, cwd=None):
+    return _run_owned(command, log, seconds, cwd=cwd, purpose='fixture')
 
 
 def main():

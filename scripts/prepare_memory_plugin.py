@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 from product_unit_gate import summary, has_compiler_error
+from fixture_budget import MEMORY_STAGE_SECONDS
+from rpc_case_process_watch import run_fixture_stage
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CASES = 40
@@ -27,19 +29,9 @@ def files(package):
 
 
 def run(command, log, timeout, environment=None, working_directory=None):
-    with log.open('w') as stream:
-        process = subprocess.Popen(command, cwd=ROOT if working_directory is None else working_directory, env=environment, stdout=stream,
-                                   stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            code = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
-            code = 124
+    process = run_fixture_stage(command, log, timeout,
+        cwd=ROOT if working_directory is None else working_directory, environment=environment)
+    code = process['exit_code']
     text = log.read_text(encoding='utf-8', errors='replace')
     sys.stderr.write(text)
     if code != 0:
@@ -107,7 +99,7 @@ def prepare(output=None):
             raise ValueError('review the independent Memory protocol test inventory')
         record['cases'] = cases
         text = run(['bash', str(plugin / 'build-package.sh'), '--output', str(package)],
-                   evidence / 'build.log', 900)
+                   evidence / 'build.log', MEMORY_STAGE_SECONDS['build'])
         if 'cjpm build success' not in text or has_compiler_error(text):
             raise ValueError('actual compiler success is missing')
         # SDK workers execute independent test classes in separate processes.
@@ -115,7 +107,7 @@ def prepare(output=None):
         # no shared filesystem fixture or mutable suite state is involved. Keep
         # two workers bounded, all cases unfiltered, and each case unchanged.
         unit_text = run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test', '--parallel', '2',
-                         '--no-progress'], evidence / 'unit.log', 900,
+                         '--no-progress'], evidence / 'unit.log', MEMORY_STAGE_SECONDS['unit'],
                         working_directory=plugin)
         unit = summary(unit_text)
         if unit != dict(total=138, passed=138, failed=0, skipped=0, errors=0):
@@ -142,7 +134,7 @@ def prepare(output=None):
             environment.pop(name, None)
         record['loader_environment_removed'] = True
         text = run([sys.executable, str(plugin / 'tests/check.py'), '--package', str(package)],
-                   evidence / 'protocol.log', 240, environment)
+                   evidence / 'protocol.log', MEMORY_STAGE_SECONDS['protocol'], environment)
         observed = re.findall(r'^test_\w+ .*? \.\.\. (ok|skipped.*?)$', text, re.M)
         if len(observed) != EXPECTED_CASES or any(item != 'ok' for item in observed) or \
                 not re.search(rf'^Ran {EXPECTED_CASES} tests in [0-9.]+s$', text, re.M) or not re.search(r'^OK$', text, re.M) or \

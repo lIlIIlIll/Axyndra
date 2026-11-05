@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 from product_unit_gate import summary, has_compiler_error
+from fixture_budget import MEMORY_STAGE_SECONDS
+from rpc_case_process_watch import run_fixture_stage
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CASES = 40
@@ -27,19 +29,9 @@ def files(package):
 
 
 def run(command, log, timeout, environment=None, working_directory=None):
-    with log.open('w') as stream:
-        process = subprocess.Popen(command, cwd=ROOT if working_directory is None else working_directory, env=environment, stdout=stream,
-                                   stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            code = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
-            code = 124
+    process = run_fixture_stage(command, log, timeout,
+        cwd=ROOT if working_directory is None else working_directory, environment=environment)
+    code = process['exit_code']
     text = log.read_text(encoding='utf-8', errors='replace')
     sys.stderr.write(text)
     if code != 0:
@@ -83,10 +75,10 @@ def prepare(output=None):
         record['expected_units'] = expected_units
         record['source_unit_cases'] = source_units
         text = run(['bash', str(plugin / 'build-package.sh'), '--output', str(package)],
-                   evidence / 'build.log', 900)
+                   evidence / 'build.log', MEMORY_STAGE_SECONDS['build'])
         if 'cjpm build success' not in text or has_compiler_error(text):
             raise ValueError('actual compiler success is missing')
-        unit = summary(run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test'], evidence / 'unit.log', 900,
+        unit = summary(run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test'], evidence / 'unit.log', MEMORY_STAGE_SECONDS['unit'],
                            working_directory=plugin))
         # The built and executed corpus must be exactly the source tree's
         # corpus: same total, nothing skipped, nothing failed. A grown corpus
@@ -113,7 +105,7 @@ def prepare(output=None):
             environment.pop(name, None)
         record['loader_environment_removed'] = True
         text = run([sys.executable, str(plugin / 'tests/check.py'), '--package', str(package)],
-                   evidence / 'protocol.log', 240, environment)
+                   evidence / 'protocol.log', MEMORY_STAGE_SECONDS['protocol'], environment)
         observed = re.findall(r'^test_\w+ .*? \.\.\. (ok|skipped.*?)$', text, re.M)
         if len(observed) != EXPECTED_CASES or any(item != 'ok' for item in observed) or \
                 not re.search(rf'^Ran {EXPECTED_CASES} tests in [0-9.]+s$', text, re.M) or not re.search(r'^OK$', text, re.M) or \

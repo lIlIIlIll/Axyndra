@@ -81,7 +81,14 @@ def prepare_bundled_plugin(root, output_dir, directory, command, environment_nam
                            manifest_directory=None):
     """Build and check a fresh package; inherited fixture paths are not reused."""
     log = output_dir / f'{directory}-plugin-fixture.log'
-    exit_code = run_logged(command, log, root)
+    process_evidence = None
+    if directory in ('memory', 'memory_latest_context'):
+        from fixture_budget import MEMORY_FIXTURE_SECONDS
+        from rpc_case_process_watch import run_fixture
+        process_evidence = run_fixture(command, log, MEMORY_FIXTURE_SECONDS, cwd=root)
+        exit_code = process_evidence['exit_code']
+    else:
+        exit_code = run_logged(command, log, root)
     if exit_code != 0:
         raise ValueError(f'{directory} plugin fixture preparation failed: {exit_code}; see {log.name}')
     lines = [line.strip() for line in log.read_text(errors='replace').splitlines() if line.strip()]
@@ -111,7 +118,7 @@ def prepare_bundled_plugin(root, output_dir, directory, command, environment_nam
     os.environ[environment_name] = str(package)
     return dict(plugin=directory, command=command, log=log.name, status='PASS',
                 package=str(package), environment=environment_name,
-                entrypoint_sha256=digest, package_provenance=provenance)
+                entrypoint_sha256=digest, package_provenance=provenance, process_evidence=process_evidence)
 
 
 def requested_scope(found, expected, package=None, case_prefix=None, inventory_only=False):

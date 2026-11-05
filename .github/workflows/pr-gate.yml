@@ -62,6 +62,7 @@ jobs:
           python3 scripts/docs_gate_test.py
           python3 scripts/ci_evidence_test.py
           python3 scripts/check_sdk_test.py
+          python3 scripts/fixture_budget_test.py
           python3 scripts/setup_ci_sdk_test.py
           python3 scripts/prepare_native_deps_test.py
           python3 scripts/pinned_cangjie_test.py
