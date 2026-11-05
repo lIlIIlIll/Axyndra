@@ -8,6 +8,7 @@ import json
 import os
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get("AXYNDRA_BINARY", ROOT / "target/release/bin/agent_app"))
 DRIVER = ROOT / "support_tests/provider_driver/target/release/bin/main"
 MARKER = "axyndra-real-smoke"
+sys.path.insert(0, str(ROOT / "support_tests"))
+from provider_operator import install_provider, write_provider_grants
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,7 @@ def write_provider(home: Path, spec: Provider, timeout_millis: int) -> None:
     credentials = home / "credentials"
     credentials.mkdir(exist_ok=True)
     key = credentials / f"{spec.profile}.key"
-    key.write_text(spec.credential + "\n")
+    key.write_text(spec.credential)
     key.chmod(0o600)
     (home / "config.yml").write_text(
         f"schema_version: 1\n"
@@ -122,6 +125,25 @@ def provider_workspace(spec: Provider) -> Iterator[tuple[Path, Path]]:
         home.mkdir()
         workspace.mkdir()
         write_provider(home, spec, 120_000)
+        record = install_provider(BINARY, home, workspace)
+        contribution, suffix = (
+            ("anthropic-messages", "/v1/messages") if spec.protocol == "messages" else
+            ("openai-responses", "/v1/responses") if spec.protocol == "responses" else
+            ("openai-chat-completions", "/v1/chat/completions"))
+        key = spec.profile + ".key"
+        levels = (["low", "medium", "high", "xhigh", "max"] if provider_dialect(spec) == "deepseek_chat"
+                  else ["minimal", "low", "medium", "high", "xhigh", "max"])
+        mapping = dict(version=2, model=spec.profile + "/" + spec.model, wire_model=spec.model,
+            contribution=contribution, provider_id=spec.profile, credential_refs=[key],
+            capabilities=dict(context_window=131072, max_output=8192, endpoint_max_output=None,
+                thinking=dict(mode="effort", levels=levels, tiers=[]), tools=True, parallel_tools=True,
+                images=False, structured_output=False, prompt_cache=False),
+            configuration=dict(base_url=spec.base_url, provider=spec.provider, dialect=provider_dialect(spec),
+                               headers={}, timeout_ms=120000, allow_insecure_http=False))
+        write_provider_grants(home, record, [mapping],
+            [dict(url=spec.base_url + suffix, methods=["POST"], private_addresses=[], credential_refs=[key])],
+            [dict(ref=key, source=dict(file=key), injection=(dict(header="x-api-key", prefix="")
+                if spec.protocol == "messages" else dict(header="Authorization", prefix="Bearer ")))])
         yield home, workspace
 
 

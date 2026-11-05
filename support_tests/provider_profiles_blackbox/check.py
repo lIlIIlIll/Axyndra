@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get("AXYNDRA_BINARY", ROOT / "target/release/bin/agent_app"))
+sys.path.insert(0, str(ROOT / "support_tests"))
+from provider_operator import install_provider, write_provider_grants
 
 
 def handler_for(expected_key: str, reply: str):
@@ -114,10 +117,32 @@ def write_configuration(home: Path, first_port: int, second_port: int):
     )
     first = home / "credentials/profile-one.key"
     second = home / "credentials/profile-two.key"
-    first.write_text("first-secret\n")
-    second.write_text("second-secret\n")
+    first.write_text("first-secret")
+    second.write_text("second-secret")
     first.chmod(0o600)
     second.chmod(0o600)
+
+
+def install_profile_grants(home: Path, first_port: int, second_port: int) -> None:
+    """The fixture operator explicitly installs and pins the real provider."""
+    record = install_provider(BINARY, home, ROOT)
+    mappings, requests, credentials = [], [], []
+    for profile, port in [("profile-one", first_port), ("profile-two", second_port)]:
+        key = profile + ".key"
+        url = "http://127.0.0.1:" + str(port)
+        mappings.append(dict(version=2, model=profile + "/shared-model", wire_model="shared-model",
+            contribution="anthropic-messages", provider_id=profile, credential_refs=[key],
+            capabilities=dict(context_window=131072, max_output=65536, endpoint_max_output=None,
+                thinking=dict(mode="budget", levels=["minimal", "low", "medium", "high", "xhigh", "max"],
+                              tiers=[dict(level=level, tokens=tokens) for level, tokens in
+                                     [("minimal", 1024), ("low", 2048), ("medium", 8192),
+                                      ("high", 16384), ("xhigh", 32768), ("max", 32768)]]),
+                tools=True, parallel_tools=True, images=False, structured_output=False, prompt_cache=False),
+            configuration=dict(base_url=url, provider="anthropic", dialect="anthropic_messages", headers={},
+                               timeout_ms=10000, allow_insecure_http=True)))
+        requests.append(dict(url=url + "/v1/messages", methods=["POST"], private_addresses=["127.0.0.1"], credential_refs=[key]))
+        credentials.append(dict(ref=key, source=dict(file=key), injection=dict(header="x-api-key", prefix="")))
+    write_provider_grants(home, record, mappings, requests, credentials)
 
 
 def invoke(home: Path, model: str) -> str:
@@ -152,6 +177,7 @@ def main() -> None:
                 first.server_port,
                 second.server_port,
             )
+            install_profile_grants(home, first.server_port, second.server_port)
             assert "profile-one-ok" in invoke(
                 home,
                 "profile-one/shared-model",
