@@ -161,7 +161,7 @@ def materialize(root: Path, output: Path, entry: str = "agent_minimal") -> dict:
                         raise SourceBoundaryError("forbidden source import: " + imported)
             selected[source.relative_to(root).as_posix()] = source
     # Build drivers are part of the same bounded source input, before creation.
-    for relative in ["scripts/pinned_cangjie", "scripts/check_sdk.sh", "scripts/sdk_paths.sh",
+    for relative in ["scripts/pinned_cangjie", "scripts/check_sdk.sh", "scripts/ci_toolchain.env", "scripts/sdk_paths.sh",
                      "scripts/prepare_native_deps.sh", "scripts/check_native_compiler.sh"]:
         source = root / relative
         if not source.exists():

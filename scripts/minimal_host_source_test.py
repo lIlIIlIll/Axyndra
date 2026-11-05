@@ -50,6 +50,17 @@ class MinimalHostSourceTests(unittest.TestCase):
             data = (self.base / "minimal" / item["path"]).read_bytes()
             self.assertEqual(hashlib.sha256(data).hexdigest(), item["sha256"])
 
+    def test_pinned_driver_toolchain_configuration_is_materialized_and_hashed(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        configuration = scripts / "ci_toolchain.env"
+        configuration.write_bytes(b'AXYNDRA_CI_CANGJIE_VERSION=pinned-version\n')
+        report = materialize(self.root, self.base / "minimal")
+        copied = self.base / "minimal/scripts/ci_toolchain.env"
+        self.assertEqual(copied.read_bytes(), configuration.read_bytes())
+        entry = next(item for item in report["files"] if item["path"] == "scripts/ci_toolchain.env")
+        self.assertEqual(entry["sha256"], hashlib.sha256(configuration.read_bytes()).hexdigest())
+
     def test_transitive_optional_dependency_rejected_before_output_creation(self):
         self.package("core", 'mcp4cj = { path = "../libs/mcp4cj" }')
         self.package("libs/mcp4cj")
