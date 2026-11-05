@@ -7,7 +7,7 @@ plan: issue #48 T0-02 asks for the list, and removal scope is the maintainer's
 decision.
 
 Regenerate with `python3 scripts/plugin_retirement_inventory.py` (`--json` for
-the machine form). On the current tree: **21 candidates, 19 live, 2 test-only, 0 dead.**
+the machine form). On the current tree: **22 candidates, 20 live, 2 test-only, 0 dead.**
 
 ## How a row qualifies and how usage is measured
 
@@ -24,21 +24,24 @@ the machine form). On the current tree: **21 candidates, 19 live, 2 test-only, 0
 - **Verdict** — `live` (referenced outside itself), `test-only` (only its own
   test), `dead` (no references found).
 
-A `dead` verdict would be evidence for retirement; it is still **not**
-authorisation to delete, because a file that only *reads* older data may remain
-required for rows written by earlier versions (issue #45 §7 forbids lowering
-data-compatibility guarantees to simplify a migration).
+A `dead` verdict identifies a retirement candidate. This inventory does not
+authorize deleting a live implementation. The accepted scope follows
+[issue #48 §0](https://github.com/lIlIIlIll/Axyndra/issues/48): older formats need
+not remain readable, but unsupported formats must be rejected before destructive
+writes and the original files must be preserved. Current native identity,
+authority, cancellation, recovery and isolation requirements still apply.
 
 ## Findings
 
 | Group | Count | Verdict | Note |
 |-------|-------|---------|------|
-| `agent_store/src/legacy_continuation_bridge.cj` | 1 | **live** (186 refs) | Pre-v21 continuation reader; see below |
+| `agent_store/src/legacy_continuation_bridge.cj` | 1 | **live** (196 refs) | Pre-v21 continuation reader; see below |
 | `agent_store/src/plugin_document_latest_journal_compatibility.cj` | 1 | **live** (4 refs) | latest-journal window adapter |
+| `agent_store/src/readonly_exec_bridge.cj` | 1 | **live** (3 refs) | Current native readonly admission bridge; its name does not establish an obsolete compatibility path |
 | `plugins/workflow/src/goal_legacy_migration.cj` | 1 | **live** (3 refs) | goal-form migration reader |
 | `plugins/workflow/src/goal_legacy_migration_test.cj` | 1 | test-only | its own oracle |
 | the ten `agent_product` legacy memory oracles | 10 | 9 live / 1 test-only | legacy memory-behaviour oracles |
-| the six `support_tests` packaged-contract legacy oracles | 6 | live | packaged-contract legacy oracles |
+| the four `support_tests` packaged-contract legacy oracles | 4 | live | packaged-contract legacy oracles |
 | the three `workspace_legacy_oracle` todo oracles | 3 | live | todo/workspace legacy oracles |
 
 ## Why nothing is scheduled for deletion here
@@ -52,7 +55,8 @@ Two reasons, both measured.
    production code: `persistence_runtime/src/sqlite_run_repository.cj` invokes
    `consumeLegacyRunContinuationSource` (`:131`) and
    `optionalLegacyPayloadFromDurableContinuation` (`:1660`). Deleting it would
-   drop the ability to read runs persisted before v21.
+   drop the current pre-v21 reader. That reader exists; continued old-format
+   support is not required by the accepted #48 §0 scope.
 2. **The remaining rows are `live` only because they are test oracles.** They
    are referenced from their own suites, which is why the script's conservative
    filter still finds external mentions; retiring them means retiring the

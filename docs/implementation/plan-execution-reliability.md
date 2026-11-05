@@ -368,10 +368,10 @@ Runtime startup deadlines, permission boundaries, canonical evidence and
 
 | ID | Required observable result | Implementation and evidence | Status | Remaining work |
 | --- | --- | --- | --- | --- |
-| GF1 | Rebuilt pinned toolchain has no observed GC crash in repeated cases and complete Product/App runs | Verified official archives; fresh Product and App artifacts still crash in GC | Not accepted | Operator keeps the official SDK and excludes runtime builds; crash-free acceptance remains incomplete |
+| GF1 | Rebuilt pinned toolchain has no observed GC crash in repeated cases and complete Product/App runs | Verified official archives; fresh Product and App artifacts still crash in GC | Deferred by operator; not accepted | Official SDK stays fixed. GC repair and crash-free acceptance remain incomplete |
 | GF2 | Complete Memory fixture fits composed budgets; cancellation reaps nested sessions | 138/138 Native units, 40/40 protocol cases, 1010.16 s; four process-budget regressions | Accepted for this fixture | Full workspace/release acceptance is separate |
-| GF3 | Control requests respond before unrelated plugins start; model Runs freeze the full required ready Catalog | Owner readiness coordinator and actual preparation before model/command execution | Partial implementation; acceptance failed | Three preparation cases crash; final provider, read and ACP blackboxes fail at original deadlines |
-| GF4 | Real Pi and Native roots execute the exact readonly plugin and Host ReadView through a canonical three-node tree | Four independent real entries pass; 11 selection-field corruptions reject; four Direct Native fault/budget cases pass | Focused contracts accepted; full lifecycle acceptance partial | Compound process still exhausts retained capacity; disable/cancel/restart matrix remains unverified |
+| GF3 | Control requests respond before unrelated plugins start; model Runs freeze the full required ready Catalog | Owner readiness coordinator and actual preparation before model/command execution | Partial; metadata startup and physical retirement accepted | Model preparation, provider, read and ACP acceptance remains incomplete |
+| GF4 | Real Pi and Native roots execute the exact readonly plugin and Host ReadView through a canonical three-node tree | Four independent real entries pass; 11 selection-field corruptions reject; four Direct Native fault/budget cases pass | Focused and compound contracts accepted; full lifecycle partial | Disable, cancellation and restart matrix remains unverified |
 | GF5 | Final candidate, full original gates and latest-commit CI agree | Final production build and fresh nine-plugin Coding package pass; Store 256/256, App 38/40 | Not accepted | Original blackboxes and GC acceptance fail; complete Product/release gates and hosted CI are not green |
 
 ### Follow-up implementation checkpoint
@@ -532,3 +532,83 @@ no local machine path is part of this repository record:
 The PR remains Draft. Overall conclusion: **not fully complete**. No Issue
 closure, release readiness, complete Product run, repeated crash-free run,
 full cancellation/restart matrix or hosted-CI success is claimed.
+
+
+### Non-GC continuation: preparation custody and early Owner probes
+
+The operator defers GC repair and requests completion of the remaining work.
+This decision does not mark a crash as passed or identify every timeout as GC.
+The official SDK, dependency pins, original execution deadlines, 144 MiB
+aggregate, 16 MiB reservation floors, 32-slot ceiling and SUM accounting stay fixed.
+
+GF4 now passes the original compound entries in one process. Read-view
+preparation previously returned transport-backed proposal data without retiring
+its payload. Each selected preparation retained two message reservations.
+The actual mounted descriptor now supplies an owned canonical-data producer.
+Core and the existing Direct/Host consumer prepay independent copies before
+the original transport is retired. Unknown producers remain registered and paid.
+This protocol grants no Source, permission, child admission or replay authority.
+
+The final contract executable SHA-256 is
+`67aac90ca6b9322a14c613de063df2092bdbff2e73b3e20e2d7935cf1ffcffe1`.
+Its build takes 636.86 seconds. The Direct Native compound takes 4.71 seconds;
+the four-root compound takes 16.20 seconds. Both pass all original assertions
+and physical process checks. The Direct Native entry includes successful
+execution, two-call and one-call rejection, missing-file failure and an already
+spent budget. The four-root entry covers Pi, Native and both Direct variants.
+The three actual Operations, their reserved Receipts and all eleven selection
+field corruption checks remain required. Before the fix, the missing-file case
+produced only two Receipts after `extension.payload_capacity`. Its post-close
+shared charge was 117,440,512 bytes. The first repaired run returns that charge
+to 16,777,216 bytes. Raw Registry copies still retain their own payment.
+
+GF3 also fixes a separate startup defect. The listener accepted early ping
+requests before `configuration180` was bound by background Product assembly.
+Constructing the physical peer then failed, leaving its original slot held.
+The worker now installs the same trusted configuration before listening.
+Frontend execution still joins actual Product assembly. Lifetime observation
+joins transient handshakes and preserves other authenticated frontends and
+real persistent services. Shutdown errors retain their structured cause and
+bounded retirement phase instead of only the generic carrier message.
+
+The clean-environment test now runs all original functional assertions inside
+the existing strict process watcher. The inner command still has its original
+20-second deadline. Forced reaping or an unknown process identity fails the
+test. The old candidate fails this regression; the repaired candidate passes
+three consecutive runs with no survivors, forced cleanup or unknown identities.
+The current host candidate SHA-256 is
+`e5c206ce24aae22d5c894e3d841edbf055c520f500b03250ccf0193576a0ddc3`.
+It uses the nine byte-verified plugins from the successful fresh Coding build.
+This host-only repackaging is not a new complete distribution-build claim.
+
+Final production Product and App builds take 239.07 and 268.10 seconds.
+The preceding complete Tool, Core, Host, Product and App build also passes.
+A full Coding build passes in 877.59 seconds; an earlier attempt received
+SIGTERM without a complete receipt and remains recorded as interrupted.
+A minimal fixed-SDK probe confirms that a completed `Future<Unit>.tryGet()`
+returns `Some`. No SDK component was built or modified.
+
+The current entry-mode test still fails during execution after its metadata
+cases. ACP prompt and provider-profile tests also fail. These are not accepted
+or automatically attributed to GC. Complete current-source unit, lifecycle,
+distribution, performance and hosted-CI acceptance remains open. GitHub Actions
+is enabled, but the pushed starting head has no run records. The PR stays Draft.
+
+Private evidence files for this checkpoint are `bridge-final.json`,
+`direct-native-final.log`, `compound-final.log`, `clean-env-regression.json`,
+`clean-env-evidence/`, `owner-ready-builds.json` and `owner-ready.json`.
+The existing Epic matrix remains the full requirement inventory.
+Implementation checkpoints are `36ef29cf` (preparation custody) and
+`e109c9a8` (early Owner probes and physical-retirement regression).
+
+
+The current affected Python regression group passes 100/100. Its compiler
+identity probe now sends both native-library and network-bridge output to the
+probe's own directory. `pinned_cangjie` copies the explicitly selected bridge
+instead of trying to rewrite the checkout during the probe. The normal output
+path is unchanged. The complete architecture gate passes, including 15 internal
+checks, all 61 plugin-package boundaries, all ten reusable-library boundaries,
+the current dependency graph and the retirement inventory. The inventory now
+records the already present native readonly bridge as a name-marker candidate,
+without treating that name as evidence of an obsolete compatibility layer.
+The probe isolation checkpoint is `163804e1`.

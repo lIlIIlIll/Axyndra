@@ -1376,6 +1376,22 @@ use installed canonical contributions. Restoring a fake builtin is not allowed.
 The exact source-only inventory is `worker-incarnation221.SjQMBX/obsolete-builtin-preconditions.json`;
 this migration is not behavioral acceptance evidence.
 
+## Current non-GC continuation
+
+GC repair is deferred by the operator. The official SDK stays pinned; no SDK
+component build is authorized. This does not waive crash-free acceptance.
+The current preparation-custody and early Owner-probe fixes pass the original
+same-process readonly bridge entries and strict clean-environment retirement.
+The old candidate fails the retirement regression; the repaired candidate
+passes three consecutive runs. Execution through entry modes, ACP prompt and
+provider profiles still fails and remains unaccepted. The complete current
+unit, lifecycle, distribution, performance and CI matrix remains open.
+
+See [the current follow-up evidence](implementation/plan-execution-reliability.md#non-gc-continuation-preparation-custody-and-early-owner-probes)
+for source changes, artifact hashes, original failure evidence and verification
+boundaries. The rows below remain the authoritative full requirement inventory;
+older checkpoint failures are not independently confirmed current defects.
+
 ## Requirement–implementation–acceptance matrix
 
 R means required. Source references are the original
