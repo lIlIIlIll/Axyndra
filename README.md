@@ -9,7 +9,13 @@
 
 ## 快速开始
 
-准备仓颉环境后：
+源码构建默认要求 CJC `1.3.0-alpha.20261104001050`、CJPM
+`1.3.0-alpha.09` 或更新版本，以及匹配的 stdx。CI 固定版本和校验和见
+[`scripts/ci_toolchain.env`](scripts/ci_toolchain.env)。从旧 SDK 升级后，重新构建
+宿主和独立插件包，避免混用不同 SDK 的产物。当前官方 SDK 仍有未解决的 GC
+崩溃，验证范围见[验收台账](docs/implementation/plan-execution-reliability.md)。
+
+准备符合上述要求的仓颉环境后：
 
 ```sh
 scripts/pinned_cangjie cjpm build -m agent_app -o agent_app

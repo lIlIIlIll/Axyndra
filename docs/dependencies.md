@@ -163,7 +163,7 @@ persistence_runtime
 - `scripts/pinned_cangjie` 先通过 `scripts/check_sdk.sh` 校验 SDK，再解析 stdx，设置 `CANGJIE_STDX_PATH`，并无条件调用 `scripts/prepare_native_deps.sh`。
 - `scripts/check_native_compiler.sh` 是 native compiler validation 的单一入口：它使用 `AXYNDRA_NATIVE_CC` 或 `PATH` 中的 `clang`，要求 LLVM/Clang >= 15，并执行 C11/Linux capability probe。开发构建和 source-package staging 都在编译 `process4cj_native.c` 前调用该检查；LLVM 15 是 reference/release baseline，而非唯一兼容版本。
 - `scripts/package_candidate.sh` 先验证 SDK、完整 stdx、构建出的产品 executable 和 `patchelf`，再以 `ldd` 递归收集 process-native、SDK、tools 和 stdx 动态库，并检查最终诊断中没有 `not found`。
-- `.github/workflows/pr-gate.yml` 以 LLVM 15 和 STS 1.1.3 作为 reference baseline；nightly gate 以匹配的 nightly SDK/stdx 和 LLVM 18 覆盖前向兼容，并把 SDK/stdx 检查放在构建测试之前。
+- `.github/workflows/pr-gate.yml` 使用 LLVM 15，并按 `scripts/ci_toolchain.env` 固定 CJC `1.3.0-alpha.20261104001050`、CJPM `1.3.0-alpha.09` 及匹配 stdx；SDK/stdx 下载物在使用前校验 SHA-256。`check_sdk.sh` 默认拒绝低于这组最低版本的工具链。升级后须用选定 SDK 重建宿主与独立插件包。nightly gate 使用匹配的浮动 nightly SDK/stdx 和 LLVM 18，作为独立兼容性检查，不替代固定版本验收。
 
 `process4cj.fillSecureRandom` 是 ProductIds、retry jitter 和 broker token 的现有安全随机实现，底层使用 Linux getrandom C ABI；它已从 stdx.crypto 解耦，但仍属于最终 native 物料闭包。
 
