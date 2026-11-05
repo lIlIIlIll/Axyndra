@@ -8,8 +8,11 @@ import std.unittest.testmacro.*
 
 // Only termination is fault-injected. Launch, stdio, wait, liveness and close
 // use the real native backend and an actual owned subprocess/supervisor.
-class TerminationFaultPlatform <: ProcessPlatformProcess {
-    let inner: ProcessPlatformProcess
+// Preserve the delegate type across test-only O2 compilation. A nongeneric
+// interface delegate compiles to a nonreturning loop in the pinned compiler.
+// The same real backend and fault injection remain.
+class TerminationFaultPlatform<T> <: ProcessPlatformProcess where T <: ProcessPlatformProcess {
+    let inner: T
     let attempts = AtomicInt64(0)
     let forcedAttempts = AtomicInt64(0)
     private let lock = Mutex()
@@ -17,7 +20,7 @@ class TerminationFaultPlatform <: ProcessPlatformProcess {
     private let throwsFirst: Bool
     private let forcedOnly: Bool
 
-    init(inner: ProcessPlatformProcess, throwsFirst: Bool, forcedOnly: Bool) {
+    init(inner: T, throwsFirst: Bool, forcedOnly: Bool) {
         this.inner = inner; this.throwsFirst = throwsFirst; this.forcedOnly = forcedOnly
     }
     public prop pid: Int64 { get() { inner.pid } }
@@ -50,7 +53,7 @@ class TerminationFaultPlatform <: ProcessPlatformProcess {
 class TerminationFaultBackend <: ProcessBackend {
     private let throwsFirst: Bool
     private let forcedOnly: Bool
-    var launched: ?TerminationFaultPlatform = None
+    var launched: ?TerminationFaultPlatform<ProcessPlatformProcess> = None
     init(throwsFirst!: Bool = false, forcedOnly!: Bool = true) {
         this.throwsFirst = throwsFirst; this.forcedOnly = forcedOnly
     }
