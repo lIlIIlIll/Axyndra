@@ -12,8 +12,8 @@ The working tree includes protected-root normalization, actual owner-return
 rendezvous, phase-specific validation, paid metadata ownership and approved
 Workflow/terminal-query changes. Each row records its own immutable source and
 artifact scope; source presence and older passes are not final acceptance.
-Local checkpoint commits exist. No push, ready-for-review transition, merge, or
-issue closure is authorized. Evidence paths below are relative to the retained `<evidence>`
+Local checkpoints and updates to the existing Draft PR are authorized.
+Ready-for-review, merge and Issue closure are not authorized. Evidence paths below are relative to the retained `<evidence>`
 directory; local paths, credentials, and host identifiers are not publication inputs.
 
 App03 is `734dfbe5e8a57af08a593877186f1682c69570380125263b3d987b130a96c83c`.
@@ -1734,3 +1734,47 @@ required. Reverting these source changes restores the previous comparison
 and fixture behavior without changing stored data.
 SIGSEGV diagnosis, release timing, other PR gates, Ready, merge, and Issue
 closure remain outside this task. Use `Refs #45`.
+
+
+## 2026-11-06 non-GC continuation
+
+The original 30 requirements and six completion criteria remain required.
+GC repair is deferred by the operator; this does not turn a crash or an
+unexecuted case into a pass. The current detailed checkpoint is
+[the plan-execution record](implementation/plan-execution-reliability.md#non-gc-verification-checkpoint-2026-11-06).
+
+| Evidence | Executed source and scope | Actual result and remaining limit | Retained entry point |
+| --- | --- | --- | --- |
+| E957 | Official fixed SDK, fresh default target; `e230ed06` Memory runner and scoped workspace continuation | Latest-context completes all 138 Native plus 40 protocol cases at unchanged stage limits. The initial full gate remains failed. After the Process4cj repair, 27/29 workspace packages pass 1,388 cases; Product and App remain failed. | `acceptance-units/summary.json`; `acceptance-continuation/summary.json` |
+| E958 | `9fac0812` and `e7d69019`; original Process4cj O2 tests and Product fixture assertions | Process4cj 43/43 pass. Eight Product setup cases pass. Large-history prepayment keeps its original 64 MiB physical amount, then reaches crashes rather than passing. Old Product model claims remain rejected by the actual installed Host seal. | `process-generic-final/summary.json`; `product-targeted-final/summary.json` |
+| E959 | `9aa5d7cb` bridge contract and actual Native fixtures; executable `f416da825df75378f5e4a1dee6eae8a7a7c54601a45e253d972248a178a01d0a` | Formal 24/24 pass: 22 lifecycle cases plus both original compound entries, including three retained original Receipts after cancellation/revocation. No forced reaping, survivors or unknown process identity. Standalone readonly Shell 9/9 pass. Whole focused/release acceptance is separate. | `bridge-formal-final/summary.json`; `readonly-units.json` |
+| E960 | `1d780f7d`; real App with explicit-input, unbundled diagnostic packaging | Both independent provider profiles pass the original five-second calls. This is not lean Minimal or full distribution acceptance. Coding import has a retained GC core. Automatic approval rejects the proposed live DeepSeek prompt/credential egress before execution. | `profile-original-gate.json`; `profile-shared-gate.json`; `profile-current2.strace` |
+
+The exhaustive Product diagnostic attempts all 1,074 cases: 478 pass,
+540 SIGSEGV and 56 other failures. A later targeted rerun passes nine of those
+56, with eight attributable setup repairs; 47 remain failed, including further
+crashes. Do not count all SIGSEGV as the same SDK defect. Do not replace the
+old positive model-resource fixtures with a permissive Host claim check.
+Genuine Minimal/Coding/Full distribution acceptance, remaining current Product
+contracts, original `4d88fa6072f7176a6d236a1cb39b33529d5b609d` performance
+comparison and hosted pinned CI remain required. Refs #45; the PR remains Draft.
+
+
+| Evidence | Executed source and scope | Actual result and remaining limit | Retained entry point |
+| --- | --- | --- | --- |
+| E961 | `ed9b4dd3`, genuine Minimal and actual installed model path | Ten CLI contracts and ten local-HTTP model contracts pass. Original long-path binary fails; repaired package passes at unchanged deadlines. No external-model availability claim. | `minimal-http-fixed.json`; `minimal-model-long-before.json`; `minimal-model-long-after.json` |
+| E962 | `a22a0913`, isolated 19-package Minimal source closure | Fresh build, Registry 36, History 4 and nine original CLI blackboxes pass. Optional source and compiled caches are absent. This is separate from portable-package evidence. | `minimal-closure-final/summary.json` |
+| E963 | `c2d074a1`, actual independent MCP Client and Server | Client 51 and Server 20 protocol cases pass. Full17 Product mounting reaches a physical crash rather than passing. | `mcp-pair-current/package-validation/summary.json`; `workflow-mcp-current2/summary.json` |
+| E964 | Final App executable `90cf58506537f342faf5f3e33acbe8e0da51b63ad085ea86bdc679a344c17dc2`, freshly built Coding nine and Full seventeen packages | Both packaging, setup and clean-env checks pass. Three profile or entry cores confirm GC enumeration. Coding read lacks operator configuration. Isolated ACP reaches prompt handling but disconnects. Entry and ACP acceptance remain failed. | `distributions-final.json`; `distribution-core-evidence.json`; `acp-isolated-current.json` |
+| E965 | Original `4d88fa6` source with audited same-revision lock-format bridge and fixed SDK, against final Coding | Both pass 100 cold starts. Baseline passes all 40 TUI runs at p95 263.8 ms. Candidate TUI run one exits 1. No candidate p95, release or performance-comparison pass is claimed. | `baseline-cjpm1-bridge.json`; `baseline-cjpm1-build.json`; `performance-final.json` |
+| E966 | `1290a9f8`, original Workflow invariants with current valid schema and budget inputs | All bounded compilation stages pass. New schema-error case passes, retaining canonical failure facts without handoff or children. Seven other focused cases crash and remain unaccepted. | `workflow-mcp-current2/summary.json`; `workflow-schema-current/summary.json` |
+
+The complete PR remains **incomplete**. The headless TUI retirement path,
+legacy positive Model-resource fixture migration, remaining Product contracts,
+full focused and release gates, real-provider authorization and hosted pinned
+CI remain open. GC repair is deferred, not passed. The detailed follow-up is in
+[the execution record](implementation/plan-execution-reliability.md#actual-minimal-distribution-and-baseline-follow-up).
+
+Current checkpoint validation also passes 102 Python regressions and the full
+architecture gate. The 16 Minimal-source Python regressions pass separately.
+These results do not close the remaining Product and release requirements.

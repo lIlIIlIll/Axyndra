@@ -371,7 +371,7 @@ Runtime startup deadlines, permission boundaries, canonical evidence and
 | GF1 | Rebuilt pinned toolchain has no observed GC crash in repeated cases and complete Product/App runs | Verified official archives; fresh Product and App artifacts still crash in GC | Deferred by operator; not accepted | Official SDK stays fixed. GC repair and crash-free acceptance remain incomplete |
 | GF2 | Complete Memory fixture fits composed budgets; cancellation reaps nested sessions | 138/138 Native units, 40/40 protocol cases, 1010.16 s; four process-budget regressions | Accepted for this fixture | Full workspace/release acceptance is separate |
 | GF3 | Control requests respond before unrelated plugins start; model Runs freeze the full required ready Catalog | Owner readiness coordinator and actual preparation before model/command execution | Partial; metadata startup and physical retirement accepted | Model preparation, provider, read and ACP acceptance remains incomplete |
-| GF4 | Real Pi and Native roots execute the exact readonly plugin and Host ReadView through a canonical three-node tree | Four independent real entries pass; 11 selection-field corruptions reject; four Direct Native fault/budget cases pass | Focused and compound contracts accepted; full lifecycle partial | Disable, cancellation and restart matrix remains unverified |
+| GF4 | Real Pi and Native roots execute the exact readonly plugin and Host ReadView through a canonical three-node tree | Four independent real entries pass; 11 selection-field corruptions reject; four Direct Native fault/budget cases pass | Focused, compound and 22 lifecycle cases accepted | Complete Product, distribution and release acceptance remains open |
 | GF5 | Final candidate, full original gates and latest-commit CI agree | Final production build and fresh nine-plugin Coding package pass; Store 256/256, App 38/40 | Not accepted | Original blackboxes and GC acceptance fail; complete Product/release gates and hosted CI are not green |
 
 ### Follow-up implementation checkpoint
@@ -612,3 +612,183 @@ the current dependency graph and the retirement inventory. The inventory now
 records the already present native readonly bridge as a name-marker candidate,
 without treating that name as evidence of an obsolete compatibility layer.
 The probe isolation checkpoint is `163804e1`.
+
+
+## Non-GC verification checkpoint, 2026-11-06
+
+The official SDK and stdx stay fixed at the preceding checkpoint. No SDK
+component was built or modified. GC repair is deferred, not accepted. Existing
+execution deadlines, permission checks, 144 MiB bank, 16 MiB floors, 32 slots
+and SUM accounting remain unchanged.
+
+The fresh default-target unit gate compiles all eight bounded dependency
+stages and completes fourteen package preparers. It then fails during the
+latest-context Memory preparer: its serial Native run reaches 122 of 138 cases
+before the original 900-second stage deadline. No workspace unit case receives
+credit from that failed gate. The ordinary Memory preparer already uses two
+isolated workers. `e230ed06` applies that same runner to latest-context without
+removing a case or changing a deadline. Its complete 138 Native and 40 protocol
+cases then pass; the observed full preparation takes 701.72 seconds.
+
+A scoped continuation verifies the existing prepared package hashes, finishes
+the three remaining preparers and runs every workspace package. Together with
+the Process4cj fix below, 27 of 29 packages pass 1,388 cases. This continuation
+is not a passing canonical full unit gate. App passes 38 of 40; its other two
+cases have explicit GC crash stacks. Product's canonical isolated runner stops
+at a GC error after ten passes. A separate diagnostic executes its unchanged
+1,074-case binary in independent processes: 478 pass, 540 report SIGSEGV and
+56 fail without SIGSEGV. A SIGSEGV alone is not proof of an SDK GC defect.
+
+Process4cj's five timeouts are independent of GC. A retained minimal probe
+passes ordinary O0/O2 compilation and test-only O0, but times out in test-only
+O2. Its delegate getter and wait method contain nonreturning loops. Preserving
+the delegate type with a generic fixture avoids that compilation result.
+`9fac0812` rebuilds and passes all 43 original cases at O2, with no assertion or
+deadline change. `e7d69019` also fixes eight Product fixture setup failures:
+temporary directories follow TMPDIR and version updates reuse their directory.
+Two large-history oracles now use the API's correct units: 8 MiB logical bytes
+still prepay the original 64 MiB physical copy budget. They reach execution and
+then crash; their large-content assertions remain unaccepted. The targeted
+56-case rerun passes nine and fails 47; one additional pass has no established
+fix and is not counted among the eight repaired setups.
+
+The model-resource failures expose a separate test migration gap. Old Product
+claims do not satisfy the Host's internal installed-provider seal. The Host
+check stays strict. The old positive fixtures must move to the actual installed
+path; they are not reclassified as GC or passed by admitting compatibility
+claims.
+
+GF4's new formal runner, `scripts/readonly_bridge_lifecycle_gate.py`, passes all
+24 entries: 22 lifecycle cases and both original compound entries. The final
+contract executable SHA-256 is `f416da825df75378f5e4a1dee6eae8a7a7c54601a45e253d972248a178a01d0a`.
+Pi, Native and both Direct entries cover disabled selection, withdrawn service
+grants, cancellation and revocation after actual worker handoff, and reopening
+a completed journal without replay before a distinct new root. Direct entries
+also cover an already-cancelled caller. Cancellation and revocation retain
+three actual Operations and all three original reserved Receipts. Every case
+passes physical observation without survivors, forced reaping or unknown
+identities. Physical exit does not acknowledge DATA. The Direct serialization
+scratch returns from its complete helper before payload release.
+
+The runner is connected to the existing focused gate. Focused and release
+entry points now prepare the Native Workspace, Program and readonly Shell
+packages their standalone contracts require; a child unit-gate environment
+cannot provide these variables to its parent. Standalone readonly Shell also
+passes all nine original Cangjie unit cases. These results do not claim that
+the complete focused or release gate has passed.
+
+Provider-profile setup now imports and enables the real package through the
+CLI, uses its returned content digest and writes explicit operator grants.
+The original two keys, two profiles and five-second invocation deadlines stay
+required. The local blackbox passes twice, and again through the shared
+operator helper. Its binary is the full App supplied explicitly to an
+unbundled diagnostic recipe; this is actual App/Host proof, not acceptance of
+the lean `agent_minimal` component or the complete Minimal distribution.
+The Coding attempt fails during import; its retained core reports GC field
+enumeration on a scheduler worker. A widened, traced wait is diagnostic only
+and never substitutes for the original deadline.
+
+Real-provider smoke uses the same explicit installed grants. Its two proposed
+DeepSeek normal-output calls were rejected by automatic approval review before
+execution because the external prompt and credential use lacked explicit
+payload-and-destination approval. No workaround or live call was performed.
+The existing full PR matrix, genuine distribution builds, remaining Product
+contracts, original baseline measurements and hosted pinned CI remain open.
+PR #49 stays Draft.
+
+Evidence for this checkpoint is retained under `<evidence>`:
+`acceptance-units/summary.json`, `acceptance-continuation/summary.json`,
+`process-generic-final/summary.json`, `product-all-direct-cases/summary.json`,
+`product-targeted-final/summary.json`, `bridge-formal-final/summary.json`,
+`readonly-units.json`, `profile-original-gate.json` and
+`profile-shared-gate.json`. The bridge summary contains source and fixture
+hashes as well as every actual command and process receipt. Current logical
+checkpoints are `e230ed06`, `9fac0812`, `e7d69019`, `1d780f7d` and `9aa5d7cb`.
+No production API or database migration is introduced by these test and
+fixture follow-ups. Reverting them restores the preceding test/gate behavior.
+
+
+### Actual Minimal, distribution and baseline follow-up
+
+This follow-up uses the same official SDK and stdx hashes above. No SDK
+component was built. GC repair remains deferred. The production HTTP change is
+`ed9b4dd3`; subsequent commits through `a22a0913` change fixtures and gates.
+
+The genuine `agent_minimal` build and portable package pass all ten actual CLI
+contracts. Its installed model path also passes ten contracts against a local
+HTTP peer, including Chat Completions, Responses and Messages, canonical
+Decisions, unknown usage, missing secrets, cancellation and partial responses.
+The model contract now deliberately uses a long installed-package path.
+The preceding binary fails before HTTP with curl error 100. The repaired
+binary passes the same contract without tracing or longer deadlines.
+The fixed HTTP launcher uses literal `/usr/bin/env HOME=/tmp /usr/bin/curl`.
+Package code cannot choose this executable or assignment. The original
+sandbox, network policy, CA bundle, credentials and resource limits remain.
+No database or public API migration is required. Reverting this change restores
+the preceding curl invocation and its observed long-HOME failure.
+
+The separate Minimal source-closure gate also passes. It materializes 19
+packages without Product, optional business packages or compiled caches, then
+builds a fresh executable and runs Registry 36, History 4 and nine original CLI
+blackboxes. The gate initially exposed a missing `ci_toolchain.env` input.
+`a22a0913` includes and hashes that input. The closure executable hash is
+`929549fe83213cf80023b84069c8b2eb21fba522be96425f6a1aabd8fe9c73d6`.
+This gate does not by itself prove a portable distribution or external models.
+
+`c2d074a1` prepares the real MCP Server sibling alongside the Client. Both
+independent packages build and pass all 51 Client and 20 Server protocol cases.
+The server manifest, binary, libraries and licenses are checked against their
+actual packaged provenance. A missing sibling can no longer be replaced by a
+fabricated package. The subsequent actual Full17 Product case crashes, so its
+Product-level acceptance remains open.
+
+The final App binary, `90cf58506537f342faf5f3e33acbe8e0da51b63ad085ea86bdc679a344c17dc2`,
+produces fresh Coding nine-package and Full seventeen-package distributions.
+Both pass setup and clean-environment checks. Both provider-profile imports
+crash. Full's entry-mode attempt also crashes. Their three retained cores show
+`GCTib.ForEachBitmapWord` and `Mutator.GcPhaseEnum`; a disconnect alone is not
+used as that evidence. Coding's read entry separately reports missing operator
+configuration. `e0f84051` fixes ACP's use of the developer's default home and
+prevents its cleanup assertion from masking the first protocol failure.
+The isolated rerun reaches prompt handling, then loses the Owner connection.
+ACP and entry-mode acceptance remain failed.
+
+The immutable original baseline is `4d88fa6072f7176a6d236a1cb39b33529d5b609d`.
+Its unmodified lock-v0 build fails dependency resolution with this SDK.
+A separate audited build copy converts lock serialization to v1 with the same
+reviewed dependency commits; all Cangjie source bytes remain unchanged. This
+adapted baseline builds with the same fixed SDK and clang15. It passes 100 cold
+starts and 40 TUI runs, with p50 263.7 ms and p95 263.8 ms. Final Coding passes
+100 cold starts. Its original TUI gate fails at run one with exit 1, despite
+rendering 14 frames. No 40-run candidate p95 or baseline comparison is accepted.
+The headless TUI returns before the Screen retirement used by the native path;
+that lifecycle gap is still under investigation, not waived as GC.
+
+`1290a9f8` supplies required shared batch context, uses a valid zero-child
+budget for pre-admission refusal and makes the negative yield payload satisfy
+its public schema. It preserves the original wave, count, cancellation and
+Receipt assertions. Schema-valid business errors and the original
+schema-invalid inputs are covered separately. The latter passes with 1,075
+tests enumerated and one selected case: each rejected call retains its unique
+canonical failure Operation and Receipt, with no execution handoff or child.
+Seven other selected Product cases crash. Compilation is not their acceptance.
+`eeffd4a8` also preserves old test artifacts across mount boundaries: exclusive
+copy and both SHA checks precede removal of the original. Its two new Python
+regressions pass; failed copies leave the original intact.
+
+Private evidence under `<evidence>` includes `minimal-model-long-before.json`,
+`minimal-model-long-after.json`, `minimal-http-fixed.json`,
+`minimal-closure-final/summary.json`, `mcp-pair-current/package-validation/summary.json`,
+`distributions-final.json`, `distribution-core-evidence.json`,
+`workflow-mcp-current2/summary.json`, `workflow-schema-current/summary.json`,
+`baseline-cjpm1-bridge.json`, `baseline-cjpm1-build.json`,
+`performance-final.json` and `acp-isolated-current.json`.
+The original full unit, focused, release and hosted pinned CI requirements
+remain open. No live DeepSeek request has run. Explicit external-payload
+approval has been requested after automatic review rejected the earlier call.
+
+Current Python regressions pass 102/102. The full architecture gate passes,
+including documentation, dependency pins, library boundaries and the 39-package
+inventory. Minimal source materialization separately passes all 16 Python
+cases. Evidence is `static-gates-final-checkpoint.json` and its named logs.
+These static results do not replace failed Product or release contracts.
