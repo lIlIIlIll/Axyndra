@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -82,8 +83,45 @@ def main() -> None:
         assert not any(value in evidence for value in forbidden), evidence
         for member, expected in provenance["host_files"].items():
             assert hashlib.sha256((relocated / member).read_bytes()).hexdigest() == expected, member
-    print("package candidate clean-environment contract passed")
+    print("package candidate clean-environment functional assertions passed")
+
+
+def checked_main() -> int:
+    # Keep every original functional assertion and its 20-second command cap.
+    # A distinct watcher also requires the actual Owner and descendants to
+    # return. Reaping a leftover process is failure, never successful cleanup.
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "scripts"))
+    from rpc_case_process_watch import run_host_case
+
+    evidence_root = os.environ.get("AXYNDRA_EVIDENCE_DIR")
+    if evidence_root:
+        Path(evidence_root).mkdir(parents=True, exist_ok=True)
+    evidence = Path(tempfile.mkdtemp(prefix="clean-environment-", dir=evidence_root))
+    try:
+        result = run_host_case(
+            [sys.executable, str(Path(__file__).resolve()), "--functional-worker"],
+            evidence / "contract.log",
+            60,
+            cwd=root,
+        )
+        print((evidence / "contract.log").read_text(), end="", flush=True)
+        if result["exit_code"] != 0:
+            print("clean-environment process custody failed; retained " + evidence.name, file=sys.stderr)
+            return 1
+        if not evidence_root:
+            shutil.rmtree(evidence)
+        print("package candidate clean-environment contract passed")
+        return 0
+    except BaseException:
+        print("clean-environment evidence retained: " + evidence.name, file=sys.stderr)
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--functional-worker"]:
+        main()
+    elif sys.argv[1:]:
+        raise SystemExit("unexpected clean-environment contract arguments")
+    else:
+        raise SystemExit(checked_main())

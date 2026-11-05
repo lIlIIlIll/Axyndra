@@ -1725,6 +1725,7 @@ class ActualProcessBrokerSlot180{
     private var lifetimeObservationAnswer180:?Bool=None<Bool>
     private var frontendRequest180=""
     private var retiringFrontendRequest180=""
+    private var retirementPhase180="reserved"
     private var inboundCodec180:?ProcessBrokerOwner180=None<ProcessBrokerOwner180>
     init(root:ActualProcessBrokerRoot180){this.root=root}
     func reserveBeforeAccept180():Bool{
@@ -1735,13 +1736,22 @@ class ActualProcessBrokerSlot180{
             let value=root.newRegisteredData180();paid=Some(value)
             socketReturned=false;outputReturned=false;unknownSpawn=false;futureReturned=false
             lifetimeObservationRequested180=false;lifetimeObservationAnswer180=None<Bool>
-            frontendRequest180="";retiringFrontendRequest180="";true
+            frontendRequest180="";retiringFrontendRequest180="";retirementPhase180="reserved";true
         }finally{lock.unlock()}
     }
     func isLifetimeObservation180():Bool{lock.lock();try{paid.isSome() && lifetimeObservationRequested180}finally{lock.unlock()}}
     func isVacant180():Bool{lock.lock();try{paid.isNone() && !joining}finally{lock.unlock()}}
     func registerFrontendRequest180(id:String):Unit{
         lock.lock();try{frontendRequest180=id}finally{lock.unlock()}}
+    func pendingFrontendPhase180(id:String):?String{lock.lock();try{
+        if(frontendRequest180==id && paid.isSome()){Some(retirementPhase180)}else{None<String>}
+    }finally{lock.unlock()}}
+    func pendingTransientPhase180():?String{lock.lock();try{
+        if(paid.isNone() || (worker.isNone() && !futureReturned) || lifetimeObservationRequested180 || frontendRequest180!=""){return None<String>}
+        Some(retirementPhase180)
+    }finally{lock.unlock()}}
+    private func noteRetirementPhase180(phase:String):Unit{lock.lock();try{retirementPhase180=phase}finally{lock.unlock()}}
+    func hasAuthenticatedFrontend180():Bool{lock.lock();try{frontendRequest180!=""}finally{lock.unlock()}}
     private func frontendRequestIdentity180():String{
         lock.lock();try{frontendRequest180}finally{lock.unlock()}}
     func waitsForFrontend180(other:ActualProcessBrokerSlot180):Bool{
@@ -1755,8 +1765,12 @@ class ActualProcessBrokerSlot180{
         while(true){
             lock.lock();let answer=try{lifetimeObservationAnswer180}finally{lock.unlock()}
             match(answer){case Some(value)=>return value;case None=>()}
-            if(MonoTime.now()>=until){throw OwnedCanonicalDataFailure113(AgentError(
-                AgentErrorKind.Timeout,"owner.frontend_retirement_pending","original frontend helper has not retired"))}
+            if(MonoTime.now()>=until){
+                let phase=root.pendingFrontendPhase180(retiringId)
+                currentData180().fund(65536+phase.size*8,128)
+                throw OwnedCanonicalDataFailure113(AgentError(
+                    AgentErrorKind.Timeout,"owner.frontend_retirement_pending","original frontend helper has not retired",
+                    fields:[ErrorField("phase",phase)]))}
             sleep(Duration.millisecond*10)
         }
         true
@@ -1893,10 +1907,10 @@ class ActualProcessBrokerSlot180{
         match (actual) {
             case Some(peer) =>
                 match (peer.closeConcreteFrontendHelper180()) {
-                    case Result.Err(error) => retainOriginal180(OwnedCanonicalDataFailure113(error)); return false
+                    case Result.Err(error) => noteRetirementPhase180("frontend_cleanup"); retainOriginal180(OwnedCanonicalDataFailure113(error)); return false
                     case Result.Ok(_) => () }
                 match (peer.retireAfterOriginalEnclosingHelpers180()) {
-                    case Result.Err(error) => retainOriginal180(OwnedCanonicalDataFailure113(error)); return false
+                    case Result.Err(error) => noteRetirementPhase180("peer_cleanup"); retainOriginal180(OwnedCanonicalDataFailure113(error)); return false
                     case Result.Ok(_) => () }
                 lock.lock(); try { frontendPeer180 = None<ActualProductOwnerPeer180> } finally { lock.unlock() }
             case None => () }
@@ -1908,12 +1922,12 @@ class ActualProcessBrokerSlot180{
         finally{lock.unlock()}
         try{
             lock.lock();let observed=try{futureReturned}finally{lock.unlock()}
-            if(!observed && !observeWholeFutureReturn180()){return false}
+            if(!observed && !observeWholeFutureReturn180()){noteRetirementPhase180("producer_future");return false}
             if(!collectOriginalFrontendHelpers180()){return false}
             lock.lock();try{
                 // Joining is actual Future return, not an active--/finally flag.
                 futureReturned=true;action=None<()->Unit>;worker=None<Future<Unit>>
-                if(!socketReturned){return false};socket=None<UnixSocket>
+                if(!socketReturned){retirementPhase180="physical_socket";return false};socket=None<UnixSocket>
                 match(producerFailure180){case Some(cell)=>
                     if(!cell.retireObservedReturn()){return false}
                     producerFailure180=None<HostHubProcessProducerCell>;original=None<Exception>
@@ -1925,7 +1939,7 @@ class ActualProcessBrokerSlot180{
                 match(renderedFailure180){case Some(frame)=>
                     if(!frame.sourcesRetired180()){return false};renderedFailure180=None<ActualProcessBrokerFailureFrame180>
                     case None=>()}
-                if(original.isSome() || secondaryCount!=0 || secondaryOverflow.isSome() || failure.isSome() || !outputReturned){return false}
+                if(original.isSome() || secondaryCount!=0 || secondaryOverflow.isSome() || failure.isSome() || !outputReturned){retirementPhase180="original_failure_or_output";return false}
 
                 match(inboundFrame180){case Some(frame)=>frame.close();inboundFrame180=None<ProcessBrokerOwner180>;case None=>()}
                 match(inboundCodec180){case Some(frame)=>frame.close();inboundCodec180=None<ProcessBrokerOwner180>;case None=>()}
@@ -2126,6 +2140,13 @@ class ActualProcessBrokerRoot180{
             shellNetworkMode:product.shellNetworkMode,sandboxCaBundle:product.sandboxCaBundle,brokerRootData180:Some(this)))
         supervisor.getOrThrow().initializeBrokerStorage180()
     }
+    func pendingFrontendPhase180(id:String):String{
+        for(slot in slots){match(slot.pendingFrontendPhase180(id)){
+            case Some(phase)=>return phase;case None=>()}}
+        for(slot in slots){match(slot.pendingTransientPhase180()){
+            case Some(phase)=>return phase;case None=>()}}
+        "other_transient_helper"
+    }
     func serveFrontend180(request:AgentValue,peer:ProductOwnerPeer180):Result<Unit>{
         frontendObserved180.store(true)
         // Readiness was published before assembly; the actual owner is only
@@ -2250,7 +2271,14 @@ class ActualProcessBrokerRoot180{
                 if(refEq(slot,observer) || slot.isLifetimeObservation180() || slot.isVacant180()){continue}
                 // Only this observer's original authenticated frontend must
                 // return first. Other live frontends keep the shared owner.
-                if(observer.waitsForFrontend180(slot)){retiring=true}else{otherDebt=true}
+                if(observer.waitsForFrontend180(slot)){retiring=true}
+                else if(slot.hasAuthenticatedFrontend180()){otherDebt=true}
+                else{
+                    // Ping and not-yet-classified accepted sockets are actual
+                    // transient helpers. Join them before deciding persistence;
+                    // an unfinished handshake is not another live frontend.
+                    retiring=true
+                }
             }
             if(!retiring){observer.answerLifetimeObservation180(otherDebt)}
         }
@@ -2425,6 +2453,10 @@ func initializeAndServeActualProcessBroker180(arguments:Array<String>,root:Actua
     let config=ProductConfig(settingsRoot:if(settings==""){defaultProductHome()}else{settings},
         stateRoot:stateRoot,workspaceRoot:canonical,fixture:fixture,unsafeDirectLaunchForTests:unsafeFixture,
         startupMode:ProductStartupMode.Owner,distributionRoot:distribution)
+    // The pre-authentication physical peer needs this same trusted config,
+    // even for ping. Publish it before listen; actual Product access still
+    // waits for the background assembly and its normal binding below.
+    root.configuration180=Some(config)
     // Bind first: readiness must not depend on how long the first install
     // takes. The assembly runs on its own worker and `frontend180` waits for it.
     let server=UnixServerSocket(bindAt:paths.socketPath);root.server=Some(server)

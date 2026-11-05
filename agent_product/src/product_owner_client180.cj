@@ -129,6 +129,8 @@ class ActualOwnerClientRoot180 {
             rendezvous180.getOrThrow().closeAfterWholeObservation180()
             if (!debt) { rendezvous180.getOrThrow().waitForOriginalPhysicalReturn180() }
             rendezvous180 = None<ActualOwnerFrontendRendezvous180>
+        } catch (error: OwnedCanonicalDataFailure113) {
+            failure = Some(error); emitOriginalFailure180("owner.shutdown_pending: " + error.error.describe()); return false
         } catch (error: Exception) {
             failure = Some(error); emitOriginalFailure180("owner.shutdown_pending: " + error.message); return false
         }
