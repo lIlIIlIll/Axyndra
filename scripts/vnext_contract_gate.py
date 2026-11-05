@@ -144,16 +144,29 @@ def main() -> int:
         env["AXYNDRA_NATIVE_PLUGIN_FIXTURE"] = str(fixture / "target" / "native-plugin")
         env["AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE"] = str(fixture / "target" / "tool" / "native-plugin-tool")
         env["AXYNDRA_NATIVE_SERVICE_PLUGIN_FIXTURE"] = str(fixture / "target" / "service" / "native-plugin-service")
-        env["AXYNDRA_AST_PLUGIN_PACKAGE"] = subprocess.check_output(
-            [sys.executable, str(repo / "scripts" / "prepare_ast_plugin.py")],
-            cwd=repo, env=env, text=True,
-        ).strip()
+        for variable, preparer in (
+            ("AXYNDRA_AST_PLUGIN_PACKAGE", "prepare_ast_plugin.py"),
+            ("AXYNDRA_WORKSPACE_PLUGIN_PACKAGE", "prepare_workspace_plugin.py"),
+            ("AXYNDRA_PROGRAM_PLUGIN_PACKAGE", "prepare_program_plugin.py"),
+            ("AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE", "prepare_shell_readonly_plugin.py"),
+        ):
+            env[variable] = subprocess.check_output(
+                [sys.executable, str(repo / "scripts" / preparer)], cwd=repo, env=env, text=True,
+            ).strip()
         for name in CONTRACTS:
             package = repo / "support_tests" / name
             contract_started = time.monotonic()
             try:
                 run([str(wrapper), "cjpm", "build"], cwd=package, env=env)
                 run([str(wrapper), "target/release/bin/main"], cwd=package, env=env)
+                if name == "product_thread_runtime_contract":
+                    target = Path(subprocess.check_output([str(wrapper), "--print-cjpm-target"],
+                                  cwd=package, env=env, text=True).strip())
+                    evidence = Path(env.get("AXYNDRA_EVIDENCE_DIR", str(repo / "target/gate-evidence"))).resolve()
+                    run([sys.executable, str(repo / "scripts/readonly_bridge_lifecycle_gate.py"),
+                         "--binary", str(target / "release/bin/main"),
+                         "--output-dir", str(evidence / ("readonly-bridge-" + str(time.time_ns())))],
+                        cwd=repo, env=env)
             except (OSError, subprocess.CalledProcessError):
                 records.append({
                     "name": name,

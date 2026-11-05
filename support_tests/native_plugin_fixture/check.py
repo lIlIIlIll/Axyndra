@@ -77,6 +77,15 @@ def main():
     assert request["arguments"] == {"command": "cat service-input.txt"}
     assert completion["result"]["service_result"] == service_response["result"]
     assert completion["ok"] and completion["result"]["calls"] == 1
+    # The lifecycle fixture holds an actual readonly worker until cancellation;
+    # only its request changes, while the original identity checks stay intact.
+    service_invoke["arguments"] = {"mode": "service_wait"}
+    waiting_run = run_service(service_response)
+    assert waiting_run.returncode == 0, waiting_run
+    _, waiting_request, waiting_completion = map(json.loads, waiting_run.stdout.splitlines())
+    assert waiting_request["arguments"] == {"command": "sleep 30; cat service-input.txt"}
+    assert waiting_completion["result"]["service_result"] == service_response["result"]
+    service_invoke["arguments"] = {"mode": "service_read"}
     assert run_service({**service_response, "request_id": "stale"}).returncode == 5
     assert run_service({**service_response, "epoch": 8}).returncode == 5
     cancelled_service = subprocess.run(

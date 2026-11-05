@@ -1635,6 +1635,7 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
         File.writeTo(pluginRoot + "/package.json",
             "{\"name\":\"javascript-service-contract\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"service.js\"],\"axyndra\":{\"capabilities\":[\"workspace.read\"]}}}".toArray())
     }
+    let brokerWait = scenario == "cancel-handoff" || scenario == "disable-handoff"
     let javascript = "import { Type } from 'typebox';\n" +
         "export default function (pi) {\n" +
         "  pi.registerTool({\n" +
@@ -1642,7 +1643,8 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
         "    parameters: Type.Object({}),\n" +
         "    execute: async (_toolCallId, _params, _signal, onUpdate, _context) => {\n" +
         "      onUpdate({ content: [{ type: 'text', text: 'calling-service' }], details: { phase: 'calling-service' } });\n" +
-        "      const result = await pi.exec('cat', ['service-input.txt']);\n" +
+        (if (brokerWait) { "      const result = await pi.exec('sh', ['-c', 'sleep 30; cat service-input.txt']);\n" }
+         else { "      const result = await pi.exec('cat', ['service-input.txt']);\n" }) +
         "      onUpdate({ content: [{ type: 'text', text: 'service-completed' }], details: { code: result.code } });\n" +
         "      return { content: [{ type: 'text', text: result.stdout }], details: { exit_code: result.code, stderr: result.stderr, killed: result.killed } };\n" +
         "    },\n" +
@@ -1683,9 +1685,15 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
         }
         let toolName = "plugin." + supportRegistryDescriptor96(record,"namespace") + if (native) { ".echo" } else { ".service" }
         let rootArguments = if (native) {
-            objectValue([ValueField("mode", textValue("service_read"))])
+            objectValue([ValueField("mode", textValue(if (brokerWait) { "service_wait" } else { "service_read" }))])
         } else { objectValue([]) }
         let sessionId = SessionId(caseName + "-contract")
+        if (scenario != "all" && scenario != "positive" && scenario != "two-call" &&
+            scenario != "one-call" && scenario != "failed-child" && scenario != "spent") {
+            runBrokerLifecycleCase(product, readonlyShell, toolName, rootArguments, sessionId,
+                stateRoot, workspace, caseRoot, directRoot, scenario)
+            return
+        }
         let progress = ArrayList<String>()
         if (scenario == "all" || scenario == "positive") {
         if (directRoot) {
@@ -2065,6 +2073,19 @@ main(): Int64 {
             runPluginServiceBrokerContract(root, workspace, false, directPi: true)
             println("actual Direct Pi service snapshot contract passed")
             return 0
+        }
+        for (kind in ["pi", "native", "direct-pi", "direct-native"]) {
+            for (scenario in ["disabled", "configuration", "cancel-before", "cancel-handoff", "disable-handoff", "restart"]) {
+                if (workerArguments.contains("--" + kind + "-broker-" + scenario + "-contract")) {
+                    expect(scenario != "cancel-before" || kind.startsWith("direct-"),
+                        "pre-entry caller cancellation applies to the actual Direct caller API")
+                    runPluginServiceBrokerContract(root, workspace,
+                        kind == "native" || kind == "direct-native",
+                        directNative: kind == "direct-native", directPi: kind == "direct-pi", scenario: scenario)
+                    println("actual " + kind + " broker " + scenario + " contract passed")
+                    return 0
+                }
+            }
         }
         if (workerArguments.contains("--pi-service-broker-contract")) {
             runPluginServiceBrokerContract(root, workspace, false)

@@ -149,8 +149,11 @@ static int same_identity(const char *left, const char *right) {
 
 static void request_service(const char *invocation) {
     begin_reply(invocation, "service_request");
-    fputs(",\"request_id\":\"native-service-1\",\"service\":\"exec\","
-          "\"arguments\":{\"command\":\"cat service-input.txt\"}", stdout);
+    Slice arguments = field(invocation, "arguments");
+    int waiting = arguments.start && is_text(field(arguments.start, "mode"), "service_wait");
+    fputs(",\"request_id\":\"native-service-1\",\"service\":\"exec\",\"arguments\":", stdout);
+    fputs(waiting ? "{\"command\":\"sleep 30; cat service-input.txt\"}"
+                  : "{\"command\":\"cat service-input.txt\"}", stdout);
     end_reply();
 }
 
@@ -687,7 +690,8 @@ int main(int argc, char **argv) {
                 }
                 continue;
             }
-            if (arguments.start && is_text(field(arguments.start, "mode"), "service_read")) {
+            if (arguments.start && (is_text(field(arguments.start, "mode"), "service_read") ||
+                                    is_text(field(arguments.start, "mode"), "service_wait"))) {
                 memcpy(pending, frame, length + 1);
                 ++calls;
                 request_service(frame);

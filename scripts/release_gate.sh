@@ -67,6 +67,13 @@ AXYNDRA_COMPACTION_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_compaction_pl
 export AXYNDRA_COMPACTION_PLUGIN_PACKAGE
 AXYNDRA_WORKFLOW_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_workflow_plugin.py")
 export AXYNDRA_WORKFLOW_PLUGIN_PACKAGE
+# Unit-gate child environments cannot prepare the later standalone contracts.
+AXYNDRA_WORKSPACE_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_workspace_plugin.py")
+export AXYNDRA_WORKSPACE_PLUGIN_PACKAGE
+AXYNDRA_PROGRAM_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_program_plugin.py")
+export AXYNDRA_PROGRAM_PLUGIN_PACKAGE
+AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_shell_readonly_plugin.py")
+export AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE
 # Standalone contracts execute after the unit-gate Python process exits;
 # child-process environment changes cannot supply their package locations.
 AXYNDRA_MEMORY_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_memory_plugin.py")
