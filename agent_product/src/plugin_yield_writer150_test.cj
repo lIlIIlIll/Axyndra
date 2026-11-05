@@ -71,7 +71,7 @@ class InstalledNativeYieldWriter150Tests {
         try {
             yieldWriterMount150(f)
             let call=ToolCall("outside-native-yield150","plugin."+f.namespace+".yield",
-                objectValue([ValueField("result",objectValue([ValueField("data",textValue("outside"))]))]))
+                objectValue([ValueField("result",objectValue([ValueField("data",objectValue([ValueField("text",textValue("outside"))]))]))]))
             let result=hostServiceEntryCompleted(f.product.vnext.executeCanonicalTool(SessionId("outside-yield150"),
                 CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)]),call,budget:f.budget()))
             try {

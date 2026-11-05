@@ -58,6 +58,7 @@ class InstalledWorkflowKnownChildTerminalTests111 {
         try {
             let result=hostServiceEntryCompleted(f.product.vnext.executeCanonicalTool(thread,f.capabilities(),
                 ToolCall(thread.value+"-call","plugin."+f.namespace+".task",objectValue([
+                    ValueField("context",textValue("shared bounded child terminal context")),
                     ValueField("tasks",listValue([childTerminalSpecification111(true),childTerminalSpecification111(false)]))])),
                 budget:childBatchBudget111()))
             try {
@@ -119,7 +120,7 @@ class InstalledWorkflowKnownChildTerminalTests111 {
         let f=WorkflowChildFixture111();let thread=SessionId("child-depth-refusal-111")
         try {
             let outcome=f.product.vnext.executeCanonicalTool(thread,f.capabilities(),f.call(thread.value),
-                budget:ExecutionBudget(maxToolCalls:12,maxConcurrentTools:1,maxChildren:1,maxConcurrentChildren:1,maxDepth:0))
+                budget:ExecutionBudget(maxToolCalls:12,maxConcurrentTools:1,maxChildren:0,maxConcurrentChildren:1,maxDepth:4))
             match(outcome){case Result.Err(_)=>()
                 case Result.Ok(ToolInvocationResult.Completed(value))=>try{@Expect(value.isError)}finally{value.releasePayload()}
                 case _=>@Expect(false)}

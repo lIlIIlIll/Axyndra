@@ -32,7 +32,8 @@ func childBatchCall111(f:WorkflowChildFixture111,thread:String,count:Int64):Tool
     let tasks=ArrayList<AgentValue>()
     for(i in 0..count){tasks.add(objectValue([ValueField("agent",textValue("scout")),
         ValueField("name",textValue("slot-"+i.toString())),ValueField("task",textValue("actual bounded child "+i.toString()))]))}
-    ToolCall(thread+"-call","plugin."+f.namespace+".task",objectValue([ValueField("tasks",listValue(tasks.toArray()))]))
+    ToolCall(thread+"-call","plugin."+f.namespace+".task",objectValue([ValueField("context",textValue("shared bounded child-wave context")),
+        ValueField("tasks",listValue(tasks.toArray()))]))
 }
 func childBatchBudget111():ExecutionBudget {
     ExecutionBudget(maxToolCalls:64,maxConcurrentTools:1,maxChildren:8,maxConcurrentChildren:4,maxDepth:4)

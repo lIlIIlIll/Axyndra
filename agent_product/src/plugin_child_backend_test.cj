@@ -132,10 +132,14 @@ class InstalledWorkflowTaskParameterCompletion152Tests {
     @TestCase
     func fullOriginalParameterErrorsCommitOneCanonicalParentWithoutChildOrReplay152(): Unit {
         let f = WorkflowChildFixture111(waitService: true)
-        let arguments = [objectValue([]), objectValue([ValueField("agent", textValue("missing")), ValueField("task", textValue(""))]),
-            objectValue([ValueField("task", textValue("work")), ValueField("effort", textValue("bad"))]),
-            objectValue([ValueField("context", textValue("parent")), ValueField("tasks", listValue([]))])]
-        let messages = ["task is required", "unknown bundled agent: missing", "effort must be lo, med, or hi", "tasks must contain between 1 and 8 task items"]
+        // Business errors must first satisfy the actual published input schema.
+        // Original schema-invalid shapes are covered independently below.
+        let duplicate = objectValue([ValueField("name", textValue("same")), ValueField("task", textValue("work"))])
+        let arguments = [objectValue([ValueField("task", textValue(""))]),
+            objectValue([ValueField("agent", textValue("missing")), ValueField("task", textValue(""))]),
+            objectValue([ValueField("context", textValue("parent")), ValueField("tasks", listValue([duplicate, duplicate]))]),
+            objectValue([ValueField("context", textValue("")), ValueField("tasks", listValue([objectValue([ValueField("task", textValue("work"))])]))])]
+        let messages = ["task is required", "unknown bundled agent: missing", "task names must be unique within a batch", "batch task requires non-empty context"]
         try {
             for (index in 0..arguments.size) {
                 let thread = "task-parameter-canonical-" + index.toString()
@@ -162,6 +166,32 @@ class InstalledWorkflowTaskParameterCompletion152Tests {
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='unknown'"), 0)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations WHERE state IN ('prepared','waiting_approval','executing')"), 0)
             @Expect(ProductTaskPersistence(f.database).loadAll().size, 0)
+        } finally { f.close() }
+    }
+
+    @TestCase
+    func originalSchemaInvalidParametersKeepCanonicalFailureWithoutChild152(): Unit {
+        let f = WorkflowChildFixture111(waitService: true)
+        let arguments = [objectValue([]),
+            objectValue([ValueField("task", textValue("work")), ValueField("effort", textValue("bad"))]),
+            objectValue([ValueField("context", textValue("parent")), ValueField("tasks", listValue([]))])]
+        try {
+            for (index in 0..arguments.size) {
+                let thread = "task-schema-rejection-" + index.toString()
+                let attempted = f.product.vnext.executeCanonicalTool(SessionId(thread), f.capabilities(),
+                    ToolCall(thread + "-call", "plugin." + f.namespace + ".task", arguments[index]), budget: f.budget())
+                @Expect(attempted.isError())
+                @Expect(attempted.error().getOrThrow().code, "tool.invalid_arguments")
+                // The real gateway retains the failed root and its one canonical
+                // failure Receipt even though preparation returns Err.
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations"), index + 1)
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts"), index + 1)
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='unknown'"), 0)
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='operation_execution_handoff'"), 0)
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM derived_operation_admissions"), 0)
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM model_attempts"), 0)
+                @Expect(ProductTaskPersistence(f.database).loadAll().size, 0)
+            }
         } finally { f.close() }
     }
 
