@@ -51,6 +51,7 @@ class PinnedCangjieTest(unittest.TestCase):
             "AXYNDRA_SDK_CHECK_CACHE_DIR": str(root / "sdk-cache"),
             "AXYNDRA_NATIVE_CC": selected_compiler,
             "AXYNDRA_NATIVE_OUTPUT": str(root / "libprocess4cj_native.so"),
+            "AXYNDRA_NETWORK_BRIDGE_OUTPUT": str(root / "sandbox-net-bridge"),
             "AXYNDRA_CANONICAL_TARGET_ROOT": str(root / "targets"),
         }
         result = subprocess.run(

@@ -12,7 +12,7 @@ export AXYNDRA_NATIVE_ROOT="$root/libs/process4cj/native"
 
 prepare_network_bridge() (
   umask 077
-  source_path="$AXYNDRA_NATIVE_ROOT/sandbox-net-bridge"
+  source_path="${AXYNDRA_NETWORK_BRIDGE_OUTPUT:-$AXYNDRA_NATIVE_ROOT/sandbox-net-bridge}"
   if [[ ! -x "$source_path" ]]; then
     printf 'axyndra: built network bridge is missing: %s\n' "$source_path" >&2
     exit 1
