@@ -55,6 +55,15 @@ service host: its services stop when that Product process closes.
 The underlying wire and authority limits are documented in
 [the native plugin protocol](plugin-process-protocol.md).
 
+## Instance quotas
+
+The plugin entry in `plugins/lifecycle.json` sets `max_instances` for its
+instances. An individual service may also set `max_instances` to a positive
+integer from 1 through 32. Its frozen launch plan uses the smaller of the plugin
+and service limits. Omitting the service limit preserves the plugin limit.
+Selecting a different configured process cannot borrow a larger instance quota
+from the base service. These limits do not grant launch authorization.
+
 ## Working directory and executable resolution
 
 A lifecycle service may set `cwd` to an absolute directory or a path relative

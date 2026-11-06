@@ -198,7 +198,10 @@ public class HostPluginLifecycleConfiguration {
                 ValueField("read_only_mounts", listValue(mounts.toArray().map { item => textValue(item) })),
                 ValueField("network", service.field("network").getOrThrow()),
                 ValueField("lifecycle_policy", service.field("lifecycle_policy").getOrThrow()),
-                ValueField("resources", hostLifecycleResourceValue(resources)), ValueField("max_instances", integerValue(maxInstances)),
+                ValueField("resources", hostLifecycleResourceValue(resources)),
+                ValueField("max_instances", integerValue(if (service.field("max_instances").isSome()) {
+                    min(maxInstances, hostLifecycleInt(service, "max_instances", 32))
+                } else { maxInstances })),
                 ValueField("lifetime_ms", service.field("lifetime_ms").getOrThrow()),
                 ValueField("max_input_bytes", service.field("max_input_bytes").getOrThrow()),
                 ValueField("max_output_bytes", integerValue(outputBytes)), ValueField("startup", startup),
@@ -414,6 +417,11 @@ func hostLifecycleNormalizeService(value: AgentValue): AgentValue {
     let fields = ArrayList<String>(["id", "executable", "arguments", "read_only_mounts", "workspace_mode", "network",
         "resources", "lifetime_ms", "max_input_bytes", "max_output_bytes", "startup", "environment", "credential_refs"])
     if (value.field("refresh").isSome()) { fields.add("refresh") }
+    if (value.field("max_instances").isSome()) {
+        fields.add("max_instances")
+        let maximum = hostLifecycleInt(value, "max_instances", 32)
+        hostLifecycleRequire(maximum >= 1 && maximum <= 32)
+    }
     if (value.field("lifecycle_policy").isSome()) {
         fields.add("lifecycle_policy")
         hostLifecycleRequire(processShutdownPolicyGrace(value.field("lifecycle_policy").getOrThrow()).isOk())

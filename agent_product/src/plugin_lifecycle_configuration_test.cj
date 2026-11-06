@@ -139,6 +139,24 @@ class PluginLifecycleConfigurationTests {
     }
 
     @TestCase
+    func selectedServiceQuotaCannotIncreaseThePluginCeiling(): Unit {
+        let fixture = LifecycleConfigurationFixture()
+        try {
+            for ((maximum, expected) in [(1, 1), (3, 2)]) {
+                let service = fixture.service(); service.put("max_instances", integerValue(maximum))
+                fixture.write(fixture.document(service: Some(service)))
+                let grant = lifecycleTestRequire(fixture.bind(lifecycleTestRequire(fixture.load())))
+                @Expect(lifecycleInt(grant.launchPlan, "max_instances", 32), expected)
+            }
+            for (invalid in [integerValue(0), integerValue(33), textValue("1")]) {
+                let service = fixture.service(); service.put("max_instances", invalid)
+                fixture.write(fixture.document(service: Some(service)))
+                @Expect(fixture.load().isError())
+            }
+        } finally { fixture.close() }
+    }
+
+    @TestCase
     func strictSchemaRejectsVersionsUnknownFieldsDuplicateIdsAndSecrets(): Unit {
         let fixture = LifecycleConfigurationFixture()
         try {
