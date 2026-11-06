@@ -1692,7 +1692,6 @@ public class AgentThreadRuntime {
                         case Some(explicit) => Some(explicit)
                         case None => match (checkpointRepository) {
                             case Some(repository) =>
-                                value.lane.markHistoricalLaneExport159()
                                 var initiatorItem = ""
                                 for (turn in thread.turns) {
                                     if (turn.id.value == value.turnId.value) { initiatorItem = turn.initiatorItemId.value }
@@ -1701,7 +1700,7 @@ public class AgentThreadRuntime {
                                 for (item in thread.items) {
                                     if (item.id.value == initiatorItem) { initiatorOrdinal = item.ordinal }
                                 }
-                                let latest = repository.loadLatest(thread, projector.version, value.lane.protocol)
+                                let latest = loadContextCheckpointForLane159(repository, thread, projector.version, value.lane)
                                 match (latest) {
                                     case Some(candidate) =>
                                         if (initiatorOrdinal > 0 && candidate.coversThroughItemOrdinal >= initiatorOrdinal) {

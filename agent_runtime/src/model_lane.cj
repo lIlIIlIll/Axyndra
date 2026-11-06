@@ -354,6 +354,18 @@ public class ModelLane {
         try { ownedToolSet159.isSome() && metadataCustody159.isSome() }
         finally { toolDataLock159.unlock() }
     }
+    func openCheckpointProtocol159(): ?ContextCheckpointProtocol159 {
+        toolDataLock159.lock()
+        try {
+            requireModelLaneFrame159()
+            match (ownedToolSet159) {
+                case Some(source) =>
+                    metadataLock159.lock()
+                    try { Some(ContextCheckpointProtocol159(source.deriveLaneMetadata159(8192), protocolData159)) }
+                    finally { metadataLock159.unlock() }
+                case None => None<ContextCheckpointProtocol159> }
+        } finally { toolDataLock159.unlock() }
+    }
     public func forkOwnedLaneFrame159(): ?ModelLane {
         toolDataLock159.lock()
         try {

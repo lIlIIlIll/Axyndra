@@ -9,7 +9,7 @@ import std.convert.*
 import agent_domain.*
 import agent_runtime.*
 
-public class SqliteContextCheckpointStore <: ContextCheckpointRepository {
+public class SqliteContextCheckpointStore <: ContextCheckpointRepository & ContextCheckpointProtocolRead159 {
     private let database: SqliteDatabase
 
     public init(database: SqliteDatabase) { this.database = database }
@@ -93,6 +93,20 @@ public class SqliteContextCheckpointStore <: ContextCheckpointRepository {
         } catch (error: Exception) {
             checkpointStoreError("context.checkpoint_commit_failed", error.message)
         }
+    }
+
+    public func loadLatestMatchingProtocol159(thread: AgentThreadSnapshot, projectorVersion: String,
+        protocol: ContextCheckpointProtocol159): ?ContextCheckpoint {
+        // Only database-owned protocol text reaches the existing exact query
+        // and returned checkpoint. The original lane's text never leaves its
+        // closed Runtime comparison. No payload is decoded by this lookup.
+        let rows = database.query("SELECT DISTINCT lane_compatibility FROM context_checkpoints WHERE thread_id=" +
+            sqliteText(thread.thread.id.value) + " AND projector_version=" + sqliteText(projectorVersion))
+        for (row in rows) {
+            let candidate = row.required(0)
+            if (protocol.matches159(candidate)) { return loadLatest(thread, projectorVersion, candidate) }
+        }
+        None
     }
 
     // Incompatible or stale checkpoints are disposable projections, never a

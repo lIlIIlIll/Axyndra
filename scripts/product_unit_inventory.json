@@ -111,6 +111,7 @@
     "agent_domain/src/tool_input_attachment_test.cj"
   ],
   "agent_runtime": [
+    "agent_runtime/src/checkpoint_protocol_read159_test.cj",
     "agent_runtime/src/direct_post_canonical_scope_test.cj",
     "agent_runtime/src/owned_agent_event_test.cj",
     "agent_runtime/src/owned_copied_display_test.cj",
@@ -126,6 +127,7 @@
     "agent_store/src/backend_allocation_phase_test.cj",
     "agent_store/src/channel_startup_read_memo_test.cj",
     "agent_store/src/channel_write_memo_recording_test.cj",
+    "agent_store/src/checkpoint_protocol_read159_test.cj",
     "agent_store/src/context_boundary_budget_event_test.cj",
     "agent_store/src/context_boundary_budget_store_test.cj",
     "agent_store/src/context_read_stored_payment_test.cj",
