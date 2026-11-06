@@ -2349,10 +2349,7 @@ public class AgentCore <: AgentRunner {
         } else {
             baseSystem
         }
-        let laneInputLimit = match (control.runtime.activeRun()) {
-            case Some(active) => active.lane.maxEstimatedInput()
-            case None => 0
-        }
+        let laneInputLimit = coreActiveModelInputLimit159(control.runtime)
         let contextWindow = buildRequestContext(
             history,
             request.budget,
@@ -10027,6 +10024,18 @@ private func coreModelToolsFromActiveFrame159(view: ?OwnedActiveRunFrame159, thr
     let definitions = match (owned) { case Some(value) => value.definitionsForPreparedRequest159()
         case None => coreModelToolDefinitions(active.lane.toolSet) }
     Result.Ok((owned, definitions))
+}
+
+// Return only the scalar after its complete view consumer has returned. The
+// historical activeRun() getter creates an independent owned lane; dropping
+// that raw view cannot acknowledge its snapshot share.
+func coreActiveModelInputLimit159(runtime: AgentThreadRuntime): Int64 {
+    let view = runtime.activeRunOwned159()
+    try { coreActiveModelInputLimitFrame159(view) }
+    finally { match (view) { case Some(value) => value.returnActiveRunFrame159(); case None => () } }
+}
+private func coreActiveModelInputLimitFrame159(view: ?OwnedActiveRunFrame159): Int64 {
+    match (view) { case Some(value) => value.snapshot159().lane.maxEstimatedInput(); case None => 0 }
 }
 
 func coreActiveRunToolLane159(runtime: AgentThreadRuntime): Result<ModelLane> {
