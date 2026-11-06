@@ -262,3 +262,62 @@ class HostRegistryCatalogTemporary159Tests {
         @Expect(custodyActual159b8[1], custodyExpected159b8[1])
     }
 }
+
+// Write a genuine operator document from the temporary copied descriptor. Its
+// bytes are consumed by File.writeTo before the complete helper returns.
+private func registryReadonlyOperatorDocument159(owner: HostRegistryMountDescriptor159, settings: String): Unit {
+    let descriptor = owner.mountDescriptor159()
+    File.writeTo(settings + "/plugins/services.json", ("{\"version\":1,\"plugins\":[{\"namespace\":\"" +
+        descriptor.namespace + "\",\"package_digest\":\"" + descriptor.contentDigest +
+        "\",\"configuration\":{},\"requests\":[],\"credentials\":[]}]}").toArray())
+}
+private func registryReadonlyConfigurationActual159(): HostPluginHttpConfiguration {
+    let root = Directory.createTemp("/tmp").toString()
+    var registry: ?PluginRegistry = None
+    try {
+        Directory.create(root + "/source/extensions", recursive: true)
+        File.writeTo(root + "/source/package.json",
+            "{\"name\":\"generation159\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"extensions/index.js\"]}}".toArray())
+        File.writeTo(root + "/source/extensions/index.js", "throw new Error('NO_EXECUTION_IN_DATA_TEST');".toArray())
+        let actual = PluginRegistry(root + "/settings", root)
+        registry = Some(actual)
+        let record = registryDescriptorRecord159(actual.importLocal(root + "/source"))
+        try {
+            let writer = hostRegistryMountDescriptorCopy159(record.descriptor).value().getOrThrow()
+            registryReadonlyOperatorDocument159(writer, root + "/settings")
+            writer.returnedMountFrame159()
+            let probe = record.descriptor.deriveCopiedDataPayment(4096)
+            try {
+                let before = probe.retainedCustodyUsage113()
+                var last: ?HostPluginHttpConfiguration = None
+                for (_ in 0..32) {
+                    let configuration = hostReadonlyConfiguration159(record.descriptor, root + "/settings").value().getOrThrow()
+                    @Expect(configuration.namespace, "pi:generation159")
+                    @Expect(configuration.stillCurrent().isOk(), true)
+                    let after = probe.retainedCustodyUsage113()
+                    @Expect(after[0], before[0]); @Expect(after[2], before[2])
+                    last = Some(configuration)
+                }
+                last.getOrThrow()
+            } finally { probe.close() }
+        } finally { record.close() }
+    } finally {
+        try { match (registry) { case Some(value) => value.close(); case None => () } }
+        finally { remove(root, recursive: true) }
+    }
+}
+
+@Test
+class HostReadonlyConfigurationView159Tests {
+    @TestCase
+    func operatorConfigurationOutlivesReturnedRegistryCopiesWithoutRetainingTheirLoans(): Unit {
+        let before = nativeControlMetadataUsage113()
+        let fixture = reserveNativeControlMetadata(65536)
+        let configuration = try { registryReadonlyConfigurationActual159() }
+            finally { fixture.close() }
+        @Expect(configuration.namespace, "pi:generation159")
+        @Expect(configuration.packageDigest.startsWith("sha256:"), true)
+        let after = nativeControlMetadataUsage113()
+        @Expect(after[0], before[0]); @Expect(after[1], before[1])
+    }
+}

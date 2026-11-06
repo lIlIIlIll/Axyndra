@@ -752,11 +752,17 @@ public class ProductRuntime {
         requestCapabilities(true, sessionId: Some(sessionId))
     }
 
+    private func readonlyRequestCapabilitiesFrame159(sessionId: SessionId): Array<Capability> {
+        let records = pluginRuntime.list()
+        try { agent_host_runtime.hostReadonlyPluginCapabilities(
+            vnext.javascriptPlugins, records, catalog, settingsRoot, ThreadId(sessionId.value)) }
+        finally { records.close() }
+    }
+
     private func requestCapabilities(readOnly: Bool, sessionId!: ?SessionId=None): CapabilitySet {
         if (readOnly) {
             let values=ArrayList<Capability>([Capability(CapabilityKind.WorkspaceRead)])
-            match(sessionId){case Some(thread)=>values.add(all:agent_host_runtime.hostReadonlyPluginCapabilities(
-                vnext.javascriptPlugins,pluginRuntime.list(),catalog,settingsRoot,ThreadId(thread.value)));case None=>()}
+            match(sessionId){case Some(thread)=>values.add(all:readonlyRequestCapabilitiesFrame159(thread));case None=>()}
             CapabilitySet(values: values.toArray())
         } else {
             CapabilitySet(
