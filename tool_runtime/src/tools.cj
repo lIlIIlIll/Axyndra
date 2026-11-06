@@ -2700,12 +2700,17 @@ public class ToolPipeline {
 
     private func canonicalizedInvocationCall204(context: ToolInvocationContext, call: ToolCall,
         descriptor: ToolDescriptor): Result<ToolCall> {
-        if (!descriptor.hasOwnedCanonicalArguments204()) { return descriptor.canonicalizedCall(context, call) }
+        if (!descriptor.hasOwnedCanonicalArguments204()) {
+            noteRegistrationMetadataEscapers204(context, descriptor)
+            return descriptor.canonicalizedCall(context, call)
+        }
         match (hostConsumerForContext204(context)) {
             case Some(scope) => return copyHostCanonicalArguments204(scope, context, call, descriptor)
             case None => () }
         let scope = match (coreCatalogDataScope204(context)) { case Some(value) => value
-            case None => return descriptor.canonicalizedCall(context, call) }
+            case None =>
+                noteRegistrationMetadataEscapers204(context, descriptor)
+                return descriptor.canonicalizedCall(context, call) }
         let owner = match (descriptor.ownedCanonicalArguments204(context, call)) {
             case Result.Ok(value) => value
             case Result.Err(error) => scope.holdUnknown204(); return Result.Err(scope.copyError204(error)) }
@@ -2918,8 +2923,11 @@ public class ToolPipeline {
 
     private func noteRegistrationMetadataEscapers204(context: ToolInvocationContext,
         descriptor: ToolDescriptor): Unit {
-        // Arbitrary resolvers may return a graph from their captured catalog.
-        // Public Prepared.call and deferred reads remain compatibility Raw.
+        // Only an actual compatibility callback invocation can export its
+        // captured Catalog graph. Mere selection/presence queries do not call
+        // it. Owned canonical results use the separate original-bank copy and
+        // complete producer/consumer-frame protocol above. Raw preparation
+        // reads and canonical callbacks keep the existing conservative guard.
         if (descriptor.hasRawPreparedCallResolver204()) {
             match (hostConsumerForContext204(context)) { case Some(value) => value.holdUnknown204()
                 case None => if (!descriptor.coreMetadataResolverClosed204) {
@@ -2940,7 +2948,6 @@ public class ToolPipeline {
         finally { match (ownedSnapshot) { case Some(value) => value.close159(); case None => () } }
         match (selected) {
             case Some(value) =>
-                noteRegistrationMetadataEscapers204(context, value.descriptor)
                 if (!value.descriptor.hostServiceOnly) { return Some(value) }
                 if (allowHostService && hostServiceNameAllowed(name)) { return Some(value) }
                 return None
@@ -3139,6 +3146,9 @@ public class ToolPipeline {
         let businessCall = envelope[0]
         match (validator.validate(businessCall, registration.descriptor.definition)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        if (registration.descriptor.hasPreparationRead) {
+            noteRegistrationMetadataEscapers204(context, registration.descriptor)
+        }
         registration.descriptor.preparationRead(context, businessCall)
     
             })

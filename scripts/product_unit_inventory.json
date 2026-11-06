@@ -117,6 +117,7 @@
     "agent_runtime/src/owned_failure_data113_test.cj",
     "agent_runtime/src/owned_failure_publication113_test.cj",
     "agent_runtime/src/owned_outer_error_frame_334_test.cj",
+    "agent_runtime/src/owned_tool_snapshot_identity159_test.cj",
     "agent_runtime/src/paid_error_encoder113_test.cj",
     "agent_runtime/src/plan_review_snapshot_test.cj",
     "agent_runtime/src/tool_snapshot_measure159_test.cj"
@@ -196,6 +197,7 @@
     "agent_core/src/core_plan_request_data204_test.cj",
     "agent_core/src/live_execution_completion_debt_test.cj",
     "agent_core/src/live_execution_pending_test.cj",
+    "agent_core/src/model_input_limit_view159_test.cj",
     "agent_core/src/model_policy_diagnostic_test.cj",
     "agent_core/src/nested_slot_test.cj",
     "agent_core/src/owned_canonical_delivery_test.cj",
@@ -268,6 +270,7 @@
     "agent_host_runtime/src/plugin_live_policy_read_preparation_test.cj",
     "agent_host_runtime/src/plugin_peer_prepared_input_test.cj",
     "agent_host_runtime/src/plugin_prepared_completion153a_test.cj",
+    "agent_host_runtime/src/plugin_process_context159_test.cj",
     "agent_host_runtime/src/plugin_process_observation197_test.cj",
     "agent_host_runtime/src/plugin_pure_worker_loan_test.cj",
     "agent_host_runtime/src/plugin_read_view_parameter_context_test.cj",
@@ -278,8 +281,10 @@
     "agent_host_runtime/src/tool_input_attachment_metadata_test.cj"
   ],
   "tool_runtime": [
+    "tool_runtime/src/canonical_arguments_comparison204_test.cj",
     "tool_runtime/src/canonical_arguments_owner204_test.cj",
     "tool_runtime/src/catalog_publication_executor_identity_test.cj",
+    "tool_runtime/src/catalog_resolver_invocation204_test.cj",
     "tool_runtime/src/live_policy_child_rejection_error_test.cj",
     "tool_runtime/src/nested_tool_frames_test.cj",
     "tool_runtime/src/optional_preparation_read_test.cj",
