@@ -1804,3 +1804,27 @@ not every baseline or model-resource bridge requirement. GC remains deferred.
 Remaining required work includes positive Model-resource fixture migration,
 other Product failures, capturing headless lifetime, the full performance
 matrix, final artifacts after the bridge change and complete mandatory gates.
+
+
+### Further Product contract verification
+
+Overall status remains incomplete; GC is explicitly deferred. No other required
+acceptance condition is removed.
+
+| Evidence | Requirement and actual result | Private evidence under the existing evidence root |
+| --- | --- | --- |
+| E973 | Hosted run `42156582071` at `cc2fd7e0` passes static and clean compile; aggregate Product AST approval fails with `application.owned_failure_pending`, bank `8:134847312`. It is not a CI pass. | Actual hosted run; retained approval diagnostics |
+| E974 | Actual O2 Product build and App build complete after the Registry bridge. App `8a864848` predates the later readonly fix. A third complete Product unit build still exceeds the original 900-second cap. | `product-release-current.json`; `app-registry-current-v4.json`; `registry-worker-adapter-current3/product-build.log.process.json` |
+| E975 | `d5e546a0` corrects readonly child descriptor arguments; `60295229` adds the scalar prefix observation. Fixture custody tests pass 9/9, including revocation and exact payment return. Raw retention and all production authority checks remain. | `fixture-observation-units-current.json`; actual before/after workflow logs |
+| E976 | `d52c1769` migrates actual Compaction configuration, exact stored digest checks and scalar observations. Independent Product cases retain original assertions; original compound and aggregate entries remain. Byte-preserving test-frame extraction fixes both actual Direct restart stack overflows. No SDK stack change. | Extraction proofs; `product-broker-frame-current.json` |
+| E977 | Current binary `cdfc933f` passes all four independent Product Registry/acquisition/AST contracts and all 24 readonly bridge cases. | `product-followup2-independent.json`; `readonly-bridge-product-followup2/summary.json` |
+| E978 | Ordinary entry passes 105 Python regressions and full architecture gate. An extra outer watcher produced three timeout-test failures; those diagnostics remain separate failures. | `static-gates-product-followup-direct.json`; `static-gates-product-followup.json` |
+| E979 | Complete Core/recovery remains FAIL: second matched Program sample reaches `read_view.output_capacity` and the completed-Run unsettled-Operation guard. Real input-attachment ACK and charge close are observed; the remaining owner is not established. All three samples, attachments and downstream assertions remain required. | `product-workflow-settlement-diagnostic.json`; `product-input-attachment-diagnostic.json` |
+| E980 | Missing checkout/SDK/cache contents recovered from the same exact commit, verified official archives and pinned dependency objects, preserving WIP. Cause unknown; interrupted build failures remain failures. No SDK source build. | Private checkout, SDK and dependency recovery manifests |
+
+The [execution record](implementation/plan-execution-reliability.md#product-workflow-follow-up-on-the-fixed-official-sdk)
+records source/binary identities and acceptance limits. Full current App and
+packages, positive installed-Host Model-resource fixtures, complete Product and
+focused suites, capture-mode/performance coverage and release evidence remain
+open. The two authorized external provider calls remain FAIL with no extra
+request authorized by this evidence.

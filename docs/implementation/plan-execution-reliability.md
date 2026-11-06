@@ -920,3 +920,99 @@ The Registry bridge checkpoint also passes 103 Python regressions and the full
 architecture gate on the current source. These are static/script results,
 not substitutes for the two timed-out Product unit builds. Evidence is
 `static-gates-registry-worker.json`.
+
+
+## Product workflow follow-up on the fixed official SDK
+
+The PR remains incomplete and Draft. GC is deferred by the user; the remaining
+non-GC failures below are not waived. This follow-up uses the same official
+SDK archive SHA-256 `3128c819ee9f580ff065c457ef1d38b4be2a08ae0f8da6fbf596d9d315f04a5a`
+and unchanged stdx archive. No compiler, runtime or SDK source build was run.
+
+The completed hosted run `42156582071` at `cc2fd7e0` passed static checks and
+clean compilation, then failed the aggregate Product contract during AST
+approval. Its actual failure was `application.owned_failure_pending` with the
+shared bank at `8:134847312`. Four earlier, independent broker Products retained
+legacy Raw metadata on that same process bank. The focused gate now runs
+Registry refusal, acquisition, AST query, AST edit and Core/recovery as separate
+actual process lifetimes. Its existing 24-case bridge gate still requires both
+original compound broker entries and every lifecycle case. The no-argument
+aggregate entry remains available and its earlier failure remains recorded.
+No process exit acknowledges DATA; no bank is reset or enlarged. New runner
+regressions require every case group and fail immediately when a case fails.
+
+The Core fixture now imports and enables the actual Native Compaction package
+with an immutable digest and explicit operator policy and canonical-data grants.
+It first requires `policy.not_configured` without that configuration, then
+requires the original checkpoint and resumed projection. The isolated-host
+fixture reuses the package directory created by actual public imports.
+
+Actual Program execution exposed a production mismatch: readonly delegation
+resolved effects from the pre-canonical display arguments, which made the
+read-view effect resolver reject the valid child as
+`readonly_delegation.target_changed`. Commit `d5e546a0` resolves the descriptor
+from the already validated frozen child arguments. The original effect,
+package, schema, version, capability, Derived Source and Receipt checks remain.
+The fixture now compares each derived request digest to its exact stored plan
+`bindingDigest`, including the transactional cancellation observer. It no
+longer assumes that every such digest has 64 characters.
+
+Commit `60295229` adds a scalar request-prefix observation. The Product fixture
+uses existing paid tool/system observations and the actual invocation count
+instead of exporting a complete Raw `lastRequest` for boolean checks.
+The public Raw getter keeps its original conservative retention behavior.
+All nine fixture custody tests pass, including empty history/block/text,
+late-access revocation and exact original-bank return. The Product fixture
+changes and stack-frame extractions are in `d52c1769`. The extracted durable
+readback and compound broker bodies remain byte-for-byte unchanged; all
+original assertions, order and quotas remain. Both Direct restart cases failed
+with `StackOverflowError` before the broker extraction and pass afterward.
+No SDK stack setting was changed.
+
+Current contract binary SHA-256:
+`cdfc933fded078e97bfd68bf62615ba9a9cc15fae648e022f23925622537f781`.
+It passes Registry refusal, acquisition, AST query and complete AST edit, and
+all 24 original readonly bridge cases. The normal Python entry passes all
+105 regressions and the complete architecture gate. An extra enclosing process
+watcher caused three watcher-owning Python tests to fail; that diagnostic run
+is retained separately and is not counted as a pass. These static results and
+focused contracts do not establish full Product, hosted CI or release acceptance.
+
+The complete Core/recovery case still fails in the second matched Program
+sample. The actual first PTC sample has seven Operations and seven Receipts;
+its native comparison has six of each. The later worker records
+`read_view.output_capacity`, followed by a failed Workspace result and the
+unchanged completed-Run unsettled-Operation guard. Temporary observations
+confirmed that the actual input-attachment ACK arrived and its original charge
+closed. Those observations were removed exactly. The remaining retaining owner
+is not established, and the shared budget and settlement guard are unchanged.
+Input attachments, all three matched samples, and the original negative and
+recovery assertions remain required. Downstream assertions not reached by this
+failure remain unverified.
+
+The earlier actual O2 Product and App builds at `65039c03` also completed;
+App SHA-256 is `8a864848af2736de49a7ca587729841599e9a0cbd3abe76b25a557fea065d7bf`.
+They predate this readonly-delegation fix. The third full Product unit build
+still timed out at the original 900-second cap. Current final App, distribution,
+full unit, focused and release acceptance remain open.
+
+During validation, tracked checkout files, SDK members and dependency cache
+contents disappeared. Their cause is unknown. Recovery preserved all WIP hashes,
+restored only missing tracked paths from `cc2fd7e0`, restored missing SDK members
+from the verified original archive, and reconstructed dependency caches from
+local committed objects at the same pinned revisions. No local dirt, new
+revision or SDK source build was used. The restored SDK produces a distinct
+canonical target identity; current results identify their actual binaries.
+Earlier build failures caused by missing files remain failure evidence.
+
+Private evidence under `<evidence>`: `product-followup-source-identity.json`,
+`product-followup2-independent.json`, `readonly-bridge-product-followup2/summary.json`,
+`fixture-observation-units-current.json`, `static-gates-product-followup-direct.json`,
+`static-gates-product-followup.json`, `product-workflow-settlement-diagnostic.json`,
+`product-input-attachment-diagnostic.json`, `product-readback-extraction-proof.json`,
+`product-broker-frame-extraction-proof.json`, `product-broker-frame-current.json`,
+`app-registry-current-v4.json`, `product-release-current.json`,
+`registry-worker-adapter-current3/product-build.log.process.json`, and the private
+checkout, official-SDK and dependency-cache recovery manifests. Raw diagnostics
+are not publication artifacts. This follow-up adds no database or plugin
+protocol migration and grants no new execution permission.
