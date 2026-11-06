@@ -381,6 +381,7 @@
     "agent_product/src/goal_frontend_test.cj",
     "agent_product/src/goal_resume_control_test.cj",
     "agent_product/src/host_service_entry_test.cj",
+    "agent_product/src/installed_model_resource_fixture204_test.cj",
     "agent_product/src/local_infrastructure_test.cj",
     "agent_product/src/memory_codec_legacy_oracle_test.cj",
     "agent_product/src/memory_persistence_legacy_oracle_test.cj",

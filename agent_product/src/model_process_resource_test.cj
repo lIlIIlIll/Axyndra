@@ -76,41 +76,7 @@ class ModelProcessResourceTests {
 
     @TestCase
     func realClaimedAttemptAndOperationDoNotShareCancellationOrCleanup(): Unit {
-        let fixture = ModelProviderProductFixture()
-        let root = modelResourceRoot()
-        let port = LocalProcessPort(LocalWorkspace(root), sandboxEnabled: true)
-        let legacyCancellation = CancellationSource()
-        let checked = AtomicBool(false)
-        try {
-            fixture.factory.beforeOpen = { dispatch =>
-                let first = ProcessResourceOwner.ModelAttempt(dispatch.attemptId, "worker")
-                let sibling = ProcessResourceOwner.ModelAttempt(dispatch.attemptId, "http-fixture")
-                let legacy = ProcessResourceOwner.Operation(OperationId(dispatch.attemptId.value))
-                let model = port.openModelChannel(modelResourceRequest(root, first), dispatch, fixture.gate.actual, 4096).value().getOrThrow()
-                let other = port.openModelChannel(modelResourceRequest(root, sibling), dispatch, fixture.gate.actual, 4096).value().getOrThrow()
-                let operation = port.openChannel(modelResourceRequest(root, legacy), legacyCancellation.token).value().getOrThrow()
-                try {
-                    @Expect(String.fromUtf8(rawChannelReadCount(model, ProcessChannelStream.Stdout, 6)) == "READY\n")
-                    @Expect(String.fromUtf8(rawChannelReadCount(other, ProcessChannelStream.Stdout, 6)) == "READY\n")
-                    @Expect(String.fromUtf8(rawChannelReadCount(operation, ProcessChannelStream.Stdout, 6)) == "READY\n")
-                    @Expect(port.openModelChannel(modelResourceRequest(root, first), dispatch, fixture.gate.actual, 4096).error().getOrThrow().code == "process.channel_operation_duplicate")
-                    let _ = port.cancel(OperationId(dispatch.attemptId.value))
-                    modelResourceClose(port, legacy)
-                    @Expect(model.write("ping\n".toArray()).isOk())
-                    @Expect(String.fromUtf8(rawChannelReadCount(model, ProcessChannelStream.Stdout, 5)) == "PONG\n")
-                    let _ = port.cancelResource(first)
-                    modelResourceClose(port, first)
-                    @Expect(other.write("ping\n".toArray()).isOk())
-                    @Expect(String.fromUtf8(rawChannelReadCount(other, ProcessChannelStream.Stdout, 5)) == "PONG\n")
-                    @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operations") == 0)
-                    @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM model_attempts WHERE dispatch_state='dispatch_claimed'") == 1)
-                    checked.store(true)
-                } finally { modelResourceClose(port, first); modelResourceClose(port, sibling); modelResourceClose(port, legacy) }
-            }
-            @Expect(fixture.run().isOk() && checked.load())
-            @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM model_attempts") == 1)
-            @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operations") == 0)
-        } finally { try { let _ = port.close() } finally { legacyCancellation.close(); fixture.close(); remove(root, recursive: true) } }
+        installedModelResourceIsolation204()
     }
 
     @TestCase
@@ -140,35 +106,7 @@ class ModelProcessResourceTests {
     @TestCase
     func actualRunAndGrantCancellationReapAllAttemptSubresources(): Unit {
         for (operatorCancellation in [false, true]) {
-            let fixture = ModelProviderProductFixture()
-            let root = modelResourceRoot()
-            let port = LocalProcessPort(LocalWorkspace(root), sandboxEnabled: true)
-            let checked = AtomicBool(false)
-            let cancellation = ModelExternalCancellationProbe()
-            try {
-                fixture.factory.beforeOpen = { dispatch =>
-                    let owners = [ProcessResourceOwner.ModelAttempt(dispatch.attemptId, "worker"),
-                        ProcessResourceOwner.ModelAttempt(dispatch.attemptId, "http-fixture")]
-                    let channels = ArrayList<ProcessChannel>()
-                    try {
-                        for (owner in owners) {
-                            let channel = port.openModelChannel(modelResourceRequest(root, owner), dispatch, fixture.gate.actual, 4096).value().getOrThrow()
-                            channels.add(channel)
-                            @Expect(String.fromUtf8(rawChannelReadCount(channel, ProcessChannelStream.Stdout, 6)) == "READY\n")
-                        }
-                        cancellation.awaitCancellation(dispatch)
-                        @Expect(dispatch.check().isError())
-                        for (owner in owners) { modelResourceClose(port, owner) }
-                        for (channel in channels) { @Expect(channel.write("no\n".toArray()).isError()) }
-                        @Expect(port.openModelChannel(modelResourceRequest(root, owners[0]), dispatch, fixture.gate.actual, 4096).isError())
-                        checked.store(true)
-                    } finally { for (owner in owners) { modelResourceClose(port, owner) } }
-                }
-                @Expect(cancellation.run(fixture, operatorCancellation: operatorCancellation).isError() && checked.load())
-                @Expect(fixture.factory.count() == 0)
-                @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operations") == 0)
-                @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM model_decisions") == 0)
-            } finally { try { let _ = port.close() } finally { fixture.close(); remove(root, recursive: true) } }
+            installedModelCancellation204(operatorCancellation: operatorCancellation)
         }
     }
 
