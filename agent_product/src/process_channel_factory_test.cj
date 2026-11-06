@@ -1,6 +1,8 @@
 package agent_product
 
 import agent_domain.*
+import agent_host_runtime
+import agent_plugin_registry
 import agent_ports.*
 import sandbox4cj.*
 import std.collection.*
@@ -499,6 +501,31 @@ class NarrowedPackageReadOnlyProcessTests {
         let port: ProcessPort = UnsupportedChannelPort()
         @Expect(channelFactoryCode(port.executePackageReadOnly(ProcessRequest("/usr/bin/true"), "/")),
             "process.package_readonly_unsupported")
+    }
+
+    @TestCase
+    func actualProductAdapterPreservesRegistryRefusalBeforePhysicalSpawn() {
+        let fixture = ChannelFactoryFixture("narrowed-registry-refusal")
+        let entered = AtomicInt64(0)
+        try {
+            let processPort: ProcessPort = fixture.port
+            let bridge = (processPort as agent_host_runtime.HostRegistryPackageProcessPort).getOrThrow()
+            let root = canonicalize(Path(fixture.workspace)).toString()
+            let request = ProcessRequest("/usr/bin/python3", operationId: OperationId("narrowed-registry-refusal"),
+                arguments: ["-c", "print('unexpected worker launch')"], workingDirectory: root,
+                sandboxMode: ProcessSandboxMode.WorkspaceReadOnly, readOnlyMounts: [fixture.packageRoot],
+                networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)), timeoutMillis: 5000,
+                processLimits: ExecutionResourceLimits(maxOutputBytes: 65536))
+            let refused = bridge.executePackageReadOnlyWithRegistry(request, root, { =>
+                entered.fetchAdd(1)
+                Result<agent_plugin_registry.PluginRegistryExecutionFence>.Err(AgentError(
+                    AgentErrorKind.PermissionDenied, "fixture.registry_launch_refused", "actual launch admission was refused"))
+            })
+            @Expect(refused.error().getOrThrow().code, "sandbox.execute_failed")
+            @Expect(refused.error().getOrThrow().message, "actual launch admission was refused")
+            @Expect(entered.load(), 1)
+            @Expect(!fixture.port.hasActiveOperation(request.operationId))
+        } finally { fixture.close() }
     }
 
     @TestCase

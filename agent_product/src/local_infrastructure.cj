@@ -1234,7 +1234,7 @@ class LocalProcessCancellationMonitorState {
     }
 }
 
-public class LocalProcessPort <: ProcessPort & agent_host_runtime.HostLifecycleProcessLauncher & HostModelProcessLauncher {
+public class LocalProcessPort <: ProcessPort & agent_host_runtime.HostLifecycleProcessLauncher & HostModelProcessLauncher & HostRegistryPackageProcessPort {
     private let nativeOwner: HostLocalProcessPort
     private let workspace: HostProcessWorkspaceRoot
     private let sandboxEnabledValue: Bool
@@ -1303,6 +1303,10 @@ public class LocalProcessPort <: ProcessPort & agent_host_runtime.HostLifecycleP
     public func executeProbe(request: ProcessRequest): Result<ProcessResult> { nativeOwner.executeProbe(request) }
     public func executePackageReadOnly(request: ProcessRequest, workspaceRoot: String): Result<ProcessResult> {
         nativeOwner.executePackageReadOnly(request, workspaceRoot)
+    }
+    public func executePackageReadOnlyWithRegistry(request: ProcessRequest, workspaceRoot: String,
+        acquire: () -> Result<agent_plugin_registry.PluginRegistryExecutionFence>): Result<ProcessResult> {
+        nativeOwner.executePackageReadOnlyWithRegistry(request, workspaceRoot, acquire)
     }
     public func executeInteractive(request: ProcessRequest, cancellation: domain.CancellationToken,
         onFrame: (String) -> Result<?String>): Result<ProcessResult> {

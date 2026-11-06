@@ -158,6 +158,8 @@ def main() -> int:
             contract_started = time.monotonic()
             try:
                 run([str(wrapper), "cjpm", "build"], cwd=package, env=env)
+                if name == "product_thread_runtime_contract":
+                    run([str(wrapper), "target/release/bin/main", "--registry-worker-refusal-contract"], cwd=package, env=env)
                 run([str(wrapper), "target/release/bin/main"], cwd=package, env=env)
                 if name == "product_thread_runtime_contract":
                     target = Path(subprocess.check_output([str(wrapper), "--print-cjpm-target"],

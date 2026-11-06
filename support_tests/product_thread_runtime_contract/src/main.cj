@@ -1,5 +1,8 @@
 package product_thread_runtime_contract
 
+import agent_host_runtime
+import agent_plugin_registry
+
 import yjson_support.*
 
 import yjson.*
@@ -1559,8 +1562,22 @@ func runAstEditPluginContract(root: String, parentWorkspace: String): Unit {
             let stale = astPlanApprovalSession(product, "ast-edit-stale", plan)
             File.writeTo(path, (original + "# concurrent edit\n").toArray())
             let staleResult = stale.decide(stale.approval().getOrThrow().operationId.value, ApprovalDecision.Approve)
-            expect(staleResult.isError() && String.fromUtf8(File.readFrom(path)) == original + "# concurrent edit\n",
-                "exact AST plan application rejects a changed file without overwriting it")
+            // A known failed ToolResult is committed canonically; the Agent
+            // may then finish its explanatory reply successfully. Verify the
+            // actual conflict and failed Receipt, not the outer reply status.
+            let (staleOutput, staleError) = productThreadToolResult(database, "ast-edit-stale", "ast-edit-stale")
+            expect(staleResult.isOk() && staleError &&
+                staleOutput.field("status").getOrThrow().text == "no_effect" &&
+                !staleOutput.field("applied").getOrThrow().asBool() &&
+                staleOutput.field("applied_count").getOrThrow().asNumberText() == "0" &&
+                staleOutput.field("conflict_count").getOrThrow().asNumberText() == "1" &&
+                staleOutput.field("results").getOrThrow().items.size == 1 &&
+                staleOutput.field("results").getOrThrow().items[0].field("error_code").getOrThrow().text == "application_plan.precondition_conflict" &&
+                database.scalarInt("SELECT COUNT(*) FROM operation_receipts receipt JOIN operations op ON op.id=receipt.operation_id " +
+                    "JOIN operation_effect_records e ON e.operation_id=op.id JOIN runs r ON r.id=op.run_id " +
+                    "WHERE r.thread_id='ast-edit-stale' AND e.tool_id='apply_file_plan' AND receipt.outcome='failed'") == 1 &&
+                String.fromUtf8(File.readFrom(path)) == original + "# concurrent edit\n",
+                "exact AST plan application commits the conflict without overwriting the changed file; actual=" + canonicalAgentValue(staleOutput))
             File.writeTo(path, original.toArray())
             let recovered = product.vnext.executeCanonicalTool(SessionId("ast-edit-recover"),
                 CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
@@ -2059,6 +2076,30 @@ main(): Int64 {
     try {
         let workspace = root + "/workspace"
         Directory.create(workspace, recursive: true)
+        if (workerArguments.contains("--registry-worker-refusal-contract")) {
+            let port = LocalProcessPort(LocalWorkspace(workspace), sandboxEnabled: true)
+            let calls = AtomicInt64(0)
+            try {
+                let ordinary: ProcessPort = port
+                let admitted = (ordinary as agent_host_runtime.HostRegistryPackageProcessPort).getOrThrow()
+                let packageRoot = getVariable("AXYNDRA_AST_PLUGIN_PACKAGE").getOrThrow()
+                let request = ProcessRequest("/usr/bin/python3", operationId: OperationId("registry-worker-refusal"),
+                    arguments: ["-c", "print('unexpected worker launch')"], workingDirectory: workspace,
+                    sandboxMode: ProcessSandboxMode.WorkspaceReadOnly, readOnlyMounts: [packageRoot],
+                    networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)), timeoutMillis: 5000,
+                    processLimits: ExecutionResourceLimits(maxOutputBytes: 65536))
+                let refused = admitted.executePackageReadOnlyWithRegistry(request, workspace, { =>
+                    calls.fetchAdd(1)
+                    Result<agent_plugin_registry.PluginRegistryExecutionFence>.Err(AgentError(
+                        AgentErrorKind.PermissionDenied, "fixture.registry_launch_refused", "actual launch admission was refused"))
+                })
+                expect(refused.isError() && refused.error().getOrThrow().code == "sandbox.execute_failed" &&
+                    refused.error().getOrThrow().message == "actual launch admission was refused" && calls.load() == 1 &&
+                    !port.hasActiveOperation(request.operationId), "actual Registry launch refusal prevents the readonly worker")
+            } finally { let _ = port.close() }
+            println("actual Product Registry readonly worker refusal contract passed")
+            return 0
+        }
         if (workerArguments.contains("--ast-plugin-contract")) {
             runAstPluginContract(root, workspace)
             println("independent AST plugin contract passed")

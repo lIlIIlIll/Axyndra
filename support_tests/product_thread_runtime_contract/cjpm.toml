@@ -8,6 +8,8 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "agent_host_runtime" = { path = "../../agent_host_runtime", output-type = "static" }
+  "agent_plugin_registry" = { path = "../../agent_plugin_registry", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "agent_app_protocol" = { path = "../../agent_app_protocol", output-type = "static" }
