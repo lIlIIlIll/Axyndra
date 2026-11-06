@@ -102,6 +102,29 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
+
+def run_product_contracts(wrapper: Path, package: Path, repo: Path, env: dict[str, str]) -> None:
+    # These independent Product fixtures retain legacy Raw metadata on their
+    # original bank. A fresh process owns each fixture; no close is a DATA ACK.
+    # The original no-argument aggregate entry remains available for diagnosis.
+    for flag in (
+        "--registry-worker-refusal-contract",
+        "--plugin-acquisition-contract",
+        "--ast-plugin-contract",
+        "--ast-edit-plugin-contract",
+        "--core-and-recovery-contract",
+    ):
+        run([str(wrapper), "target/release/bin/main", flag], cwd=package, env=env)
+    # Includes both original compound broker entries and all lifecycle cases.
+    target = Path(subprocess.check_output([str(wrapper), "--print-cjpm-target"],
+                  cwd=package, env=env, text=True).strip())
+    evidence = Path(env.get("AXYNDRA_EVIDENCE_DIR", str(repo / "target/gate-evidence"))).resolve()
+    run([sys.executable, str(repo / "scripts/readonly_bridge_lifecycle_gate.py"),
+         "--binary", str(target / "release/bin/main"),
+         "--output-dir", str(evidence / ("readonly-bridge-" + str(time.time_ns())))],
+        cwd=repo, env=env)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -133,6 +156,7 @@ def main() -> int:
     env["DISABLE_ZOXIDE"] = "1"
     env["CANGJIE_SDK_ROOT"] = str(sdk_root)
     try:
+        run([sys.executable, "scripts/vnext_contract_gate_test.py"], cwd=repo, env=env)
         run([sys.executable, "scripts/vnext_fixture_gate_test.py"], cwd=repo, env=env)
         run([sys.executable, "scripts/vnext_baseline_test.py"], cwd=repo, env=env)
         run([sys.executable, "scripts/vnext_fixture_gate.py"], cwd=repo, env=env)
@@ -145,6 +169,7 @@ def main() -> int:
         env["AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE"] = str(fixture / "target" / "tool" / "native-plugin-tool")
         env["AXYNDRA_NATIVE_SERVICE_PLUGIN_FIXTURE"] = str(fixture / "target" / "service" / "native-plugin-service")
         for variable, preparer in (
+            ("AXYNDRA_COMPACTION_PLUGIN_PACKAGE", "prepare_compaction_plugin.py"),
             ("AXYNDRA_AST_PLUGIN_PACKAGE", "prepare_ast_plugin.py"),
             ("AXYNDRA_WORKSPACE_PLUGIN_PACKAGE", "prepare_workspace_plugin.py"),
             ("AXYNDRA_PROGRAM_PLUGIN_PACKAGE", "prepare_program_plugin.py"),
@@ -159,16 +184,9 @@ def main() -> int:
             try:
                 run([str(wrapper), "cjpm", "build"], cwd=package, env=env)
                 if name == "product_thread_runtime_contract":
-                    run([str(wrapper), "target/release/bin/main", "--registry-worker-refusal-contract"], cwd=package, env=env)
-                run([str(wrapper), "target/release/bin/main"], cwd=package, env=env)
-                if name == "product_thread_runtime_contract":
-                    target = Path(subprocess.check_output([str(wrapper), "--print-cjpm-target"],
-                                  cwd=package, env=env, text=True).strip())
-                    evidence = Path(env.get("AXYNDRA_EVIDENCE_DIR", str(repo / "target/gate-evidence"))).resolve()
-                    run([sys.executable, str(repo / "scripts/readonly_bridge_lifecycle_gate.py"),
-                         "--binary", str(target / "release/bin/main"),
-                         "--output-dir", str(evidence / ("readonly-bridge-" + str(time.time_ns())))],
-                        cwd=repo, env=env)
+                    run_product_contracts(wrapper, package, repo, env)
+                else:
+                    run([str(wrapper), "target/release/bin/main"], cwd=package, env=env)
             except (OSError, subprocess.CalledProcessError):
                 records.append({
                     "name": name,

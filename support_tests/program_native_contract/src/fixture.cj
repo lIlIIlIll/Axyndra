@@ -129,10 +129,19 @@ public class NativeProgramContractBinding {
             let row=business[i];let operation=OperationId(row.required(0))
             let actualName=workspaceName(contributions[i])
             if(row.required(1)!=(i+1).toString() || row.required(2)=="" || row.required(3)=="" ||
-                row.required(4).size!=64 || row.required(5)!=rootOperationId || row.required(6)!="1" ||
+                row.required(4)!=store.loadPlan(operation,runId).value().getOrThrow().bindingDigest || row.required(5)!=rootOperationId || row.required(6)!="1" ||
                 row.required(7)!="committed" || row.required(8)!=actualName || row.required(9)!=row.required(10) ||
                 row.required(11)!="completed" || row.required(12)!=row.required(13)){
-                throw IllegalStateException("actual Program branch identity/Source/Receipt enclosure")}
+                let detail = match(store.loadDerivedOperationReceipt(operation,runId)){
+                    case Result.Ok(Some(value))=>stringifyUnifiedJson(value.detail)
+                    case _=>"missing derived Receipt detail"}
+                throw IllegalStateException("actual Program branch identity/Source/Receipt enclosure: ordinal="+
+                    row.required(1)+"; depth="+row.required(6)+"; state="+row.required(7)+"; tool="+row.required(8)+
+                    "; expected_tool="+actualName+"; digest_bytes="+row.required(4).size.toString()+
+                    "; root_matches="+(row.required(5)==rootOperationId).toString()+
+                    "; receipt_matches="+(row.required(9)==row.required(10)).toString()+
+                    "; outcome="+row.required(11)+"; plan_matches="+(row.required(12)==row.required(13)).toString()+
+                    "; detail="+detail)}
             if(store.loadCall(operation,runId).value().getOrThrow().callId!=row.required(2)){
                 throw IllegalStateException("actual business call identity")}
             requireReadonlyPlan(store.loadPlan(operation,runId).value().getOrThrow())
@@ -145,7 +154,7 @@ public class NativeProgramContractBinding {
             if(worker.size!=1){throw IllegalStateException("one actual readview child per business branch")}
             let child=worker[0];let childId=OperationId(child.required(0))
             if(child.required(1)!=operation.value || child.required(2)!=rootOperationId || child.required(3)!="2" ||
-                child.required(4)!="1" || child.required(5)=="" || child.required(6)=="" || child.required(7).size!=64 ||
+                child.required(4)!="1" || child.required(5)=="" || child.required(6)=="" || child.required(7)!=store.loadPlan(childId,runId).value().getOrThrow().bindingDigest ||
                 child.required(8)!="committed" || child.required(9)!="host.process.readview" ||
                 child.required(10)!=child.required(11) || child.required(12)!="completed" || child.required(13)!=child.required(14)){
                 throw IllegalStateException("actual readview child Source/parent/Root/Receipt enclosure")}
@@ -181,7 +190,7 @@ public class NativeProgramContractBinding {
         if(children.size!=1){throw IllegalStateException("one actual readview child per ordinary root")}
         let child=children[0];let id=OperationId(child.required(0))
         if(child.required(1)!=rootId || child.required(2)!="1" || child.required(3)!="1" || child.required(4)=="" ||
-            child.required(5)=="" || child.required(6).size!=64 || child.required(7)!="committed" || child.required(8)!="host.process.readview" ||
+            child.required(5)=="" || child.required(6)!=store.loadPlan(id,runId).value().getOrThrow().bindingDigest || child.required(7)!="committed" || child.required(8)!="host.process.readview" ||
             child.required(9)!=child.required(10) || child.required(11)!="completed" || child.required(12)!=child.required(13) ||
             store.loadCall(id,runId).value().getOrThrow().callId!=child.required(4)){
             throw IllegalStateException("actual root/readview branch Source/Receipt enclosure")}
@@ -264,7 +273,7 @@ public class NativeProgramAdmissionCancellationGate {
         let selected=try{if(entered){""}else{toolName}}finally{lock.unlock()}
         if(selected==""){return}
         let rows=transaction.query("SELECT second.run_id,first.id,second.id,a.parent_operation_id,a.child_call_id,"+
-            "a.request_key,a.request_digest,a.root_operation_id,e.reserved_receipt_id,e.reserved_result_item_id "+
+            "a.request_key,a.request_digest,a.root_operation_id,e.reserved_receipt_id,e.reserved_result_item_id,second.normalized_plan "+
             "FROM derived_operation_admissions a JOIN operations second ON second.id=a.operation_id "+
             "JOIN runs r ON r.id=second.run_id JOIN operation_effect_records e ON e.operation_id=second.id "+
             "JOIN derived_operation_admissions prior ON prior.parent_operation_id=a.parent_operation_id "+
@@ -278,7 +287,7 @@ public class NativeProgramAdmissionCancellationGate {
             [SqlParameter.Text(threadId),SqlParameter.Text(selected),SqlParameter.Text(selected)])
         if(rows.size!=1){return}
         let row=rows[0]
-        if(row.required(4)=="" || row.required(5)=="" || row.required(6).size!=64 ||
+        if(row.required(4)=="" || row.required(5)=="" || row.required(6)!=decodeOperationPlan(row.required(10)).bindingDigest ||
             row.required(8)=="" || row.required(9)==""){throw IllegalStateException("actual second child reservation required")}
         lock.lock()
         try{if(entered){return};runId=row.required(0);firstOperation=row.required(1)

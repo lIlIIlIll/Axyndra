@@ -313,22 +313,14 @@ func requestWithBudget(
 }
 
 func readOnlyWorkflowCatalogAvailable(product: ProductRuntime): Bool {
-    let request = product.fixtureProbe.getOrThrow().lastRequest.getOrThrow()
-    var hasRead = false
-    var hasGrep = false
-    var hasProgram = false
-    var hasWrite = false
-    var hasEdit = false
-    var hasBash = false
-    for (tool in request.tools) {
-        if (tool.name == nativeWorkspaceContractToolName(product,"read")) { hasRead = true }
-        if (tool.name == nativeWorkspaceContractToolName(product,"grep")) { hasGrep = true }
-        if (tool.name == nativeProgramContractToolName(product)) { hasProgram = true }
-        if (tool.name == "write" || tool.name == "plugin.axyndra:workspace.write") { hasWrite = true }
-        if (tool.name == "edit" || tool.name == "plugin.axyndra:workspace.edit") { hasEdit = true }
-        if (tool.name == "bash" || tool.name == "plugin.axyndra:shell.bash") { hasBash = true }
-    }
-    hasRead && hasGrep && hasProgram && !hasWrite && !hasEdit && !hasBash
+    let read = nativeWorkspaceContractToolName(product,"read")
+    let grep = nativeWorkspaceContractToolName(product,"grep")
+    let program = nativeProgramContractToolName(product)
+    product.fixtureProbe.getOrThrow().withLastRequest159({ view =>
+        view.hasTool159(read) && view.hasTool159(grep) && view.hasTool159(program) &&
+        !view.hasTool159("write") && !view.hasTool159("plugin.axyndra:workspace.write") &&
+        !view.hasTool159("edit") && !view.hasTool159("plugin.axyndra:workspace.edit") &&
+        !view.hasTool159("bash") && !view.hasTool159("plugin.axyndra:shell.bash") })
 }
 
 func pluginAcquisitionReadPipe(stream: InputStream): Array<Byte> {
@@ -876,6 +868,7 @@ func runMatchedProductWorkflowContract(
             let ptcElapsed = (MonoTime.now() - ptcStarted).toMilliseconds()
             let ptcSnapshot = match (ptcResult) {
                 case Result.Ok(AgentRunOutcome.Completed(snapshot)) => snapshot
+                case Result.Err(error) => matchedWorkflowFailure96(database, ptcRequest.runId, error)
                 case _ => throw IllegalStateException("matched PTC workflow did not complete")
             }
             expect(ptcSnapshot.status == RunState.Completed &&
@@ -1010,6 +1003,11 @@ func runMatchedProductWorkflowContract(
                     "ON op.id=receipt.operation_id WHERE op.run_id='" +
                     ptcSnapshot.runId.value + "'"
             )
+            expect(ptcChildRows.size == 3,
+                "matched Program branch inventory: sample=" + sampleNumber.toString() +
+                "; selected_root_tool=" + ptcRootPlan.toolName + "; children=" + ptcChildRows.size.toString() +
+                "; operations=" + ptcOperationCount.toString() + "; receipts=" + ptcReceiptCount.toString() +
+                "; result=" + stringifyUnifiedJson(ptcRootOutput))
             binding.requireCompletedBranches(database,ptcSnapshot.runId,ptcRootOperationId,["grep","read","read"])
             expect(ptcRootCallCount == 1 && ptcRootResultCount == 1 &&
                 !ptcRootResultIsError && ptcRootOutput.field("status").getOrThrow().text == "completed" &&
@@ -1258,7 +1256,7 @@ func runNativeReadCancellationContract(root: String, workspace: String): Unit {
             if (submission.tryGet().isSome()) { break }
             sleep(Duration.millisecond)
         }
-        let requestIdBeforeCancel = product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().requestId
+        let requestCountBeforeCancel = product.fixtureProbe.getOrThrow().observedCallCount11318()
         let cancel = spawn { product.client.cancel(request.runId) }
         for (_ in 0..3000) {
             if (gate.cancellationWasReceived() || cancel.tryGet().isSome()) { break }
@@ -1299,8 +1297,8 @@ func runNativeReadCancellationContract(root: String, workspace: String): Unit {
                 submissionSettled && cancellationSettled && runState == "cancelled" &&
                 gate.calls() == 2,
                 "native Product read cancellation reaches the active executor and settles without hanging")
-            let requestIdAfterCancel = product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().requestId
-            expect(completedRootReceipts == 1 && requestIdAfterCancel == requestIdBeforeCancel,
+            let requestCountAfterCancel = product.fixtureProbe.getOrThrow().observedCallCount11318()
+            expect(completedRootReceipts == 1 && requestCountAfterCancel == requestCountBeforeCancel,
                 "a native read that settles during cancellation retains its Receipt without a follow-up model request")
         } finally {
             database.close()
@@ -1711,6 +1709,29 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
                 stateRoot, workspace, caseRoot, directRoot, scenario)
             return
         }
+        runBrokerOriginalCases96(product, readonlyShell, record, toolName, rootArguments, sessionId, caseName, stateRoot, workspace, directRoot, native, directNative, directPi, scenario)
+    } finally {
+        println("capacity before-close " + serviceBrokerUsageText())
+        product.close()
+        println("capacity after-close " + serviceBrokerUsageText())
+    }
+}
+func runBrokerOriginalCases96(
+    product: ProductRuntime,
+    readonlyShell: NativeReadonlyShellContractBinding,
+    record: ProductPluginRecord,
+    toolName: String,
+    rootArguments: AgentValue,
+    sessionId: SessionId,
+    caseName: String,
+    stateRoot: String,
+    workspace: String,
+    directRoot: Bool,
+    native: Bool,
+    directNative: Bool,
+    directPi: Bool,
+    scenario: String
+): Unit {
         let progress = ArrayList<String>()
         if (scenario == "all" || scenario == "positive") {
         if (directRoot) {
@@ -2060,115 +2081,9 @@ func runPluginServiceBrokerContract(root: String, workspaceParent: String, nativ
             } finally { spentDb.close() }
             }
         }
-    } finally {
-        println("capacity before-close " + serviceBrokerUsageText())
-        product.close()
-        println("capacity after-close " + serviceBrokerUsageText())
-    }
 }
-main(): Int64 {
-    let workerArguments = getCommandLine()
-    let tempRoot = match (getVariable("TMPDIR")) {
-        case Some(value) => value
-        case None => "/tmp"
-    }
-    let root = Directory.createTemp(tempRoot).toString()
-    try {
-        let workspace = root + "/workspace"
-        Directory.create(workspace, recursive: true)
-        if (workerArguments.contains("--registry-worker-refusal-contract")) {
-            let port = LocalProcessPort(LocalWorkspace(workspace), sandboxEnabled: true)
-            let calls = AtomicInt64(0)
-            try {
-                let ordinary: ProcessPort = port
-                let admitted = (ordinary as agent_host_runtime.HostRegistryPackageProcessPort).getOrThrow()
-                let packageRoot = getVariable("AXYNDRA_AST_PLUGIN_PACKAGE").getOrThrow()
-                let request = ProcessRequest("/usr/bin/python3", operationId: OperationId("registry-worker-refusal"),
-                    arguments: ["-c", "print('unexpected worker launch')"], workingDirectory: workspace,
-                    sandboxMode: ProcessSandboxMode.WorkspaceReadOnly, readOnlyMounts: [packageRoot],
-                    networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)), timeoutMillis: 5000,
-                    processLimits: ExecutionResourceLimits(maxOutputBytes: 65536))
-                let refused = admitted.executePackageReadOnlyWithRegistry(request, workspace, { =>
-                    calls.fetchAdd(1)
-                    Result<agent_plugin_registry.PluginRegistryExecutionFence>.Err(AgentError(
-                        AgentErrorKind.PermissionDenied, "fixture.registry_launch_refused", "actual launch admission was refused"))
-                })
-                expect(refused.isError() && refused.error().getOrThrow().code == "sandbox.execute_failed" &&
-                    refused.error().getOrThrow().message == "actual launch admission was refused" && calls.load() == 1 &&
-                    !port.hasActiveOperation(request.operationId), "actual Registry launch refusal prevents the readonly worker")
-            } finally { let _ = port.close() }
-            println("actual Product Registry readonly worker refusal contract passed")
-            return 0
-        }
-        if (workerArguments.contains("--ast-plugin-contract")) {
-            runAstPluginContract(root, workspace)
-            println("independent AST plugin contract passed")
-            return 0
-        }
-        if (workerArguments.contains("--ast-edit-plugin-contract")) {
-            runAstEditPluginContract(root, workspace)
-            println("independent AST edit plugin contract passed")
-            return 0
-        }
-        if (workerArguments.contains("--direct-pi-service-snapshot-contract")) {
-            runPluginServiceBrokerContract(root, workspace, false, directPi: true)
-            println("actual Direct Pi service snapshot contract passed")
-            return 0
-        }
-        for (kind in ["pi", "native", "direct-pi", "direct-native"]) {
-            for (scenario in ["disabled", "configuration", "cancel-before", "cancel-handoff", "disable-handoff", "restart"]) {
-                if (workerArguments.contains("--" + kind + "-broker-" + scenario + "-contract")) {
-                    expect(scenario != "cancel-before" || kind.startsWith("direct-"),
-                        "pre-entry caller cancellation applies to the actual Direct caller API")
-                    runPluginServiceBrokerContract(root, workspace,
-                        kind == "native" || kind == "direct-native",
-                        directNative: kind == "direct-native", directPi: kind == "direct-pi", scenario: scenario)
-                    println("actual " + kind + " broker " + scenario + " contract passed")
-                    return 0
-                }
-            }
-        }
-        if (workerArguments.contains("--pi-service-broker-contract")) {
-            runPluginServiceBrokerContract(root, workspace, false)
-            println("actual Pi service broker contract passed")
-            return 0
-        }
-        // Independent contract cases have independent raw result consumers.
-        // Compound "all" remains available and keeps its capacity failures;
-        // these options do not claim repeated-call retirement acceptance.
-        for (scenario in ["positive", "two-call", "one-call", "failed-child", "spent"]) {
-            if (workerArguments.contains("--direct-native-" + scenario + "-contract")) {
-                runPluginServiceBrokerContract(root, workspace, true, directNative: true, scenario: scenario)
-                println("actual Direct Native " + scenario + " contract passed")
-                return 0
-            }
-        }
-        if (workerArguments.contains("--native-service-broker-contract") ||
-            workerArguments.contains("--direct-native-service-broker-contract")) {
-            runPluginServiceBrokerContract(root, workspace, true,
-                directNative: workerArguments.contains("--direct-native-service-broker-contract"))
-            println("actual Native service broker contract passed")
-            return 0
-        }
-        if (workerArguments.contains("--javascript-service-broker-contract")) {
-            runJavaScriptPluginServiceBrokerContract(root, workspace)
-            println("plugin service broker contract passed")
-            return 0
-        }
-        if (workerArguments.contains("--plugin-acquisition-contract")) {
-            runPluginAcquisitionControlContract(root, workspace)
-            println("plugin acquisition contract passed")
-            return 0
-        }
-        File.writeTo(workspace + "/input.txt", "durable tool input\n".toArray())
-        Directory.create(workspace + "/src", recursive: true)
-        let alphaSource = "fn alpha() {}\n// SymbolAnchor: alpha\n"
-        File.writeTo(workspace + "/src/alpha.cj", alphaSource.toArray())
-        File.writeTo(workspace + "/src/beta.cj", "fn beta() {}\n\n// SymbolAnchor: beta\n".toArray())
-        runJavaScriptPluginServiceBrokerContract(root, workspace)
-        runPluginAcquisitionControlContract(root, workspace)
-        runAstPluginContract(root, workspace)
-        runAstEditPluginContract(root, workspace)
+
+func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSource:String):Int64{
         let stateRoot = root + "/state"
         let product = openProduct(config: ProductConfig(
             settingsRoot: root + "/settings",
@@ -2202,17 +2117,18 @@ main(): Int64 {
         expect(toolResult.isOk() && toolResult.value().getOrThrow().snapshot.isSome() &&
             toolResult.value().getOrThrow().snapshot.getOrThrow().status == RunState.Completed,
             "fixture product completes a canonical Tool trajectory")
-        expect(product.compactSession(toolSessionId).value().getOrThrow() > 0,
+        let unconfiguredCompaction = product.compactSession(toolSessionId)
+        expect(unconfiguredCompaction.isError() &&
+            unconfiguredCompaction.error().getOrThrow().code == "policy.not_configured",
+            "compaction requires an explicit installed policy before creating a checkpoint")
+        installProductCompactionContract96(product)
+        expect(requireProductContract96(product.compactSession(toolSessionId), "canonical compaction") > 0,
             "product compaction creates a disposable canonical checkpoint")
         let resumed = product.applicationSession(sessionId: Some(toolSessionId))
             .submit("continue after checkpoint")
-        expect(resumed.isOk() && match (product.fixtureProbe.getOrThrow().lastRequest) {
-            case Some(request) => !request.messages.isEmpty() &&
-                request.messages[0].blocks[0].text.startsWith(
-                    "[Compacted canonical Thread through Item"
-                )
-            case None => false
-        }, "next Turn projects checkpoint plus high-fidelity suffix")
+        expect(resumed.isOk() && product.fixtureProbe.getOrThrow().withLastRequest159({ view =>
+            view.firstMessageTextStartsWith159("[Compacted canonical Thread through Item")
+        }), "next Turn projects checkpoint plus high-fidelity suffix")
         let productContext = InvocationContextProjection(contributions: [InvocationContextContribution(
             "contract.context", "product-review", "context://product-review",
             "Use the Product immutable context contract.", ContextContentTrust.UserSelected)])
@@ -2224,11 +2140,10 @@ main(): Int64 {
             ),
             {_ => ()}
         )
-        expect(skillResult.isOk() && match (product.fixtureProbe.getOrThrow().lastRequest) {
-            case Some(request) => request.system.contains("<run_context ") &&
-                request.system.contains("Use the Product immutable context contract.")
-            case None => false
-        }, "Product freezes explicit generic context into the Run")
+        expect(skillResult.isOk() && product.fixtureProbe.getOrThrow().withLastRequest159({ view =>
+            view.systemContains159("<run_context ") &&
+            view.systemContains159("Use the Product immutable context contract.")
+        }), "Product freezes explicit generic context into the Run")
         let pageEvent = product.appCommand(AppCommand(
             AppCommandMeta(AppCommandId("contract-page"), 1),
             AppCommandPayload.LoadItemsPage(ThreadId(sessionId.value), 0, 16)
@@ -2775,6 +2690,26 @@ main(): Int64 {
         product.close().value().getOrThrow()
         runSignedPluginProductContract(root)
 
+        requireProductCoreDurableReadback96(root, workspace, stateRoot, programBinding, sessionId, toolSessionId, seededSession, forkedSession, deliveredSession, laneExecutionSession, reviewExecutionRequest, programSessionId, programSource, partialProgramSessionId, partialProgramRunId)
+}
+
+func requireProductCoreDurableReadback96(
+    root: String,
+    workspace: String,
+    stateRoot: String,
+    programBinding: NativeProgramContractBinding,
+    sessionId: SessionId,
+    toolSessionId: SessionId,
+    seededSession: SessionId,
+    forkedSession: SessionId,
+    deliveredSession: SessionId,
+    laneExecutionSession: SessionId,
+    reviewExecutionRequest: AgentRunRequest,
+    programSessionId: SessionId,
+    programSource: String,
+    partialProgramSessionId: SessionId,
+    partialProgramRunId: String
+): Int64 {
         let database = SqliteDatabase(stateRoot + "/state.db")
         try {
             expect(database.scalarInt(
@@ -3265,6 +3200,117 @@ main(): Int64 {
         reopened.close().value().getOrThrow()
         println("product Thread Runtime contract passed")
         0
+}
+
+main(): Int64 {
+    let workerArguments = getCommandLine()
+    let tempRoot = match (getVariable("TMPDIR")) {
+        case Some(value) => value
+        case None => "/tmp"
+    }
+    let root = Directory.createTemp(tempRoot).toString()
+    try {
+        let workspace = root + "/workspace"
+        Directory.create(workspace, recursive: true)
+        if (workerArguments.contains("--registry-worker-refusal-contract")) {
+            let port = LocalProcessPort(LocalWorkspace(workspace), sandboxEnabled: true)
+            let calls = AtomicInt64(0)
+            try {
+                let ordinary: ProcessPort = port
+                let admitted = (ordinary as agent_host_runtime.HostRegistryPackageProcessPort).getOrThrow()
+                let packageRoot = getVariable("AXYNDRA_AST_PLUGIN_PACKAGE").getOrThrow()
+                let request = ProcessRequest("/usr/bin/python3", operationId: OperationId("registry-worker-refusal"),
+                    arguments: ["-c", "print('unexpected worker launch')"], workingDirectory: workspace,
+                    sandboxMode: ProcessSandboxMode.WorkspaceReadOnly, readOnlyMounts: [packageRoot],
+                    networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)), timeoutMillis: 5000,
+                    processLimits: ExecutionResourceLimits(maxOutputBytes: 65536))
+                let refused = admitted.executePackageReadOnlyWithRegistry(request, workspace, { =>
+                    calls.fetchAdd(1)
+                    Result<agent_plugin_registry.PluginRegistryExecutionFence>.Err(AgentError(
+                        AgentErrorKind.PermissionDenied, "fixture.registry_launch_refused", "actual launch admission was refused"))
+                })
+                expect(refused.isError() && refused.error().getOrThrow().code == "sandbox.execute_failed" &&
+                    refused.error().getOrThrow().message == "actual launch admission was refused" && calls.load() == 1 &&
+                    !port.hasActiveOperation(request.operationId), "actual Registry launch refusal prevents the readonly worker")
+            } finally { let _ = port.close() }
+            println("actual Product Registry readonly worker refusal contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--ast-plugin-contract")) {
+            runAstPluginContract(root, workspace)
+            println("independent AST plugin contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--ast-edit-plugin-contract")) {
+            runAstEditPluginContract(root, workspace)
+            println("independent AST edit plugin contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--direct-pi-service-snapshot-contract")) {
+            runPluginServiceBrokerContract(root, workspace, false, directPi: true)
+            println("actual Direct Pi service snapshot contract passed")
+            return 0
+        }
+        for (kind in ["pi", "native", "direct-pi", "direct-native"]) {
+            for (scenario in ["disabled", "configuration", "cancel-before", "cancel-handoff", "disable-handoff", "restart"]) {
+                if (workerArguments.contains("--" + kind + "-broker-" + scenario + "-contract")) {
+                    expect(scenario != "cancel-before" || kind.startsWith("direct-"),
+                        "pre-entry caller cancellation applies to the actual Direct caller API")
+                    runPluginServiceBrokerContract(root, workspace,
+                        kind == "native" || kind == "direct-native",
+                        directNative: kind == "direct-native", directPi: kind == "direct-pi", scenario: scenario)
+                    println("actual " + kind + " broker " + scenario + " contract passed")
+                    return 0
+                }
+            }
+        }
+        if (workerArguments.contains("--pi-service-broker-contract")) {
+            runPluginServiceBrokerContract(root, workspace, false)
+            println("actual Pi service broker contract passed")
+            return 0
+        }
+        // Independent contract cases have independent raw result consumers.
+        // Compound "all" remains available and keeps its capacity failures;
+        // these options do not claim repeated-call retirement acceptance.
+        for (scenario in ["positive", "two-call", "one-call", "failed-child", "spent"]) {
+            if (workerArguments.contains("--direct-native-" + scenario + "-contract")) {
+                runPluginServiceBrokerContract(root, workspace, true, directNative: true, scenario: scenario)
+                println("actual Direct Native " + scenario + " contract passed")
+                return 0
+            }
+        }
+        if (workerArguments.contains("--native-service-broker-contract") ||
+            workerArguments.contains("--direct-native-service-broker-contract")) {
+            runPluginServiceBrokerContract(root, workspace, true,
+                directNative: workerArguments.contains("--direct-native-service-broker-contract"))
+            println("actual Native service broker contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--javascript-service-broker-contract")) {
+            runJavaScriptPluginServiceBrokerContract(root, workspace)
+            println("plugin service broker contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--plugin-acquisition-contract")) {
+            runPluginAcquisitionControlContract(root, workspace)
+            println("plugin acquisition contract passed")
+            return 0
+        }
+        File.writeTo(workspace + "/input.txt", "durable tool input\n".toArray())
+        Directory.create(workspace + "/src", recursive: true)
+        let alphaSource = "fn alpha() {}\n// SymbolAnchor: alpha\n"
+        File.writeTo(workspace + "/src/alpha.cj", alphaSource.toArray())
+        File.writeTo(workspace + "/src/beta.cj", "fn beta() {}\n\n// SymbolAnchor: beta\n".toArray())
+        // The no-argument entry retains the original aggregate scenario for
+        // diagnosing shared-bank pressure from legacy Raw metadata exports.
+        // The focused gate also runs every independent case in a fresh process.
+        if (!workerArguments.contains("--core-and-recovery-contract")) {
+            runJavaScriptPluginServiceBrokerContract(root, workspace)
+            runPluginAcquisitionControlContract(root, workspace)
+            runAstPluginContract(root, workspace)
+            runAstEditPluginContract(root, workspace)
+        }
+        runProductCoreAndRecoveryContract96(root,workspace,alphaSource)
     } finally {
         let _ = removeIfExists(root, recursive: true)
     }
@@ -3435,7 +3481,8 @@ func isolatedPluginFixtureDescriptor(
 
 func isolatedPluginHostContract(workspace: String, settingsRoot: String): Unit {
     let managedPackageRoot = settingsRoot + "/plugins/packages"
-    Directory.create(managedPackageRoot, recursive: true)
+    // Public imports in the preceding Product setup already create this root.
+    if (!exists(Path(managedPackageRoot))) { Directory.create(managedPackageRoot, recursive: true) }
     let managedPackageRoots = [managedPackageRoot]
     let processRoot = managedPackageRoot + "/isolated-plugin-package"
     let packageOnlyRoot = managedPackageRoot + "/package-only"
