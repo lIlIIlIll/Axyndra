@@ -1479,7 +1479,8 @@ public class HostJavaScriptPluginServiceBroker {
             if(prepared.call.name==PLUGIN_FILE_PLAN_TOOL){
                 if(!readonlyDelegationFilePlanProposalAllowed(invocationPlan204,prepared.operationPlan)){
                     return hostPluginResourceError("readonly_delegation.file_plan_denied","preview differs from its exact frozen operator Root")}
-                let descriptor=match(catalog.resolvedDescriptor(prepared.call,threadId:Some(ThreadId(rootContext.sessionId.value)))){
+                let descriptor=match(catalog.resolvedDescriptor(ToolCall(prepared.call.callId, prepared.call.name,
+                    prepared.operationPlan.canonicalArguments), threadId:Some(ThreadId(rootContext.sessionId.value)))){
                     case Some(value)=>value;case None=>return hostPluginResourceError("readonly_delegation.target_missing","preview primitive is absent")}
                 if(!descriptor.hostServiceOnly || descriptor.controlOnly || descriptor.sideEffecting ||
                     descriptor.implementationVersion!=prepared.operationPlan.implementation.toolVersion ||
@@ -1493,7 +1494,11 @@ public class HostJavaScriptPluginServiceBroker {
             }
             if (!readonlyDelegationChildAllowed(invocationPlan204, prepared.operationPlan)) {
                 return hostPluginResourceError("readonly_delegation.child_denied", "child differs from the exact frozen readonly contribution") }
-            let descriptor = match (catalog.resolvedDescriptor(prepared.call, threadId: Some(ThreadId(rootContext.sessionId.value)))) {
+            // Display-call arguments precede canonicalization. Effect resolvers
+            // must inspect this exact validated frozen child plan, just as the
+            // Pipeline did, while identity and capability checks stay unchanged.
+            let descriptor = match (catalog.resolvedDescriptor(ToolCall(prepared.call.callId, prepared.call.name,
+                prepared.operationPlan.canonicalArguments), threadId: Some(ThreadId(rootContext.sessionId.value)))) {
                 case Some(value) => value; case None => return hostPluginResourceError("readonly_delegation.target_missing", "target is no longer registered") }
             if (descriptor.hostServiceOnly || descriptor.controlOnly || descriptor.sideEffecting ||
                 descriptor.implementationVersion != prepared.operationPlan.implementation.toolVersion ||
