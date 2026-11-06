@@ -1887,3 +1887,21 @@ checkpoint, not full acceptance or an Issue-closing delivery.
 
 Production and fixture checkpoint: `dc5657e9`. The Draft completion boundary
 remains E1000 and the other open mandatory gates.
+
+
+The newer E1001-E1007 checkpoint is recorded in
+[Non-GC pipe, cancellation and fixture follow-up](implementation/plan-execution-reliability.md#non-gc-pipe-cancellation-and-fixture-follow-up).
+The partial-page pipe bug has repair-before/after evidence and passes all 45
+Process4cj tests. The rebuilt Product passes 34 related integration cases,
+including the cross-Thread cancellation failure; the original isolated Host
+entry passes 272/272 and Extension passes 100/100. Three existing file-plan
+service guards also pass on the exact current Product unit binary, with the
+direct-binary evidence limitation recorded in E1001.
+
+The five GC-blocked fixture cases are not passes. Nine model-resource fixtures
+still need actual installed-Host migration, and complete Core, stable bridge,
+current release artifacts, performance and other mandatory gates remain open.
+The ten Pi withdrawal diagnostic passes do not close the intermittent failure.
+GC stays deferred, both authorized external provider calls remain failed, and
+no further provider call was made. This checkpoint does not make the PR ready
+or authorize Issue closure.

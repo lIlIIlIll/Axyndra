@@ -1197,3 +1197,48 @@ The current Python regression suite passes 105 cases. Full architecture,
 documentation, dependency-pin and test-source inventory checks also pass in
 `static-gates-preview-final.json` and `preview-followup-final-inventory/summary.json`.
 These static results do not close the failing actual Core or bridge requirements.
+
+
+## Non-GC pipe, cancellation and fixture follow-up
+
+This checkpoint continues the approved non-GC work. It does not close PR #49.
+The official SDK and StdX remain pinned; no SDK component was built. The only
+two authorized external provider calls remain failed, and no further external
+provider call was made. Evidence below uses the existing private evidence root.
+
+| Evidence | Requirement, implementation and observed evidence | Status and remaining gap |
+| --- | --- | --- |
+| E1001 | The three concrete file-plan executors borrow the original Prepared metadata in private helpers. Their successful result retains the original metadata consumer until the canonical payload lease returns. Errors, unknown consumers and legacy Raw exports retain their prior debt. `product-file-plan-result-metadata-current.json` passes AST edit but fails complete Core at the later attachment-capacity boundary. Read-only `workflow-file-plan-result-metadata-scopes.log` observes zero Product Raw exports, compared with the former 14. The final Product unit binary passes all three existing file-plan service guards in `nongc-pipe-file-plan-direct-final/summary.json`. | PARTIAL. This fixes these concrete consumers only. Native Host/Broker Raw exports, Core resume/approval/initial-context lifetimes and complete consecutive Runs remain open. The standalone evidence predates the pipe change and is not final artifact acceptance. |
+| E1002 | The lifecycle fixture now prints the actual Registry mutation refusal code before closing its owned error, and retains the Core error message. The safe standalone rebuild passes Pi and Direct Pi disable-handoff; ten alternating independent diagnostic runs also pass in `product-pi-withdraw-bounded-diagnostic.json`. The unsafe generic read-view metadata experiment was withdrawn because open ProcessPort and inspector interfaces can retain DATA beyond physical cleanup. | NOT CLOSED. Ten passes do not establish a fix for the earlier intermittent withdrawal failures. No generic metadata ACK or Raw-getter exemption was shipped. |
+| E1003 | The fresh 1,076-case Product inventory reruns 56 prior non-GC failures independently in `product-nongc-current-audit/classification.json`: 12 PASS, 23 crashes with Runtime GC frames, one other physical crash, and 20 non-GC failures. | Diagnostic snapshot only. Excluded cases receive no pass credit; a signal alone is not a GC diagnosis. Later fixes below supersede individual failures, not the entire snapshot. |
+| E1004 | Real one-page pipes expose a write-path bug: `POLLOUT` can be absent although a small nonblocking write fits the partial page. Both new regressions fail before the fix: `partial-pipe-page-red/unit.log` and `partial-pipe-page-borrowed-red-current/unit.log`. Both writers now attempt the nonblocking syscall first and wait only on no progress. Guarded writes retain the original per-syscall admission lease, recheck revocation before waiting, and hold no lease across the wait. The original assertions, deadlines and byte limits are unchanged. `partial-pipe-page-green/unit.log` passes all 45 Process4cj tests at the original O2 profile. | PASS for the two pipe regressions and the complete Process4cj suite. This is a process-library fix, not an SDK/runtime change. |
+| E1005 | Operation-only channel cancellation now carries `process.channel_cancelled`, preserves an earlier parent cause, and does not cancel the caller Run. The HTTP test formatter compares the canonical primary error once rather than counting its repeated structured detail. Optional service `max_instances` accepts 1..32 and freezes the minimum of service/plugin ceilings. `product-partial-pipe-page-current/summary.json` passes all 34 selected Product channel-service, raw-channel, HTTP and lifecycle-configuration tests, including the former cross-Thread blocked-write failure. `nongc-pipe-canonical-packages/summary.json` passes all 272 isolated Host and 100 Extension tests without skips. | PASS for these actual paths and package suites. The new quota boundary rejects 0, 33 and text values; a larger service value cannot raise the plugin ceiling. No Source, authorization, replay or unknown-outcome guard was relaxed. |
+| E1006 | The historical connection fixture declares the actual Codex root schema and still preserves malformed historical connection bytes without launching them; its original assertions pass. Memory fixtures now distinguish installation from Host policy selection, and use the installed Native ranking path for explicit CRUD. The Skills fixture creates the settings root passed to the actual distribution recipe. The Pi queue test checks a unique caller cancellation reason and independent second token. The installed DAP smaller-quota scenario is also retained. | PARTIAL / UNVERIFIED. These five fixture cases reached Runtime `CheckAndPush` crashes in `product-nongc-fixes-current/summary.json` and are not passes. Those crash logs precede the pipe follow-up. GC remains deferred; no claim is made that the final artifact accepts these cases. |
+| E1007 | Nine old model-resource positive fixtures still use compatibility claims that cannot satisfy the internal installed-provider seal. They must migrate to the actual installed Host path and preserve real launch, cancellation, resource-debt, retry and cleanup assertions. | OPEN. Do not admit compatibility claims or replace actual resource ownership with fixture DTOs. Stable full bridge, complete Core, current release artifacts, performance matrix and the other earlier mandatory gates also remain open. |
+
+The code checkpoints are `e136bc5a` (pipe writes), `53b5f15b` (channel
+cancellation), `e93e6999` (service ceilings), `0d2a0622` (fixtures and diagnostics)
+and `a68a4ce3` (concrete file-plan metadata consumers). All current package
+results above apply to these source contents. Later commit metadata does not
+change the tested code. The latest Product unit executable SHA-256 is
+`3c83e266950ce92d41a06b88d3cc77e5aa6d634ae3423012450e3dcc2c559525`.
+
+After other member gates ran, CJPM's last-member manifest returned zero Product
+cases with `--skip-build`. That is not a pass. The executable still matched the
+SHA from the 34-case run; the three file-plan guards therefore ran directly
+through the pinned SDK wrapper. Their parser verifies the actual package,
+suite, exact case, complete 1,077-case inventory and single execution count.
+This is focused binary evidence, not a completed canonical Product gate.
+
+`nongc-pipe-lock-preservation` retains exact generated lock bytes, differences
+and hashes before restoring only this batch's root and standalone Product locks
+to their approved contents. No dependency version or DB schema changed. The
+service quota field is optional; its absence keeps the previous plugin ceiling.
+Reverting the source changes requires no stored-data migration. PR #49 remains
+Draft and the complete delivery remains **incomplete**.
+
+
+`static-gates-nongc-pipe-final.json` passes all 105 Python regressions and the
+complete original architecture entry, including documentation, boundaries,
+dependency pins and package checks. `nongc-pipe-final-inventory/summary.json`
+passes source inventory only. Neither result substitutes for runtime acceptance.
