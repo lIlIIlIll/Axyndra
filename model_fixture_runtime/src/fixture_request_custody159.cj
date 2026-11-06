@@ -201,6 +201,12 @@ class FixtureRequestSnapshot159 {
     func systemContains159(value: String): Bool {
         lock.lock(); try { request.getOrThrow().system.contains(value) } finally { lock.unlock() }
     }
+    func firstMessageTextStartsWith159(value: String): Bool {
+        lock.lock(); try {
+            let messages = request.getOrThrow().messages
+            !messages.isEmpty() && !messages[0].blocks.isEmpty() && messages[0].blocks[0].text.startsWith(value)
+        } finally { lock.unlock() }
+    }
     func hasTool159(value: String, only: Bool): Bool {
         lock.lock(); try {
             var found = false
@@ -251,6 +257,11 @@ public class FixtureRequestObservation159 {
     public func systemContains159(value: String): Bool {
         lock.lock(); try { match (owner) { case Some(actual) => actual.systemContains159(value); case None => false } }
         finally { lock.unlock() }
+    }
+    public func firstMessageTextStartsWith159(value: String): Bool {
+        lock.lock(); try { match (owner) {
+            case Some(actual) => actual.firstMessageTextStartsWith159(value); case None => false }
+        } finally { lock.unlock() }
     }
     public func hasTool159(value: String): Bool {
         lock.lock(); try { match (owner) { case Some(actual) => actual.hasTool159(value, false); case None => false } }

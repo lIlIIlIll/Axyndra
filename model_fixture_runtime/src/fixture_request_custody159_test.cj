@@ -40,6 +40,29 @@ private func executeFixtureOwnedFrame159(port: FixtureModelPort, funding: ModelI
 @Test
 class FixtureRequestCustody159Tests {
     @TestCase
+    func prefixObservationReturnsNoRequestAliasAndRevokesAtCallbackReturn(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 33554432)
+        let source = bank.acquire(131072)
+        let funding = FixtureRequestFunding159(source)
+        let port = FixtureModelPort(); let observed = FixtureObservedView159()
+        executeFixtureOwnedFrame159(port, funding, "[checkpoint] retained suffix")
+        @Expect(port.withLastRequest159({ view =>
+            observed.value = Some(view)
+            view.firstMessageTextStartsWith159("[checkpoint]") &&
+                !view.firstMessageTextStartsWith159("[foreign]") }), true)
+        @Expect(observed.value.getOrThrow().firstMessageTextStartsWith159("[checkpoint]"), false)
+        let histories: Array<Array<ModelMessage>> = [[], [ModelMessage(ModelRole.User, [])],
+            [ModelMessage(ModelRole.User, [ModelBlock(ModelBlockKind.Text, text: "")])]]
+        for (messages in histories) {
+            let result = port.executeReturningInput159(ModelRequest("fixture", messages), { _ => () }, funding)
+            @Expect(match (result) { case ModelInputReturn159.Returned(value) => value.isOk(); case _ => false }, true)
+            @Expect(port.withLastRequest159({ view => view.firstMessageTextStartsWith159("[checkpoint]") }), false)
+        }
+        port.retireLastRequest159(); source.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func approvedGlobReplyKeepsTheAdvertisedFrontendArgumentShape(): Unit {
         for ((name, advertisesBinding) in [("plugin.axyndra:workspace.glob", false),
             ("plugin.axyndra:workspace.glob", true), ("glob", true), ("glob", false)]) {
