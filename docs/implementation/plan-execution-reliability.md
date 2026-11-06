@@ -969,7 +969,7 @@ original assertions, order and quotas remain. Both Direct restart cases failed
 with `StackOverflowError` before the broker extraction and pass afterward.
 No SDK stack setting was changed.
 
-Current contract binary SHA-256:
+Contract binary at the earlier `d52c1769` checkpoint, SHA-256:
 `cdfc933fded078e97bfd68bf62615ba9a9cc15fae648e022f23925622537f781`.
 It passes Registry refusal, acquisition, AST query and complete AST edit, and
 all 24 original readonly bridge cases. The normal Python entry passes all
@@ -978,8 +978,8 @@ watcher caused three watcher-owning Python tests to fail; that diagnostic run
 is retained separately and is not counted as a pass. These static results and
 focused contracts do not establish full Product, hosted CI or release acceptance.
 
-The complete Core/recovery case still fails in the second matched Program
-sample. The actual first PTC sample has seven Operations and seven Receipts;
+At that earlier checkpoint, the complete Core/recovery case fails in the
+second matched Program sample. The actual first PTC sample has seven Operations and seven Receipts;
 its native comparison has six of each. The later worker records
 `read_view.output_capacity`, followed by a failed Workspace result and the
 unchanged completed-Run unsettled-Operation guard. Temporary observations
@@ -1016,3 +1016,110 @@ Private evidence under `<evidence>`: `product-followup-source-identity.json`,
 checkout, official-SDK and dependency-cache recovery manifests. Raw diagnostics
 are not publication artifacts. This follow-up adds no database or plugin
 protocol migration and grants no new execution permission.
+
+
+### Owned readonly metadata follow-up
+
+The current non-GC work is still incomplete. Commits `0d37ff64` and
+`94a80da6` return the actual temporary active-Run and Registry views after
+complete scalar helpers finish. Their selected tests pass one case each;
+four existing Registry ownership regressions also pass. Commit `88266ba5`
+reuses the actual installed Program binding and closes temporary Registry
+lookups. Its 100 binding observations and 100 Registry lookups preserve the
+live logical ledger. File-plan scenarios reuse the installed package rather
+than importing its namespace twice. No assertions or scenarios are removed.
+
+Commit `3102df0b` omits the unused catalog from the process-control cancellation
+projection. Run identity, epoch, capabilities, budget and cancellation remain
+unchanged; actual invocation preparation still uses its original context and
+Source. Its selected lifecycle test passes and proves that the original
+catalog payment can close while the process-control projection remains live.
+
+Commit `a7892be0` copies the actual snapshot ID into independently paid DATA
+rather than exporting the full immutable schema graph. Delegation checks the
+original thread, installed generation, fingerprint, version and schema. Its
+owned canonicalizer copies the complete result before returning the producer
+frame. Validation consumes a closed Boolean comparison; exported dynamic
+errors and uncertain consumers keep their original payments. The legacy Raw
+result retains its copied ID. No generated ID, new bank, Source, authorization
+or acknowledgement is introduced. Existing metadata-escape guards are unchanged.
+
+Three snapshot-ID tests, four canonical-comparison tests and the process-control
+test pass on the pinned official SDK. The initial custom-node test expected a
+Boolean for an unsupported JsonNode and failed. The corrected assertion requires
+the original exception and continued payment. An incremental run reused the old
+test executable; only the subsequent actual rebuild receives current credit.
+Private evidence is `snapshot-identity-units-current.json`,
+`canonical-comparison-units-current3.json` and
+`process-control-projection-units-current3.json` under `<evidence>`.
+
+The current standalone contract executable has SHA-256
+`f0c3844a11d43177a477258e172c32cf39c891bf21ce71fbe2547c4ddc6d8648`.
+It builds in 412.2 seconds under the unchanged 900-second limit, passes all
+four independent Registry/acquisition/AST contracts and all 24 original
+readonly bridge scenarios. It also passes all three original matched PTC and
+Native samples, with seven Operations/Receipts per PTC sample and six per
+Native sample. The complete Core/recovery command still fails at the first
+file-plan input attachment with `input_attachment.capacity`. That is a non-GC
+failure. File-plan and later recovery acceptance remain open.
+
+Read-only debugger observations reconcile all 5,493 observed live-ledger
+checks with the actual original bank. They identify retained preparation and
+Catalog DATA; they do not establish a complete ownership fix or a passing
+contract. No budget, peak-refund rule, timeout, sample count, Source or settlement
+guard is changed. Evidence is `product-owned-catalog-identity-current.json`,
+`product-catalog-identity-followup.json`,
+`readonly-bridge-catalog-identity-followup/summary.json` and
+`workflow-file-plan-live-leases-owned-identity.json`. Full Product units,
+current O2 App/packages, positive installed-Host Model-resource fixtures,
+capturing headless/performance coverage and the full required gates remain
+open. The two authorized real-provider attempts remain failed; no extra call
+is authorized by these results. GC repair remains explicitly deferred.
+
+These changes add DATA lifecycle APIs without changing existing signatures,
+plugin wire fields or database schema. Reverting them restores the earlier
+retention behavior; it grants no alternate execution path. Earlier artifacts
+remain historical evidence and do not validate the current production code.
+
+
+### Resolver invocation and current remaining failures
+
+The Pipeline previously treated registration selection as a Raw callback
+export. A read-only presence query therefore retained its entire Catalog DATA
+source even though neither resolver ran. The correction places the existing
+conservative check at actual Raw canonical and preparation-read invocations.
+The owned path still requires same-bank validation, complete independent
+copying and real producer/consumer-frame return. No `coreMetadataResolverClosed204`
+flag is enabled. Raw errors, callbacks, unsupported nodes and unknown failures
+retain their existing debt.
+
+The new four-case public Pipeline DATA fixture fails two cases before the fix
+and passes all four afterward. It does not create a Core Run, Source, execution
+or Receipt. Both actual Raw callback controls remain retained. The current
+complete Tool Runtime suite passes 72/72 without skips. The full inventory adds
+all five new test files from this continuation and removes none. Evidence is
+`resolver-invocation-before3.json`, `resolver-invocation-after.json` and
+`tool-runtime-full-current.json` under `<evidence>`.
+
+The matched workflows now use the existing owned AgentClient start entry to
+provide the actual Core frame return. Their Raw request DATA remains owned by
+the caller. Pending failure carriers are not flattened or acknowledged. A
+separate contextual ApplicationSession API experiment did not improve capacity
+and was withdrawn; no new submission API is shipped.
+
+The final product run passes all three original matched samples and the four
+independent contracts. The first valid file plan now stages its attachment,
+but its actual Workspace read child fails with `read_view.output_capacity`.
+The parent returns the original partial failure. Full Core/recovery remains
+FAIL; subsequent file-plan and recovery assertions are unverified. Evidence is
+`product-resolver-owned-final.json` and its actual Store diagnostics. No quota,
+settlement condition, timeout or assertion is relaxed.
+
+The same final bridge run passes 23/24. `direct-pi-disable-handoff` again fails
+while withdrawing the installed generation. Earlier current 24/24 evidence is
+retained separately and does not erase this failure. The fixture now reports
+the static Registry refusal code before closing the actual error. Five bounded
+subsequent diagnostic runs pass without reproducing the failure. They do not
+establish stable acceptance or identify its cause. Evidence is
+`readonly-bridge-resolver-owned-final/summary.json` and
+`product-resolver-disable-diagnostic.json`. This remains a non-GC open item.

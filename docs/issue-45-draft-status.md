@@ -1828,3 +1828,35 @@ packages, positive installed-Host Model-resource fixtures, complete Product and
 focused suites, capture-mode/performance coverage and release evidence remain
 open. The two authorized external provider calls remain FAIL with no extra
 request authorized by this evidence.
+
+
+### Owned readonly metadata checkpoint
+
+Overall status remains **incomplete**, with GC repair deferred by the user.
+
+| Evidence | Implementation and actual result | Private evidence under the existing evidence root |
+| --- | --- | --- |
+| E981 | `0d37ff64` returns the actual active-Run input-limit view after its scalar helper; selected regression 1 PASS, 46 skipped. No complete Core-unit credit. | `core-input-limit-units-current.json` |
+| E982 | `94a80da6` returns actual readonly capability/configuration Registry views. New selected case 1 PASS, 268 skipped; four existing ownership cases PASS. | `host-readonly-configuration-units-current.json`; `host-projection-regressions-current.json` |
+| E983 | `88266ba5` reuses actual installed binding QNames, closes Registry lookup views and avoids duplicate namespace import. Both 100-observation live-ledger assertions and all three matched workflows pass in the current product executable. | `product-owned-catalog-identity-current.json` |
+| E984 | `3102df0b` keeps process-control cancellation projection free of an unused catalog alias. Original restrictions and actual invocation Source remain; selected lifecycle test 1 PASS, 269 skipped. | `process-control-projection-units-current3.json` |
+| E985 | `a7892be0` copies the actual snapshot ID and canonical delegation DATA on their original banks; closed validation returns only Bool. Snapshot identity 3 PASS and canonical comparison 4 PASS. Unsupported custom JSON remains rejected and paid. | `snapshot-identity-units-current.json`; `canonical-comparison-units-current3.json` |
+| E986 | Current standalone product executable `f0c3844a` builds under the original limit and passes four independent contracts and all 24 original readonly bridge cases. Earlier direct Pi disable-handoff failure is retained separately; current case passes. | `product-catalog-identity-followup.json`; `readonly-bridge-catalog-identity-followup/summary.json`; earlier `readonly-bridge-lifetime-followup/summary.json` |
+| E987 | Complete Core/recovery still FAILS at the first file-plan `input_attachment.capacity`, after all three matched PTC/Native samples pass. Read-only observations reconcile 5,493/5,493 ledger checks; diagnostics are not acceptance. All original quotas, samples and guards remain. | `product-owned-catalog-identity-current.json`; `workflow-file-plan-live-leases-owned-identity.json` |
+
+The [execution record](implementation/plan-execution-reliability.md#owned-readonly-metadata-follow-up)
+records exact binary identity and validation boundaries. Final O2 App/packages,
+full units/focused/release gates, legacy positive Model-resource fixtures and
+capturing headless/performance work remain open. Neither the failed provider
+attempts nor the deferred GC repair receives acceptance credit.
+
+
+| Evidence | Latest requirement and result | Private evidence under the existing evidence root |
+| --- | --- | --- |
+| E988 | Callback presence/registration selection no longer implies a Raw export. The existing conservative guard runs before actual Raw callbacks; owned results require the original paid copy/frame protocol. No broad closed flag. New regression before: 2 PASS, 2 FAIL. After: 4 PASS. Full Tool Runtime: 72/72 PASS, no skips. | `resolver-invocation-before3.json`; `resolver-invocation-after.json`; `tool-runtime-full-current.json` |
+| E989 | Existing owned AgentClient start entry supplies actual Core frame return while caller Raw requests remain paid. All three matched samples and four independent product contracts pass. Complete Core/recovery still FAILS: first file-plan attachment proceeds, but the actual Workspace read child reports `read_view.output_capacity`. | `product-resolver-owned-final.json`; actual Store detail in its Core log |
+| E990 | Latest full readonly bridge: 23/24, actual Direct Pi generation withdrawal fails again. Static refusal-code diagnostic added; five bounded later diagnostics pass but do not reproduce or close the failure. Earlier 24/24 remains historical. | `readonly-bridge-resolver-owned-final/summary.json`; `product-resolver-disable-diagnostic.json` |
+
+E988-E990 supersede E986-E987 for the latest changed source. The PR remains
+incomplete. No new contextual submission API, quota change, SDK build or extra
+external provider call is included.
