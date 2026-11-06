@@ -271,6 +271,7 @@ class ProductProcessChannelFactoryTests {
             @Expect(fixture.port.hasActiveOperation(request.operationId), true)
             @Expect(channelFactoryCode(fixture.port.openChannel(request, fixture.source.token)), "process.channel_operation_duplicate")
             @Expect(fixture.port.cancel(request.operationId).isOk(), true)
+            @Expect(fixture.source.token.isCancelled(), false)
             @Expect(rawChannelAwaitError(channel, ProcessChannelStream.Stdout).code, "process.channel_cancelled")
             @Expect(fixture.port.hasActiveOperation(request.operationId), false)
             let next = channelFactoryRequire(fixture.port.openChannel(channelFactoryPython("factory-owned", "print('replacement')"), fixture.source.token))
@@ -416,6 +417,7 @@ class ProductProcessChannelFactoryTests {
             @Expect(fixture.port.hasActiveOperation(request.operationId), true)
             gateway.allowAcquire.store(true)
             @Expect(rawChannelUnitError(rawChannelAwaitUnit(pending)), "process.channel_cancelled")
+            @Expect(fixture.source.token.isCancelled(), false)
             channelFactoryAwaitCount(gateway.releases, 1)
             @Expect(fixture.port.hasActiveOperation(request.operationId), true)
             // Retry cleanup after a real open error returned no usable handle.

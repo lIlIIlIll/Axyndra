@@ -575,7 +575,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         match (modelClaim) { case Some(claim) => if (verifyModelProcessClaim(claim, request.resourceOwner).isError()) { cancelled = true }; case None => () }
         if (cancelled || owner.cancellation.token.isCancelled()) {
             let cause = channelOwnerCancellationCause180(owner, "channel admission was revoked during launch")
-            let _ = owner.cancellation.cancel()
+            cancelChannelOwner204(owner)
             let _ = channel.close()
             return Result.Err(cause)
         }
@@ -588,6 +588,17 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         try { revoked = channelsClosed || owner.cancelled || resourceReservedCancelled(owner.resourceOwner) }
         finally { activeLock.unlock() }
         revoked || owner.cancellation.token.isCancelled()
+    }
+
+    // An internally retired operation channel does not cancel its enclosing
+    // run. The linked source still preserves an earlier parent cause.
+    private func cancelChannelOwner204(owner: HostNativeProcessChannelOwner): Unit {
+        match (owner.resourceOwner) {
+            case ProcessResourceOwner.Operation(_) => let _ = owner.cancellation.cancel(reason: Some(
+                CancellationReason(CancellationReasonKind.User, "process.channel_cancelled",
+                    "operation channel was cancelled", cancelledAtMillis: agentUtcMillis())))
+            case ProcessResourceOwner.ModelAttempt(_, _) => let _ = owner.cancellation.cancel()
+        }
     }
 
     private func channelOwnerCancellationCause180(owner: HostNativeProcessChannelOwner, message: String): AgentError {
@@ -605,7 +616,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
             noProcess = !owner.processStarted
             channel = owner.channel
         } finally { activeLock.unlock() }
-        let _ = owner.cancellation.cancel()
+        cancelChannelOwner204(owner)
         if (noProcess) { cleanupUnlaunchedChannel(owner) }
         match (channel) { case Some(value) => let _ = value.close(); case None => () }
     }
@@ -696,7 +707,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
             case None => return Result.Ok(())
         }
         var cleanupError: ?AgentError = None
-        try { let _ = owner.cancellation.cancel() }
+        try { cancelChannelOwner204(owner) }
         catch (_: Exception) {
             cleanupError = Some(hostNativeChannelFactoryError(AgentErrorKind.Transport,
                 "process.channel_close_failed", "channel cancellation could not complete"))
@@ -753,7 +764,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         // Revoke every owner before awaiting any individual cleanup. One
         // slow or failed channel must not retain permission for its siblings.
         for (owner in owners) {
-            try { let _ = owner.cancellation.cancel() }
+            try { cancelChannelOwner204(owner) }
             catch (_: Exception) {
                 if (firstError.isNone()) { firstError = Some(hostNativeChannelFactoryError(AgentErrorKind.Transport,
                     "process.channel_close_failed", "one or more channel owners could not be cancelled")) }
@@ -1690,7 +1701,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
             activeLock.unlock()
         }
         match (channelOwner) {
-            case Some(owner) => let _ = owner.cancellation.cancel()
+            case Some(owner) => cancelChannelOwner204(owner)
             case None => ()
         }
         match (channel) {
