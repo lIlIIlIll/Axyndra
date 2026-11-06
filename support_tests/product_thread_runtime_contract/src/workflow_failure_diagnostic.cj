@@ -1,6 +1,8 @@
 package product_thread_runtime_contract
 
 import agent_domain.*
+import agent_core.*
+import agent_product.*
 import agent_store.*
 
 // Failure-only observation of the actual Store, never a settlement or Source.
@@ -18,4 +20,14 @@ func matchedWorkflowFailure96(database: SqliteDatabase, run: RunId, error: Agent
         detail += "\naudit=" + row.required(0) + "; payload=" + row.required(1)
     }
     throw IllegalStateException(detail)
+}
+
+// The existing client entry supplies the real Core frame return. Raw request
+// DATA remains caller-owned and is never acknowledged here. Retained failure
+// carriers are not flattened, released or converted into a fabricated ACK.
+func matchedOwnedCoreStart204(product: ProductRuntime, request: AgentRunRequest): Result<AgentRunOutcome> {
+    match (product.client.startOwnedCheckpointFailure113(request, { _ => () })) {
+        case OwnedAgentRunResult113.Existing(result) => result
+        case _ => throw IllegalStateException("matched workflow retains an owned failure requiring its actual consumer")
+    }
 }

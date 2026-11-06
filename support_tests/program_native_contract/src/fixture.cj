@@ -450,7 +450,8 @@ func supportRegistryExclusiveErrorCode96(error:PluginRegistryOwnedError):String{
 func supportRegistryDiscard96(record:ProductPluginRecord):Unit{record.close()}
 func supportRegistryOkay96(result:PluginRegistryResult<ProductPluginRecord>):Bool{
     match(result){case PluginRegistryResult.Ok(record)=>record.close();true
-        case PluginRegistryResult.Err(error)=>error.close();false}
+        case PluginRegistryResult.Err(error)=>
+            try{println("REGISTRY_MUTATION_REFUSED " + error.code);false}finally{error.close()}}
 }
 func supportRegistryData96(record:ProductPluginRecord):SupportRegistryRecordData96{
     supportRegistryCopies96.lock.lock();try{

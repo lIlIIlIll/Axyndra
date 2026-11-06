@@ -866,7 +866,7 @@ func runMatchedProductWorkflowContract(
                 readOnly: true
             )
             let ptcStarted = MonoTime.now()
-            let ptcResult = product.client.start(ptcRequest, {_ => ()})
+            let ptcResult = matchedOwnedCoreStart204(product, ptcRequest)
             let ptcElapsed = (MonoTime.now() - ptcStarted).toMilliseconds()
             let ptcSnapshot = match (ptcResult) {
                 case Result.Ok(AgentRunOutcome.Completed(snapshot)) => snapshot
@@ -1059,7 +1059,7 @@ func runMatchedProductWorkflowContract(
                 readOnly: true
             )
             let nativeStarted = MonoTime.now()
-            let nativeResult = product.client.start(nativeRequest, {_ => ()})
+            let nativeResult = matchedOwnedCoreStart204(product, nativeRequest)
             let nativeElapsed = (MonoTime.now() - nativeStarted).toMilliseconds()
             let nativeSnapshot = match (nativeResult) {
                 case Result.Ok(AgentRunOutcome.Completed(snapshot)) => snapshot
@@ -4050,6 +4050,13 @@ func runProductFileApplicationPlanContracts(
         let (validOutput, validIsError) = runProductProgramToolCall(
             product, database, "e5-02-valid-plan", "fixture-e5-02-valid-plan", validSource
         )
+        if (validIsError) {
+            let runs = database.query("SELECT id FROM runs WHERE thread_id=?", [SqlParameter.Text("e5-02-valid-plan")])
+            if (runs.size == 1) {
+                matchedWorkflowFailure96(database, RunId(runs[0].required(0)),
+                    AgentError(AgentErrorKind.Internal, "fixture.file_plan_failed", encodeAgentValue(validOutput)))
+            }
+        }
         expect(!validIsError, "valid read-only Program returns a stored plan; output=" +
             encodeAgentValue(validOutput))
         expect(Int64.parse(validOutput.field("sub_call_count").getOrThrow().asNumberText()) == 2,
