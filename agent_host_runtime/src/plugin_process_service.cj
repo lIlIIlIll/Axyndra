@@ -399,7 +399,11 @@ public func hostPluginProcessCancellationContext(context: ToolInvocationContext,
             workspaceRoot: context.workspaceRoot, cwd: context.workspaceRoot
         ), cancellation: cancellation, budget: context.budget,
         budgetModeFn: context.budgetModeFn, outputSink: context.outputSink,
-        contextProjection: context.contextProjection, toolSetSnapshot: context.toolSetSnapshot
+        // This projection is consumed only by process control, never Catalog
+        // preparation or invocation. Source/plan validation uses the original
+        // prepared invocation; capabilities and cancellation stay exact.
+        // Exporting its unused catalog here would retain every schema graph.
+        contextProjection: context.contextProjection
     )
 }
 
