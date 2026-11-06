@@ -43,9 +43,8 @@ public class BorrowedPipeWriter {
             while (offset < bytes.size) {
                 if (cancelled()) { throw ProcessError(ProcessErrorKind.Cancelled, "bounded pipe write cancelled") }
                 if (MonoTime.now() >= deadline) { throw ProcessError(ProcessErrorKind.DeadlineExceeded, "bounded pipe write timed out") }
-                let ready = unsafe { process4cj_wait_writable(fd, 10) }
-                if (ready < 0) { throw ProcessError(ProcessErrorKind.BrokenPipe, "bounded pipe output unavailable") }
-                if (ready == 0) { sleep(Duration.millisecond); continue }
+                // POLLOUT may be absent while a small write can still merge
+                // into a partially used pipe page. The syscall is nonblocking.
                 let count = min(4096, bytes.size - offset)
                 let chunk = bytes[offset..(offset + count)]
                 let written = unsafe {
@@ -53,7 +52,11 @@ public class BorrowedPipeWriter {
                     try { process4cj_try_write(fd, raw.pointer, chunk.size) } finally { releaseArrayRawData(raw) }
                 }
                 if (written < 0) { throw ProcessError(ProcessErrorKind.BrokenPipe, "bounded pipe output failed") }
-                offset += written
+                if (written == 0) {
+                    let ready = unsafe { process4cj_wait_writable(fd, 10) }
+                    if (ready < 0) { throw ProcessError(ProcessErrorKind.BrokenPipe, "bounded pipe output unavailable") }
+                    if (ready == 0) { sleep(Duration.millisecond) }
+                } else { offset += written }
             }
         } finally { lock.lock(); busy = false; lock.unlock() }
     }

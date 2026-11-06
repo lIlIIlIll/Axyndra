@@ -26,10 +26,8 @@ func nativeProcessWriteAdmitted(fd: Int32, data: Array<Byte>, admission: Process
         while (offset < data.size) {
             if (cancelled()) { throw ProcessError(ProcessErrorKind.Cancelled, "guarded stdin process ended") }
             admission.check()
-            // No admission lock is held during this bounded readiness wait.
-            let ready = unsafe { process4cj_wait_writable(held, 10) }
-            if (ready < 0) { throw ProcessError(ProcessErrorKind.BrokenPipe, "guarded stdin is unavailable") }
-            if (ready == 0) { sleep(Duration.millisecond); continue }
+            // A small nonblocking write may fit the current pipe page even
+            // when poll does not report POLLOUT. Try the admitted syscall first.
             let chunk = data[offset..(offset + min(4096, data.size - offset))]
             let lease = admission.enter()
             let written = try {
@@ -41,7 +39,15 @@ func nativeProcessWriteAdmitted(fd: Int32, data: Array<Byte>, admission: Process
                 }
             } finally { lease.close() }
             if (written < 0) { throw ProcessError(ProcessErrorKind.BrokenPipe, "guarded stdin write failed") }
-            offset += written
+            if (written == 0) {
+                // No admission lease spans readiness waiting. Revocation
+                // since the last syscall must be checked before that wait.
+                if (cancelled()) { throw ProcessError(ProcessErrorKind.Cancelled, "guarded stdin process ended") }
+                admission.check()
+                let ready = unsafe { process4cj_wait_writable(held, 10) }
+                if (ready < 0) { throw ProcessError(ProcessErrorKind.BrokenPipe, "guarded stdin is unavailable") }
+                if (ready == 0) { sleep(Duration.millisecond) }
+            } else { offset += written }
         }
     } finally {
         if (unsafe { process4cj_release_writer(held, flags) } != 0) {
