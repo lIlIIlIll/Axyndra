@@ -32,7 +32,19 @@ func pluginHttpTransportFailure(result: Result<ToolInvocationResult>): String {
     match (result) {
         case Result.Err(error) => ":code=" + error.code
         case Result.Ok(ToolInvocationResult.Completed(value)) =>
-            if (value.isError) { pluginHttpTestErrorCodes(value.output) } else { "unexpected-success" }
+            if (value.isError) {
+                // Canonical results also repeat the primary code in their
+                // structured detail. Match the primary diagnostic once.
+                for (key in ["error", "error_code", "code"]) {
+                    match (value.output.field(key)) {
+                        case Some(code) => if (code.unifiedKind == ValueKind.Text) {
+                            return pluginHttpTestErrorCodes(objectValue([ValueField("code", code)]))
+                        }
+                        case None => ()
+                    }
+                }
+                pluginHttpTestErrorCodes(value.output)
+            } else { "unexpected-success" }
         case _ => "unexpected-control-result"
     }
 }

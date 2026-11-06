@@ -28,7 +28,7 @@ class MemoryPolicyFixture {
     let record: ?ProductPluginRecord
     var sequence: Int64 = 0
     private let windowed:Bool
-    init(install!: Bool = true,windowed!:Bool=false,approval!:ApprovalMode=ApprovalMode.Yolo,pluginPackage!:?String=None) {
+    init(install!: Bool = true,selectPolicy!: Bool = true,windowed!:Bool=false,approval!:ApprovalMode=ApprovalMode.Yolo,pluginPackage!:?String=None) {
         this.windowed=windowed
         let opened = lifecycleTestRequire(openProduct(config: ProductConfig(workspaceRoot: root,
             settingsRoot: root + "/settings", stateRoot: root + "/state", fixture: true, approvalMode: approval,
@@ -63,7 +63,7 @@ class MemoryPolicyFixture {
             } else { None }
             this.product = opened; this.record = selected
             this.database = SqliteDatabase(root + "/state/state.db")
-            if (selected.isSome()) { selection(productRegistryCopyText83(selected.getOrThrow().descriptor.copyText(PluginDescriptorText.ContentDigest))) }
+            if (selected.isSome() && selectPolicy) { selection(productRegistryCopyText83(selected.getOrThrow().descriptor.copyText(PluginDescriptorText.ContentDigest))) }
         } catch (error: Exception) { let _ = opened.close(); remove(root, recursive: true); throw error }
     }
     func selection(digest: String): Unit {
@@ -387,10 +387,17 @@ class InstalledMemoryPolicyTests {
     }
     @TestCase
     func missingPolicyAllowsExplicitStorageButSelectedUnavailableBlocksAllProductInferenceEntries(): Unit {
-        let empty = MemoryPolicyFixture(install: false)
+        let empty = MemoryPolicyFixture(selectPolicy: false)
         try {
-            let _ = empty.retain("Explicit CRUD does not require a ranking policy")
-            @Expect(empty.callIsError("recall", objectValue([ValueField("query", textValue("CRUD"))])))
+            let retained = empty.retain("Explicit CRUD does not require a ranking policy")
+            @Expect(empty.legacyPolicy(SessionId("missing-policy")).isError())
+            // Native Memory owns its business ranking; absence of a Host
+            // policy selection must not prevent explicit installed CRUD.
+            let recalled = empty.call("recall", objectValue([ValueField("query", textValue("CRUD"))]))
+            try {
+                @Expect(!recalled.isError)
+                @Expect(httpIntentText(recalled.output.field("memories").getOrThrow().items[0], "id"), retained)
+            } finally { recalled.releasePayload() }
             @Expect(empty.product.prepareRequest("hello").isOk())
         } finally { empty.close() }
         let f = MemoryPolicyFixture()
@@ -429,7 +436,7 @@ class InstalledMemoryPolicyTests {
     @TestCase
     func storageRejectsForeignDuplicateAndChangedSnapshotsWithoutHoldingCallbackLock(): Unit {
         for (mode in ["foreign", "duplicate", "change"]) {
-            let f = MemoryPolicyFixture(install: false)
+            let f = MemoryPolicyFixture(selectPolicy: false)
             try {
                 let _ = f.retain("Only authorized concise memory")
                 let repository = MemoryV3Repository(f.database)

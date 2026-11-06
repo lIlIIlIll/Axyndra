@@ -353,7 +353,7 @@ class PluginRuntimeContractTests {
         let source = root + "/source"
         let workspace = root + "/workspace"
         for (path in [settings, source, workspace]) { Directory.create(path, recursive: true) }
-        let inline = "{\"name\":\"historical\",\"version\":\"1.0.0\",\"mcpServers\":{\"legacy\":{\"command\":\"/missing/server\",\"env\":{\"TOKEN\":\"HOST_SECRET\"}}}}"
+        let inline = "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"historical\",\"version\":\"1.0.0\",\"mcpServers\":{\"legacy\":{\"command\":\"/missing/server\",\"env\":{\"TOKEN\":\"HOST_SECRET\"}}}}"
         let opaque = "This historical connection file is opaque, not a host configuration."
         File.writeTo(source + "/plugin.json", inline.toArray())
         File.writeTo(source + "/mcp.json", opaque.toArray())
@@ -361,7 +361,11 @@ class PluginRuntimeContractTests {
         let runtime = _registryOwners.openProduct(settings, workspace)
         let imported = match (runtime.importLocal(source)) {
             case PluginRegistryResult.Ok(value) => value
-            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Err(error) =>
+                let message = productRegistryErrorText83(error, PluginRegistryErrorText.Message)
+                let code = error.code
+                error.close()
+                throw IllegalStateException(code + ": " + message)
         }
         @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Entrypoint)), "")
         @Expect(productRegistryContributions83(imported.descriptor).isEmpty())
@@ -2008,17 +2012,19 @@ class PluginRuntimeContractTests {
                 )
             }
             sleep(Duration.millisecond * 100)
-            let _ = firstCancellation.cancel()
+            let _ = firstCancellation.cancel(reason: Some(CancellationReason(CancellationReasonKind.User,
+                "fixture.pi_cancelled", "first invocation was cancelled", cancelledAtMillis: agentUtcMillis())))
             let firstResult = first.get()
             let secondResult = second.get()
             @Expect(match (firstResult) {
-                case Result.Err(error) => error.code == "extension.cancelled"
+                case Result.Err(error) => error.code == "fixture.pi_cancelled"
                 case Result.Ok(_) => false
             }, true)
             let secondJson = match (secondResult) {
                 case Result.Ok(value) => stringifyUnifiedJson(value.value)
                 case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
             }
+            @Expect(secondCancellation.token.isCancelled(), false)
             @Expect(secondJson.contains("second"), true)
             @Expect(secondJson.contains("\"peakActive\":1"), true)
         } finally {

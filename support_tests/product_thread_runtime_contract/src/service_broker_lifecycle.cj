@@ -52,7 +52,7 @@ private func brokerLifecycleInvoke(product: ProductRuntime, session: Application
                         "JOIN operation_effect_records e ON e.operation_id=o.id WHERE r.thread_id='" + sessionId.value +
                         "' AND e.tool_id='" + tool + "' AND instr(receipt.detail,'SERVICE_FIXTURE_SENTINEL')>0") == 1
                 } finally { observations.close() }
-            case Result.Err(error) => println("lifecycle Core error " + error.code); false
+            case Result.Err(error) => println("lifecycle Core error " + error.code + ": " + error.message); false
         }
     }
 }
