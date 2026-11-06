@@ -181,6 +181,20 @@ public class SharedToolSetSnapshot159 {
             throw error
         }
     }
+    public func copyIdentity159(): OwnedToolSnapshotIdentity159 {
+        var loan: ?SharedToolSnapshotLoan159 = Some(begin159())
+        try {
+            let result = loan.getOrThrow().copyIdentity159()
+            let payments = sharedSnapshotReturnLoanFrame159(loan.getOrThrow())
+            loan = None<SharedToolSnapshotLoan159>
+            sharedSnapshotClosePayments159(payments)
+            result.producerReturned159()
+            result
+        } catch (error: Exception) {
+            match (loan) { case Some(value) => value.holdFailure159(); case None => () }
+            throw error
+        }
+    }
     public func copyOwnedModelTools159(): OwnedModelTools159 {
         var loan: ?SharedToolSnapshotLoan159 = Some(begin159())
         try {
@@ -609,6 +623,14 @@ class SharedToolSnapshotLoan159 {
         // completed before either the carrier or any definition copy exists.
         let result = OwnedModelTools159(paid)
         result.installSelectedCopies204(snapshot.getOrThrow(), names)
+        result
+    }
+    func copyIdentity159(): OwnedToolSnapshotIdentity159 {
+        let paid = sharedSnapshotPhase159(payment.getOrThrow(), 131072)
+        let result = OwnedToolSnapshotIdentity159(paid)
+        let meter = ToolSnapshotMeasure159(paid)
+        meter.addText159(snapshot.getOrThrow().id); meter.fund159()
+        result.install159(snapshot.getOrThrow().id)
         result
     }
     func manifestCatalogValue159(): AgentValue {

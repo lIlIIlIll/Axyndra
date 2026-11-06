@@ -145,6 +145,29 @@ public class ToolCanonicalArgumentsOwner204 {
         catch (error: Exception) { holdUnknownConsumer204(); throw error }
         finally { lock.lock(); try { loans204-- } finally { lock.unlock() } }
     }
+    // Closed validation consumes only an equality result. Dynamic producer
+    // errors are explicit Raw exports and keep this exact DATA owner paid.
+    public func matchesArguments204(expected: AgentValue): Result<Bool> {
+        beginConsumer204()
+        let answer = try { compareArgumentsFrame204(expected) }
+            catch (error: Exception) { holdUnknownConsumer204(); throw error }
+        returnCopiedConsumerFrame204()
+        answer
+    }
+    private func compareArgumentsFrame204(expected: AgentValue): Result<Bool> {
+        let captured = try { lock.lock(); (outcome.getOrThrow(), payment.getOrThrow(), retained) }
+            finally { lock.unlock() }
+        // The caller's JsonNode may be custom or reentrant. The active
+        // consumer protects the data without holding this mutex across it.
+        match (captured[0]) {
+            case Result.Err(error) => holdUnknownConsumer204(); Result<Bool>.Err(error)
+            case Result.Ok(actual) =>
+                let meter = ToolSnapshotMeasure159(captured[1], priorInvoice: captured[2])
+                meter.addValue159(actual); meter.addValue159(expected); meter.fund159()
+                lock.lock(); try { retained = meter.retainedInvoice159() } finally { lock.unlock() }
+                Result.Ok(canonicalAgentValue(actual) == canonicalAgentValue(expected))
+        }
+    }
     // Private Pipeline entry after the complete independent copy helper has
     // returned. Unknown exceptions do not reach this acknowledgment.
     func returnCopiedConsumerFrame204(): Unit {

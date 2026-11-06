@@ -20,6 +20,12 @@ import yjson_support.*
 public func hostPreparePluginReadonlyDelegation(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
     call: ToolCall): Result<AgentValue> {
+    hostPrepareReadonlyCatalog204(host, settingsRoot, namespace, contribution, generation, context, call, None)
+}
+
+func hostPrepareReadonlyDelegationDataFrame204(host: HostJavaScriptPluginHost, settingsRoot: String,
+    namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
+    call: ToolCall, shared: ?SharedToolSetSnapshot159, legacy: ?ToolSetSnapshot, snapshotId: ?String): Result<AgentValue> {
     match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     let descriptor = match (host.servicePackageData81(namespace, generation)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
     if (descriptor.entryKind != PluginEntryKind.NativeExecutable || !descriptor.requestedCapabilities.contains("tool.readonly") ||
@@ -31,10 +37,12 @@ public func hostPreparePluginReadonlyDelegation(host: HostJavaScriptPluginHost, 
     for (grant in config.readonlyDelegations.items where httpIntentText(grant, "contribution") == contribution) { selected = Some(grant) }
     let grant = match (selected) { case Some(value) => value
         case None => return hostPluginResourceError("readonly_delegation.grant_missing", "operator has not granted this exact delegation contribution") }
-    let snapshot = match (context.toolSetSnapshot) { case Some(value) => value
-        case None => return hostPluginResourceError("readonly_delegation.snapshot_missing", "delegation requires the actual Run catalog snapshot") }
-    match (snapshot.threadId) { case Some(thread) => if (thread.value != context.sessionId.value) {
-        return hostPluginResourceError("readonly_delegation.thread_mismatch", "catalog snapshot belongs to another Thread") }; case None => () }
+    if (snapshotId.isNone()) {
+        return hostPluginResourceError("readonly_delegation.snapshot_missing", "delegation requires the actual Run catalog snapshot") }
+    let sameThread = match (shared) { case Some(value) => value.permitsThread159(ThreadId(context.sessionId.value))
+        case None => match (legacy.getOrThrow().threadId) {
+            case Some(thread) => thread.value == context.sessionId.value; case None => true } }
+    if (!sameThread) { return hostPluginResourceError("readonly_delegation.thread_mismatch", "catalog snapshot belongs to another Thread") }
     let entries = ArrayList<AgentValue>()
     for (target in grant.field("tools").getOrThrow().items) {
         let targetNamespace = httpIntentText(target, "plugin"); let targetContribution = httpIntentText(target, "contribution")
@@ -53,16 +61,29 @@ public func hostPreparePluginReadonlyDelegation(host: HostJavaScriptPluginHost, 
         if (targetConfig.digest != config.digest || !targetConfig.ordinaryReadTools.contains(targetContribution)) {
             return hostPluginResourceError("readonly_delegation.target_not_read_granted", "target needs its own exact operator ordinary-read grant") }
         let version = match (host.instanceExecutorVersion(targetNamespace, targetGeneration)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-        var found: ?ToolSnapshotEntry = None
-        for (entry in snapshot.entries where entry.name == name) { found = Some(entry) }
-        let entry = match (found) { case Some(value) => value
-            case None => return hostPluginResourceError("readonly_delegation.target_not_exported", "target is absent from the actual Run catalog snapshot") }
-        if (!entry.availableAtSnapshot || entry.executorVersion != version ||
-            entry.implementationFingerprint != targetNamespace + ":" + actual.contentDigest) {
-            return hostPluginResourceError("readonly_delegation.target_stale", "target publication differs from the actual Run snapshot") }
+        let fingerprint = targetNamespace + ":" + actual.contentDigest
+        let schemaDigest: String
+        match (shared) {
+            case Some(snapshot) =>
+                if (!snapshot.hasExportName159(name)) {
+                    return hostPluginResourceError("readonly_delegation.target_not_exported", "target is absent from the actual Run catalog snapshot") }
+                let currentSchema = match (host.currentToolSchemaDigest(targetNamespace, targetContribution, targetGeneration)) {
+                    case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+                if (!snapshot.strictAvailableExport159(name, version, fingerprint, currentSchema)) {
+                    return hostPluginResourceError("readonly_delegation.target_stale", "target publication differs from the actual Run snapshot") }
+                schemaDigest = currentSchema
+            case None =>
+                var found: ?ToolSnapshotEntry = None
+                for (entry in legacy.getOrThrow().entries where entry.name == name) { found = Some(entry) }
+                let entry = match (found) { case Some(value) => value
+                    case None => return hostPluginResourceError("readonly_delegation.target_not_exported", "target is absent from the actual Run catalog snapshot") }
+                if (!entry.availableAtSnapshot || entry.executorVersion != version || entry.implementationFingerprint != fingerprint) {
+                    return hostPluginResourceError("readonly_delegation.target_stale", "target publication differs from the actual Run snapshot") }
+                schemaDigest = entry.schemaDigest
+        }
         entries.add(objectValue([ValueField("alias", textValue(httpIntentText(target, "alias"))), ValueField("name", textValue(name)),
-            ValueField("version", textValue(entry.executorVersion)), ValueField("fingerprint", textValue(entry.implementationFingerprint)),
-            ValueField("schema_digest", textValue(entry.schemaDigest)), ValueField("package_digest", textValue(actual.contentDigest)),
+            ValueField("version", textValue(version)), ValueField("fingerprint", textValue(fingerprint)),
+            ValueField("schema_digest", textValue(schemaDigest)), ValueField("package_digest", textValue(actual.contentDigest)),
             ValueField("generation", textValue(targetGeneration.toString())), ValueField("services", listValue([textValue("process.readview")]))]))
     }
     match (config.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -73,7 +94,7 @@ public func hostPreparePluginReadonlyDelegation(host: HostJavaScriptPluginHost, 
     let hostFields = ArrayList<ValueField>([ValueField("version", textValue(HOST_READONLY_DELEGATION_VERSION)),
             ValueField("plugin", textValue(namespace)), ValueField("package_digest", textValue(descriptor.contentDigest)),
             ValueField("generation", textValue(generation.toString())), ValueField("configuration_digest", textValue(config.digest)),
-            ValueField("contribution", textValue(contribution)), ValueField("tool_set_id", textValue(snapshot.id)),
+            ValueField("contribution", textValue(contribution)), ValueField("tool_set_id", textValue(snapshotId.getOrThrow())),
             ValueField("tools", listValue(entries.toArray())), ValueField("max_calls", integerValue(readonlyDelegationInteger(grant, "max_calls"))),
             ValueField("max_depth", integerValue(readonlyDelegationInteger(grant, "max_depth")))])
     match (payload) { case Some(value) => hostFields.add(ValueField("tool_payload_limits", value.value())); case None => () }
@@ -122,9 +143,11 @@ public func hostValidatePluginReadonlyDelegation(host: HostJavaScriptPluginHost,
         prepared.source.operationRoot.isNone() || prepared.operationPlan.toolName != prepared.call.name) {
         return hostPluginResourceError("readonly_delegation.root_invalid", "delegation requires its actual frozen canonical root") }
     let input = prepared.operationPlan.canonicalArguments.field("input").getOrThrow()
-    let actual = match (hostPreparePluginReadonlyDelegation(host, settingsRoot, namespace, contribution, generation, context,
+    let actual = match (hostPrepareReadonlyDelegationOwned204(host, settingsRoot, namespace, contribution, generation, context,
         ToolCall(prepared.call.callId, prepared.call.name, input))) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-    if (canonicalAgentValue(actual) != canonicalAgentValue(prepared.operationPlan.canonicalArguments)) {
+    let matches = match (actual.matchesArguments204(prepared.operationPlan.canonicalArguments)) {
+        case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    if (!matches) {
         return hostPluginResourceError("readonly_delegation.grant_changed", "operator allowlist, catalog or installed generation changed") }
     Result.Ok(input)
 }

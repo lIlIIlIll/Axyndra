@@ -461,6 +461,11 @@ public open class HostJavaScriptPluginHost {
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
         hostPreparePluginReadonlyDelegation(this, settingsRoot, namespace, tool, generation, context, call)
     }
+    func prepareReadonlyDelegationOwned204(context: ToolInvocationContext, call: ToolCall,
+        namespace: String, tool: String, generation: UInt64): Result<ToolCanonicalArgumentsOwner204> {
+        hostPrepareReadonlyDelegationOwned204(this, settingsRoot, namespace, tool, generation, context, call)
+    }
+
     public func delegationInput(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
         hostValidatePluginReadonlyDelegation(this, settingsRoot, namespace, tool, generation, context, prepared)
