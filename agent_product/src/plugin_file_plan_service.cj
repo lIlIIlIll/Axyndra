@@ -59,18 +59,23 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
     }
 
     public func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
+        productFilePlanResultMetadata204(prepared, { plan, call =>
+            executeFilePlanFrame204(context, prepared, plan, call) })
+    }
+    private func executeFilePlanFrame204(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolCall): Result<ToolResult> {
         if (prepared.source.kind != PreparedInvocationSourceKind.Derived ||
             prepared.source.parentOperationId.isNone() || prepared.source.operationRoot.isNone() ||
-            prepared.call.name != PLUGIN_FILE_PLAN_TOOL ||
-            prepared.operationPlan.effectClass != OperationEffectClass.ReadOnly ||
-            !networkPolicyModeIsDenied(prepared.operationPlan.networkPolicy.mode)) {
+            call.name != PLUGIN_FILE_PLAN_TOOL ||
+            plan.effectClass != OperationEffectClass.ReadOnly ||
+            !networkPolicyModeIsDenied(plan.networkPolicy.mode)) {
             return pluginProcessError("application_plan.source_invalid", "file.plan.propose requires an admitted read-only plugin child Operation")
         }
         match (context.cancellation.check()) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
-        let arguments = prepared.operationPlan.canonicalArguments
+        let arguments = plan.canonicalArguments
         if (!applicationPlanObjectShape(arguments,
             ["plugin", "generation", "package_digest", "proposal", "managed_binding"],
             ["plugin", "generation", "package_digest", "proposal"])) {
@@ -131,7 +136,7 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
-        Result.Ok(ToolResult(prepared.call.callId, summary))
+        Result.Ok(ToolResult(call.callId, summary))
     }
 }
 

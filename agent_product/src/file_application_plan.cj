@@ -1650,7 +1650,12 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        let arguments = prepared.operationPlan.canonicalArguments
+        productFilePlanResultMetadata204(prepared, { plan, call =>
+            executeFilePlanFrame204(context, prepared, plan, call) })
+    }
+    private func executeFilePlanFrame204(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolCall): Result<ToolResult> {
+        let arguments = plan.canonicalArguments
         let stored = match (loadProductStoredFileApplicationPlan(arguments, workspace, artifacts)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1695,7 +1700,7 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
                     results, planOperations, 0, "not_started"
                 )
                 return Result.Ok(ToolResult(
-                    prepared.call.callId,
+                    call.callId,
                     productApplicationExecutionOutput(
                         "cancellation", planRef, planDigest, results.toArray()
                     ),
@@ -1718,7 +1723,7 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
                         results, planOperations, index + 1, "not_started"
                     )
                     return Result.Ok(ToolResult(
-                        prepared.call.callId,
+                        call.callId,
                         productApplicationExecutionOutput(
                             "conflict", planRef, planDigest, results.toArray()
                         ),
@@ -1736,7 +1741,7 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
                     results, planOperations, index, "not_started"
                 )
                 return Result.Ok(ToolResult(
-                    prepared.call.callId,
+                    call.callId,
                     productApplicationExecutionOutput(
                         "cancellation", planRef, planDigest, results.toArray()
                     ),
@@ -1756,7 +1761,7 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
                         results, planOperations, index + 1, "not_started"
                     )
                     return Result.Ok(ToolResult(
-                        prepared.call.callId,
+                        call.callId,
                         productApplicationExecutionOutput(
                             "conflict", planRef, planDigest, results.toArray()
                         ),
@@ -1803,7 +1808,7 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
                         return Result.Err(productApplicationUnknownOutcome(error, output))
                     }
                     return Result.Ok(ToolResult(
-                        prepared.call.callId, output, isError: true
+                        call.callId, output, isError: true
                     ))
             }
             let confirmed = match (productApplicationCurrentContent(
@@ -1844,7 +1849,7 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
             ]))
         }
         Result.Ok(ToolResult(
-            prepared.call.callId,
+            call.callId,
             productApplicationExecutionOutput(
                 "complete", planRef, planDigest, results.toArray()
             )
@@ -1866,8 +1871,13 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        productFilePlanResultMetadata204(prepared, { plan, call =>
+            executeFilePlanFrame204(context, prepared, plan, call) })
+    }
+    private func executeFilePlanFrame204(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolCall): Result<ToolResult> {
         let stored = match (loadProductStoredFileApplicationPlan(
-            prepared.operationPlan.canonicalArguments, workspace, artifacts
+            plan.canonicalArguments, workspace, artifacts
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1887,7 +1897,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
                     results, stored.planOperations, index
                 )
                 return Result.Ok(ToolResult(
-                    prepared.call.callId,
+                    call.callId,
                     productApplicationRecoveryOutput(
                         "cancellation", stored, results.toArray(), Option<AgentValue>.None
                     ),
@@ -1958,7 +1968,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
         }
         if (unknowns > 0) {
             return Result.Ok(ToolResult(
-                prepared.call.callId,
+                call.callId,
                 productApplicationRecoveryOutput(
                     "unknown", stored, results.toArray(), Option<AgentValue>.None
                 ),
@@ -1967,7 +1977,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
         }
         if (conflicts > 0) {
             return Result.Ok(ToolResult(
-                prepared.call.callId,
+                call.callId,
                 productApplicationRecoveryOutput(
                     "conflict", stored, results.toArray(), Option<AgentValue>.None
                 ),
@@ -1988,7 +1998,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
             }
         }
         Result.Ok(ToolResult(
-            prepared.call.callId,
+            call.callId,
             productApplicationRecoveryOutput(
                 if (pending.isEmpty()) { "reconciled_complete" } else { "continuation_ready" },
                 stored,
