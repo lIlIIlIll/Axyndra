@@ -312,10 +312,12 @@ func requestWithBudget(
     )
 }
 
-func readOnlyWorkflowCatalogAvailable(product: ProductRuntime): Bool {
-    let read = nativeWorkspaceContractToolName(product,"read")
-    let grep = nativeWorkspaceContractToolName(product,"grep")
-    let program = nativeProgramContractToolName(product)
+func readOnlyWorkflowCatalogAvailable(product: ProductRuntime, binding: NativeProgramContractBinding): Bool {
+    // Compare the observed Model catalog with immutable descriptive names
+    // obtained from the actual installed binding.
+    let read = binding.workspaceName("read")
+    let grep = binding.workspaceName("grep")
+    let program = binding.name
     product.fixtureProbe.getOrThrow().withLastRequest159({ view =>
         view.hasTool159(read) && view.hasTool159(grep) && view.hasTool159(program) &&
         !view.hasTool159("write") && !view.hasTool159("plugin.axyndra:workspace.write") &&
@@ -855,7 +857,7 @@ func runMatchedProductWorkflowContract(
             let ptcSession = SessionId("e3-08-ptc-" + sampleNumber.toString())
             product.fixtureProbe.getOrThrow().enqueueToolCallReply(
                 "e3-08-ptc-call-" + sampleNumber.toString(),
-                nativeProgramContractToolName(product),
+                binding.name,
                 objectValue([ValueField("code", textValue(programSource))])
             )
             let ptcRequest = product.request(
@@ -872,7 +874,7 @@ func runMatchedProductWorkflowContract(
                 case _ => throw IllegalStateException("matched PTC workflow did not complete")
             }
             expect(ptcSnapshot.status == RunState.Completed &&
-                readOnlyWorkflowCatalogAvailable(product),
+                readOnlyWorkflowCatalogAvailable(product,binding),
                 "PTC uses the same read-only catalog as native calls")
 
             let ptcHistory = SqliteThreadCommitSink(database).loadThread(
@@ -886,7 +888,7 @@ func runMatchedProductWorkflowContract(
             for (item in ptcHistory.items) {
                 match (item.content) {
                     case ThreadItemContent.ToolCall(callId, name, _) =>
-                        if (name == nativeProgramContractToolName(product)) {
+                        if (name == binding.name) {
                             ptcRootCallId = callId.value
                             ptcRootCallCount += 1
                         }
@@ -1064,7 +1066,7 @@ func runMatchedProductWorkflowContract(
                 case _ => throw IllegalStateException("matched native workflow did not complete")
             }
             expect(nativeSnapshot.status == RunState.Completed &&
-                readOnlyWorkflowCatalogAvailable(product),
+                readOnlyWorkflowCatalogAvailable(product,binding),
                 "native calls use the same read-only catalog as PTC")
 
             let nativeHistory = SqliteThreadCommitSink(database).loadThread(
@@ -2096,6 +2098,29 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
             ))
         )).value().getOrThrow()
         let programBinding = NativeProgramContractBinding(product)
+        let bindingNameUsage96 = nativeControlMetadataUsage113()
+        for(_ in 0..100){
+            expect(programBinding.name=="plugin.axyndra:program.run" &&
+                programBinding.workspaceName("read")=="plugin.axyndra:workspace.read" &&
+                programBinding.workspaceName("grep")=="plugin.axyndra:workspace.grep" &&
+                programBinding.workspaceName("glob")=="plugin.axyndra:workspace.glob",
+                "actual installed binding keeps its exact readonly QNames")
+        }
+        let bindingNameAfter96 = nativeControlMetadataUsage113()
+        expect(bindingNameAfter96[0]==bindingNameUsage96[0] && bindingNameAfter96[1]==bindingNameUsage96[1],
+            "repeated binding name observation creates no new Registry export payment")
+        expect(nativeProgramContractToolName(product) == programBinding.name &&
+            nativeWorkspaceContractToolName(product, "read") == programBinding.workspaceName("read"),
+            "actual Registry lookup agrees with the installed binding")
+        let lookupUsage96 = nativeControlMetadataUsage113()
+        for (_ in 0..100) {
+            expect(nativeProgramContractToolName(product) == programBinding.name &&
+                nativeWorkspaceContractToolName(product, "read") == programBinding.workspaceName("read"),
+                "readonly contribution lookup retains its exact installed identity")
+        }
+        let lookupAfter96 = nativeControlMetadataUsage113()
+        expect(lookupAfter96[0] == lookupUsage96[0] && lookupAfter96[1] == lookupUsage96[1],
+            "repeated actual Registry lookup closes its temporary list and exports no descriptor graph")
         let sessionId = SessionId("durable-product-thread")
         let result = product.applicationSession(sessionId: Some(sessionId))
             .submit("persist the canonical owner")
@@ -2408,7 +2433,7 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
             "return paths;"
         runMatchedProductWorkflowContract(product, stateRoot, programSource,programBinding)
         runProductFileApplicationPlanContracts(
-            root, workspace, stateRoot, product
+            root, workspace, stateRoot, product, programBinding
         )
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-root-call",
@@ -3990,9 +4015,10 @@ func runProductFileApplicationPlanContracts(
     root: String,
     workspace: String,
     stateRoot: String,
-    product: ProductRuntime
+    product: ProductRuntime,
+    binding: NativeProgramContractBinding
 ): Unit {
-    let binding=NativeProgramContractBinding(product,filePlanProposals:true)
+    binding.configure(true)
     let database = SqliteDatabase(stateRoot + "/state.db")
     try {
         let artifacts = ProductArtifactStore(stateRoot, database: Some(database))

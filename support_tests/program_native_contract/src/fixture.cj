@@ -23,17 +23,22 @@ public func nativeWorkspaceContractToolName(product: ProductRuntime, contributio
     nativeContractContributionName(product,"axyndra:workspace",contribution)
 }
 func nativeContractContributionName(product: ProductRuntime, namespace: String, contribution: String): String {
-    // The public snapshot list is index-addressed, not an iterator; walk it
-    // explicitly and keep the same namespace/enabled/kind filter.
     let snapshots = product.pluginSnapshots()
+    let ready = try { nativeContractContributionReady96(product, snapshots, namespace, contribution) }
+        finally { snapshots.close() }
+    if (ready) { return "plugin." + namespace + "." + contribution }
+    throw IllegalStateException("actual installed ready Native contribution required")
+}
+private func nativeContractContributionReady96(product: ProductRuntime, snapshots: OwnedPluginRecordList,
+    namespace: String, contribution: String): Bool {
     for (snapshotIndex in 0..snapshots.size) {
         let record = snapshots.at(snapshotIndex)
-        if (!(supportRegistryDescriptor96(record,"namespace")==namespace && supportRegistryData96(record).enabled &&
-            !supportRegistryData96(record).explicitlyDisabled && record.descriptor.entryKind==PluginEntryKind.NativeExecutable)) { continue }
-        if(product.vnext.javascriptPlugins.instanceGeneration(namespace)!=0u64 &&
-            product.vnext.javascriptPlugins.toolNames(namespace).contains(contribution)){
-            return "plugin."+supportRegistryDescriptor96(record,"namespace")+"."+contribution}}
-    throw IllegalStateException("actual installed ready Native contribution required")
+        if (!record.descriptor.textEquals(PluginDescriptorText.Namespace, namespace) || !record.enabled ||
+            record.explicitlyDisabled || record.descriptor.entryKind != PluginEntryKind.NativeExecutable) { continue }
+        if (product.vnext.javascriptPlugins.instanceGeneration(namespace) != 0u64 &&
+            product.vnext.javascriptPlugins.toolNames(namespace).contains(contribution)) { return true }
+    }
+    false
 }
 
 // Only a Test fixture for the actual public import/enable/operator path. This
@@ -43,6 +48,10 @@ public class NativeProgramContractBinding {
     public let program: ProductPluginRecord
     public let workspace: ProductPluginRecord
     private let attachInput: Bool
+    private let programName96: String
+    private let readName96: String
+    private let grepName96: String
+    private let globName96: String
 
     public init(product: ProductRuntime, filePlanProposals!: Bool=false, inputAttachment!: Bool=true) {
         this.product=product;this.attachInput=inputAttachment
@@ -65,14 +74,23 @@ public class NativeProgramContractBinding {
             case PluginRegistryResult.Ok(discard96)=>supportRegistryDiscard96(discard96)
             case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))}
         this.program=installed;this.workspace=resources
+        // Actual installed records are immutable. Reuse their paid descriptive
+        // names instead of exporting another namespace copy on every check.
+        let programNamespace=supportRegistryDescriptor96(installed,"namespace")
+        let workspacePrefix="plugin."+supportRegistryDescriptor96(resources,"namespace")+"."
+        this.programName96="plugin."+programNamespace+".run"
+        this.readName96=workspacePrefix+"read"
+        this.grepName96=workspacePrefix+"grep"
+        this.globName96=workspacePrefix+"glob"
         configure(filePlanProposals)
     }
 
-    public prop name: String { get(){"plugin."+supportRegistryDescriptor96(program,"namespace")+".run"} }
+    public prop name: String { get(){programName96} }
     public func workspaceName(contribution: String): String {
-        if(!["read","grep","glob"].contains(contribution)){
-            throw IllegalStateException("readonly fixture has no other delegated contribution")}
-        "plugin."+supportRegistryDescriptor96(workspace,"namespace")+"."+contribution
+        if(contribution=="read"){return readName96}
+        if(contribution=="grep"){return grepName96}
+        if(contribution=="glob"){return globName96}
+        throw IllegalStateException("readonly fixture has no other delegated contribution")
     }
     public func input(code: String): AgentValue {objectValue([ValueField("code",textValue(code))])}
 
