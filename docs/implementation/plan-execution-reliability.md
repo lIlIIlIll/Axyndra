@@ -792,3 +792,46 @@ including documentation, dependency pins, library boundaries and the 39-package
 inventory. Minimal source materialization separately passes all 16 Python
 cases. Evidence is `static-gates-final-checkpoint.json` and its named logs.
 These static results do not replace failed Product or release contracts.
+
+
+### Actual headless performance retirement
+
+The noncapturing performance path now has a concrete producer lifetime. The
+vendored overlay adds `AppTestRunner.runOwned`: it charges the actual prior
+Terminal and TestBackend buffers through the original provider before drawing.
+It closes the real command, asynchronous-task and Terminal helpers before
+returning internal retirement witnesses. These witnesses never acknowledge
+physical output or retained screenshots. Capturing options are rejected by
+this entry; the original capturing runner remains available unchanged.
+
+The product binds a private headless producer to the exact Screen and actual
+`DirectStdOutDisplayOutput`. The complete performance helper returns before
+its stdout witness and Screen-copy receipt can be created. The receipt also
+requires real asynchronous, Window and Terminal retirement and backend-reader
+quiescence. The native retirement guard is preserved. No native-frame marker,
+extra budget pool, Source, permission or physical-exit acknowledgement is used.
+Other headless capture modes still need their own complete custody path.
+
+All 549 vendored Core tests and all 98 TUI tests pass without skips. The new
+four Core cases cover actual buffer invoices, refusal before draw, primary
+render failure during cleanup and capture rejection. Production App build
+passes with executable hash
+`2cea8e7d036e3ac33cabc334227182fca9a57bc3376c87f8425037460c774ec7`.
+The newly rebuilt Coding nine-plugin package has executable hash
+`96e8651ea8ac81977ce3c110b672dba549ad2df90b37881ddeb01822d960b0df`.
+Its setup, clean-environment checks, 100 `--version` cold starts and all 40
+original TUI journeys pass. TUI p50 is 413.8 ms and p95 is 413.9 ms under the
+unchanged 500 ms gate and 15-second sample deadline. The earlier same-SDK
+baseline p95 is 263.8 ms; the observed candidate increase is 150.1 ms, about
+57 percent. These samples do not replace the required activation, hot IPC,
+output-load, memory and cancellation performance matrix.
+
+Evidence is `headless-core-second-probe.json`, `headless-core-full.json`,
+`tui-headless-units.json`, `app-headless-current.json`,
+`headless-actual-app-diagnostic.json` and `headless-coding-final.json` under
+`<evidence>`. The unbundled diagnostic is separate from the final Coding gate.
+All final process observations report no survivors, forced reaping or unknown
+identities. The upstream cjtui identity remains unchanged; the intentional
+local overlay and API checksum record the new entry and four tests. No database
+migration is introduced. Reverting this change restores the prior headless
+performance failure; original native and capturing APIs keep their contracts.

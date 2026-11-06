@@ -1778,3 +1778,13 @@ CI remain open. GC repair is deferred, not passed. The detailed follow-up is in
 Current checkpoint validation also passes 102 Python regressions and the full
 architecture gate. The 16 Minimal-source Python regressions pass separately.
 These results do not close the remaining Product and release requirements.
+
+
+| Evidence | Executed source and scope | Actual result and remaining limit | Retained entry point |
+| --- | --- | --- | --- |
+| E967 | Actual noncapturing Headless producer, same original bank and genuine stdout | Full Core 549/549 and TUI 98/98 pass, no skips. App `2cea8e7d` builds. Fresh Coding9 package `96e8651e` passes setup, clean-env, 100 version cold starts and all 40 TUI runs at p95 413.9 ms, below the unchanged 500 ms gate. Original baseline p95 is 263.8 ms. | `headless-core-full.json`; `tui-headless-units.json`; `app-headless-current.json`; `headless-coding-final.json` |
+
+E967 closes the specific headless **performance** failure in E965. Capturing
+headless scenarios and the remaining activation/IPC/load/memory/cancellation
+performance matrix stay open. No completion credit is transferred to the
+still-failing Product, model-resource or complete release requirements.

@@ -300,6 +300,8 @@ public func runAgentTui(
     }
     tuiStartupStage("fixture_generation_completed")
     if (headless()) {
+        if (headlessPerformance() && screen.wantsRetainedDisplayProducerRetirement()) {
+            return HeadlessDisplayProducer180.run(screen, externalPort) }
         let result = runHeadless(screen)
         externalPort.close()
         return result
@@ -6057,10 +6059,45 @@ class AgentScreen <: TerminalFrameProvider {
         if (actualNativeOutput.isSome()) { throw Exception("display.native_output_already_bound") }
         actualNativeOutput = Some(output)
     }
+    private var headlessDisplayProducer180: ?HeadlessDisplayProducer180 = None
+    func bindHeadlessDisplayProducer180(actual: HeadlessDisplayProducer180): Unit {
+        if (actualNativeOutput.isSome() || headlessDisplayProducer180.isSome()) {
+            throw Exception("display.headless_producer_already_bound") }
+        headlessDisplayProducer180 = Some(actual)
+        terminalInternalFrameReferencesRetired = false
+        windowInternalReferencesRetired = false
+        asyncTaskReferencesRetired = false
+    }
+    private func actualHeadlessProducerReturned180(): Bool {
+        match (headlessDisplayProducer180) {
+            case Some(actual) => actual.acknowledges180(this)
+            case None => false }
+    }
+    func retireActualHeadlessOutputAndScreenReferences180(actual: HeadlessDisplayProducer180): Bool {
+        match (headlessDisplayProducer180) {
+            case Some(bound) => if (!refEq(bound, actual)) { return false }
+            case None => return false }
+        if (!actualHeadlessProducerReturned180() || !terminalInternalFrameReferencesRetired ||
+            !windowInternalReferencesRetired || !asyncTaskReferencesRetired) { return false }
+        match (backend as OwnedFailureAgentTuiBackend113) {
+            case Some(owner) => match (RetiredOwnedTuiFailureProducerFrames113.retire(this)) {
+                case Some(retired) => if (owner.discardOwnedFailureInputsAfterProducerRetirement113(retired).isError()) { return false }
+                case None => return false }
+            case None => () }
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owner) => if (!owner.awaitOwnedToolDisplayProducerReferencesRetired()) { return false }
+            case None => return false }
+        if (!pluginView.tryRetireRetainedReferences()) { return false }
+        clearActualCopiedScreenReferencesFrame()
+        clearInheritedScreenFieldReferencesFrame()
+        headlessDisplayProducer180 = None
+        true
+    }
     func noteActualNativeProducerFramesEnded(): Unit { actualNativeProducerFramesEnded = true }
     func actualRegistryProducer167(): ?Object { backend as Object }
     func actualRetiredFailureProducer113(): ?OwnedFailureAgentTuiBackend113 {
-        if (!actualNativeProducerFramesEnded || actualNativeOutput.isNone() ||
+        let nativeReturned = actualNativeProducerFramesEnded && actualNativeOutput.isSome()
+        if ((!nativeReturned && !actualHeadlessProducerReturned180()) ||
             !terminalInternalFrameReferencesRetired || !windowInternalReferencesRetired || !asyncTaskReferencesRetired) {
             return Option<OwnedFailureAgentTuiBackend113>.None }
         backend as OwnedFailureAgentTuiBackend113
@@ -6091,7 +6128,7 @@ class AgentScreen <: TerminalFrameProvider {
         actualNativeOutput = None; true
     }
     private func clearInheritedScreenFieldReferencesFrame(): Unit {
-        // This production call occurs only after real native App producer,
+        // This production call occurs only after a real native or owned headless producer,
         // runtime callable/notifier, backend callback, Window/Terminal and
         // exact bound StdOut retirement guards. Clear the REAL fields; do not
         // clear a parallel holder while these original fields stay alive.

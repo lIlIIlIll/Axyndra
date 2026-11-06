@@ -9,8 +9,8 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "3477f8cd24c1ae130e8747d59e46d979518b29ae1583a5fd955fcf39b52d3829",
-  "vendored_files": 76,
+  "vendored_manifest_sha256": "43116cb6adc02fd34fdabf01bb4cde8a9c183865ae86293470a41ae56e419b3b",
+  "vendored_files": 77,
   "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
   "alignment_target": {
     "project": "oh-my-pi",
@@ -34,7 +34,8 @@
       "packages/core/tests/terminal_signal/cjpm.toml",
       "packages/core/tests/terminal_signal/src/main.cj",
       "packages/core/tests/terminal_signal/check.py",
-      "packages/core/tests/terminal_signal/native_guard_test.c"
+      "packages/core/tests/terminal_signal/native_guard_test.c",
+      "packages/core/src/headless_owned_frames_test.cj"
     ],
     "contracts": [
       "primary presentation writes history to native terminal scrollback",

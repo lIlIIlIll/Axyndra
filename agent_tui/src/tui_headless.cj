@@ -754,7 +754,7 @@ func runHeadless(screen: AgentScreen): Int64 {
     0
 }
 
-func runHeadlessPerformance(screen: AgentScreen): Int64 {
+func runHeadlessPerformance(screen: AgentScreen, producer180!: ?HeadlessDisplayProducer180 = None): Int64 {
     screen.seedPerformanceSmoke()
     let script = HeadlessScript()
         .tick(count: 2)
@@ -767,19 +767,16 @@ func runHeadlessPerformance(screen: AgentScreen): Int64 {
         .resize(Rect(0, 0, 60, 18))
         .tick(count: 3)
         .key(KeyEvent(KeyCode.End))
-    let result = AppTestRunner.run(
-        script,
-        {frame => screen.render(frame)},
-        {event => screen.update(event)},
-        options: HeadlessRunOptions(
-            area: Rect(0, 0, 100, 28),
-            ticks: 0,
-            captureBuffers: false,
-            captureSnapshots: false
-        )
-    )
+    let options = HeadlessRunOptions(area: Rect(0, 0, 100, 28), ticks: 0,
+        captureBuffers: false, captureSnapshots: false)
+    let result = if (producer180.isSome()) {
+        AppTestRunner.runOwned(script, { frame => screen.render(frame) }, { event => screen.update(event) },
+            screen, options: options)
+    } else {
+        AppTestRunner.run(script, { frame => screen.render(frame) }, { event => screen.update(event) }, options: options)
+    }
     if (!result.passed() || screen.transcriptSize() == 0) {
-        println("headless cjtui performance journey failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui performance journey failed")
         return 1
     }
     var renderMillis: Int64 = 0
@@ -788,7 +785,7 @@ func runHeadlessPerformance(screen: AgentScreen): Int64 {
         renderMillis += frame.renderMillis
         drawMillis += frame.drawMillis
     }
-    println(
+    writeHeadlessPerformanceLine180(producer180,
         "tui headless performance frames=${result.metrics.frames().size}" +
             " render=${renderMillis}ms draw=${drawMillis}ms")
     0

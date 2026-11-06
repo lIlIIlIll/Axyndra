@@ -16,6 +16,14 @@ public class RetiredOwnedTuiScreenReferences {
         match (screen.actualRegistryProducer167()) {
             case Some(actual) => Some(RetiredOwnedTuiScreenReferences(actual))
             case None => Option<RetiredOwnedTuiScreenReferences>.None } }
+    static func retireHeadless180(screen: AgentScreen, actual: HeadlessDisplayProducer180): ?RetiredOwnedTuiScreenReferences {
+        // A different concrete producer. It proves its actual TestBackend,
+        // noncapturing result helper, async owner and bound stdout lifetime.
+        if (!screen.retireActualHeadlessOutputAndScreenReferences180(actual)) { return None }
+        match (screen.actualRegistryProducer167()) {
+            case Some(producer) => Some(RetiredOwnedTuiScreenReferences(producer))
+            case None => Option<RetiredOwnedTuiScreenReferences>.None }
+    }
     public func copiedReferencesRetired(): Bool { true }
     public func acknowledgesRegistryProducer167(value: Object): Bool { refEq(producer, value) }
 }

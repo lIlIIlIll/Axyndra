@@ -1247,6 +1247,18 @@ public class HeadlessRunResult {
 
 public class AppTestRunner {
     public static func run(script: HeadlessScript, render: (Frame) -> Unit, update: (Event) -> UpdateResult, options!: HeadlessRunOptions = HeadlessRunOptions()): HeadlessRunResult {
+        runWithFrameLifetime(script, render, update, None<TerminalFrameProvider>, options: options)
+    }
+
+    // A final noncapturing render lifecycle. Captured Buffers/snapshots need
+    // separate custody and cannot be acknowledged by internal retirement.
+    public static func runOwned(script: HeadlessScript, render: (Frame) -> Unit, update: (Event) -> UpdateResult, provider: TerminalFrameProvider, options!: HeadlessRunOptions = HeadlessRunOptions(captureBuffers: false, captureSnapshots: false)): HeadlessRunResult {
+        if (options.captureBuffers || options.captureSnapshots) {
+            throw IllegalArgumentException("display.headless_capture_custody_required") }
+        runWithFrameLifetime(script, render, update, Some(provider), options: options)
+    }
+
+    private static func runWithFrameLifetime(script: HeadlessScript, render: (Frame) -> Unit, update: (Event) -> UpdateResult, frameProvider: ?TerminalFrameProvider, options!: HeadlessRunOptions): HeadlessRunResult {
         let backend = TestBackend(
             area: options.area,
             captureSnapshots: options.captureSnapshots
@@ -1263,59 +1275,83 @@ public class AppTestRunner {
         var droppedTicks: Int64 = 0
         var lastTickDelta: Int64 = 0
 
-        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta)
-        for (step in script.steps()) {
-            match (step) {
-                case HeadlessStep.Input(event) =>
-                    flow = AppTestRunner.dispatch(event, update, commandQueue, asyncRuntime, flow)
-                    frameIndex++
-                    AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta)
-                case HeadlessStep.Tick(count) =>
-                    for (_ in 0..max(0, count)) {
+        var failed = false
+        try {
+            AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+            for (step in script.steps()) {
+                match (step) {
+                    case HeadlessStep.Input(event) =>
+                        flow = AppTestRunner.dispatch(event, update, commandQueue, asyncRuntime, flow)
                         frameIndex++
-                        lastTickDelta = options.tickDeltaMillis
-                        flow = AppTestRunner.dispatch(Event.Tick(TickEvent(deltaMillis: options.tickDeltaMillis, elapsedMillis: frameIndex * options.tickDeltaMillis, frameIndex: frameIndex)), update, commandQueue, asyncRuntime, flow)
-                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta)
-                    }
-                case HeadlessStep.WaitMillis(milliseconds) =>
-                    sleep(Duration.millisecond * milliseconds)
-                    frameIndex++
-                    flow = AppTestRunner.dispatch(
-                        Event.Tick(TickEvent(
-                            deltaMillis: milliseconds,
-                            elapsedMillis: frameIndex * options.tickDeltaMillis,
-                            frameIndex: frameIndex
-                        )),
-                        update,
-                        commandQueue,
-                        asyncRuntime,
-                        flow
-                    )
-                    AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta)
-                case HeadlessStep.Resize(area) =>
-                    backend.setSize(area)
-                    frameIndex++
-                    flow = AppTestRunner.dispatch(Event.Resize(area), update, commandQueue, asyncRuntime, flow)
-                    AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta)
-                case HeadlessStep.Render =>
-                    frameIndex++
-                    AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta)
-                case HeadlessStep.ExpectSnapshot(expected) =>
-                    let diff = SnapshotDiff.text(expected, backend.snapshot())
-                    if (!diff.passed) { failures.add(diff.message) }
-                case HeadlessStep.ExpectCell(x, y, symbol) =>
-                    if (!backend.assertCell(x, y, symbol)) {
-                        failures.add("cell mismatch at ${x},${y}")
-                    }
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                    case HeadlessStep.Tick(count) =>
+                        for (_ in 0..max(0, count)) {
+                            frameIndex++
+                            lastTickDelta = options.tickDeltaMillis
+                            flow = AppTestRunner.dispatch(Event.Tick(TickEvent(deltaMillis: options.tickDeltaMillis, elapsedMillis: frameIndex * options.tickDeltaMillis, frameIndex: frameIndex)), update, commandQueue, asyncRuntime, flow)
+                            AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                        }
+                    case HeadlessStep.WaitMillis(milliseconds) =>
+                        sleep(Duration.millisecond * milliseconds)
+                        frameIndex++
+                        flow = AppTestRunner.dispatch(
+                            Event.Tick(TickEvent(
+                                deltaMillis: milliseconds,
+                                elapsedMillis: frameIndex * options.tickDeltaMillis,
+                                frameIndex: frameIndex
+                            )),
+                            update,
+                            commandQueue,
+                            asyncRuntime,
+                            flow
+                        )
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                    case HeadlessStep.Resize(area) =>
+                        backend.setSize(area)
+                        frameIndex++
+                        flow = AppTestRunner.dispatch(Event.Resize(area), update, commandQueue, asyncRuntime, flow)
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                    case HeadlessStep.Render =>
+                        frameIndex++
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                    case HeadlessStep.ExpectSnapshot(expected) =>
+                        let diff = SnapshotDiff.text(expected, backend.snapshot())
+                        if (!diff.passed) { failures.add(diff.message) }
+                    case HeadlessStep.ExpectCell(x, y, symbol) =>
+                        if (!backend.assertCell(x, y, symbol)) {
+                            failures.add("cell mismatch at ${x},${y}")
+                        }
+                }
+            }
+            for (_ in 0..options.ticks) {
+                frameIndex++
+                lastTickDelta = options.tickDeltaMillis
+                flow = AppTestRunner.dispatch(Event.Tick(TickEvent(deltaMillis: options.tickDeltaMillis, elapsedMillis: frameIndex * options.tickDeltaMillis, frameIndex: frameIndex)), update, commandQueue, asyncRuntime, flow)
+                AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+            }
+            HeadlessRunResult(flow, frames.toArray(), snapshots.toArray(), metrics, failures.toArray())
+        } catch (error: Exception) { failed = true; throw error }
+        finally {
+            match (frameProvider) {
+                case Some(provider) =>
+                    if (failed) {
+                        // A secondary cleanup error cannot replace the first
+                        // render/update failure or make this invocation pass.
+                        try { closeOwnedFrames(terminal, commandQueue, asyncRuntime, provider) }
+                        catch (_: Exception) { () }
+                    } else { closeOwnedFrames(terminal, commandQueue, asyncRuntime, provider) }
+                case None => ()
             }
         }
-        for (_ in 0..options.ticks) {
-            frameIndex++
-            lastTickDelta = options.tickDeltaMillis
-            flow = AppTestRunner.dispatch(Event.Tick(TickEvent(deltaMillis: options.tickDeltaMillis, elapsedMillis: frameIndex * options.tickDeltaMillis, frameIndex: frameIndex)), update, commandQueue, asyncRuntime, flow)
-            AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta)
-        }
-        HeadlessRunResult(flow, frames.toArray(), snapshots.toArray(), metrics, failures.toArray())
+    }
+
+    private static func closeOwnedFrames(terminal: Terminal, commands: ArrayList<Command>, runtime: AsyncRuntime, provider: TerminalFrameProvider): Unit {
+        provider.beginRetainedDisplayProducerClosing()
+        commands.clear()
+        provider.noteAsyncTaskReferencesRetired(RetiredAsyncTaskReferences.retire(runtime))
+        match (RetiredInternalDisplayFrameReferences.retire(terminal)) {
+            case Some(retired) => provider.noteInternalDisplayFrameReferencesRetired(retired)
+            case None => throw Exception("display.headless_terminal_retirement_pending") }
     }
 
     private static func dispatch(event: Event, update: (Event) -> UpdateResult, commandQueue: ArrayList<Command>, asyncRuntime: AsyncRuntime, flow: ControlFlow): ControlFlow {
@@ -1340,8 +1376,18 @@ public class AppTestRunner {
         frameIndex: Int64,
         eventQueueLength: Int64,
         droppedTicks: Int64,
-        tickDeltaMillis: Int64
+        tickDeltaMillis: Int64,
+        frameProvider: ?TerminalFrameProvider
     ): Unit {
+        match (frameProvider) {
+            case Some(provider) =>
+                var previous = terminal.retainedFrameCopiesInvoice()
+                match (backend.lastBuffer()) {
+                    case Some(buffer) => previous = retainedDisplayAdd(previous, retainedBufferCellInvoice(buffer))
+                    case None => () }
+                if (!provider.prepareRetainedFrameCopies(backend.size(), previous)) {
+                    throw Exception("display.raster_payment_required") }
+            case None => () }
         let renderMetrics = terminal.draw(render)
         metrics.record(renderMetrics, frameIndex: frameIndex, eventQueueLength: eventQueueLength, droppedTicks: droppedTicks, tickDeltaMillis: tickDeltaMillis)
         if (options.captureBuffers) {
