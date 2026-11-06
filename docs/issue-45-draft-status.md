@@ -1870,3 +1870,20 @@ external provider call is included.
 E991-E992 describe the new checkpoint lookup only. Full Core/context retirement,
 latest App/packages and the other previously recorded mandatory gates remain
 open. GC remains deferred, and no new provider call is authorized.
+
+
+The current E993-E1000 evidence is recorded in
+[File preview authority and current lifetime boundary](implementation/plan-execution-reliability.md#file-preview-authority-and-current-lifetime-boundary).
+The five affected packages pass 748 unit cases and the new Program package passes
+all 28 protocol cases. Actual file preview, one-time application, stale approval
+refusal and recovery progress beyond E992. The independent AST edit contract
+passes with the decision-before-write freshness contract.
+
+Full Core remains FAIL at a later `input_attachment.capacity`. The current full
+bridge is 23/24, with Pi disable-handoff reporting `thread.durable_commit_failed`.
+Concrete Native Host Raw metadata consumers, other mandatory acceptance and
+current release artifacts remain open. GC stays deferred. This is a Draft
+checkpoint, not full acceptance or an Issue-closing delivery.
+
+Production and fixture checkpoint: `dc5657e9`. The Draft completion boundary
+remains E1000 and the other open mandatory gates.

@@ -1157,3 +1157,43 @@ Their large `reserveSnapshotCatalogData159` group includes actual tool-set
 snapshots and must not be mislabeled as only Core Catalog source loans.
 Root-context and other lane consumers still require a complete lifetime audit.
 No Core-context retirement change is included in this checkpoint.
+
+### File preview authority and current lifetime boundary
+
+The current non-GC work remains **not fully complete**. GC is deferred by the
+user. The following evidence does not replace the open full Product, App,
+performance, release, provider, and hosted-CI requirements.
+
+| Evidence | Required behavior and implementation | Actual verification | Status and remaining gap |
+| --- | --- | --- | --- |
+| E993 | Private Core root Context DATA remains held until its entire producer helper and original task witnesses return. Existing pending consumers and ACK debts still prevent collection. | `preview-followup-units-current.json`: Core 47/47 PASS. Actual file-plan execution now passes its original first read and preview. | Partial. The change covers start without an open initial-context preparer. Resume, approval and other concrete Context consumers still need lifetime closure. Errors and unknown callbacks remain paid. |
+| E994 | Operator-granted previews use their exact `readonly-delegation` child key in Pipeline and Store routing. The existing transaction still checks the actual frozen parent, complete edge, capability ceiling, handoff and reserved Receipt. The registered preview now declares `neverReplay`, matching the existing Domain predicate. | `product-file-plan-owned-canonical-current.json`: actual ungranted preview is refused without a preview Operation or file; the granted preview has the original completed child Receipt and exact parent/source/proposal identity. | Focused behavior PASS. Complete Core remains FAIL later in the same process. No authorization or replay guard was relaxed. |
+| E995 | A file changed during review must be rejected before recording approval. `ToolApprovalTargetValidator` opts the actual file-plan executor into the descriptor's existing canonicalizer. Both application and recovery producers use `ToolCanonicalArgumentsOwner204` on the original Registry bank. | Actual Core file-plan scenario passes one-time approval, three exact writes, rejection of session-wide approval, stale-target refusal with pending review retained, and recovery. `product-preview-ast-approval-current.json` passes the independent AST edit contract, including no stale apply Receipt and successful cancellation. | Focused behavior PASS. Existing public function signatures and DB/wire formats are unchanged. Stale approval now returns `application_plan.precondition_conflict` with review pending instead of consuming approval and reporting a later failed write result. Callers must cancel or refresh that review. |
+| E996 | Nested Native service execution must fit the existing stack. Process-error translation runs only on the error path and no longer occupies the normal `invoke` frame. Error ordering and cancellation precedence remain unchanged. | Original binary reproduces `StackOverflowError` twice. `workflow-stackframes-current.log` records a 121,920-byte active span. The changed actual Core passes that site. Extension 100/100 PASS in `preview-followup-extension-fixture-current.json`. | Focused regression PASS. This does not prove every nested-depth or performance scenario. No SDK build, stack-limit increase or workload reduction was used. |
+| E997 | Both Host preparation and Program completed-error adapters preserve the actual child refusal. The Native fixture decodes persisted Receipt detail using the existing Store codec. | `program-preview-error-red.json`: the old package fails two new error-code assertions. `program-preview-error-package-validation/summary.json`: all 28 packaged protocol cases PASS, including those assertions, without skips. Actual Core preserves path refusal and rejects the original UTF-8 path bound. | PASS for these adapters and protocol cases. Protocol packets do not prove Store authority; the actual Product evidence in E994 supplies that boundary. |
+| E998 | All affected package unit cases remain inventoried and execute. | Tool Runtime 72/72, Store 257/257 and Core 47/47 PASS in `preview-followup-units-current.json`. The original isolated Host entry passes 272/272 in `preview-followup-canonical-host-current/agent_host_runtime.isolation.json`. Extension passes 100/100 with its required fixture root. Total: 748 PASS, no skips. | PASS for these packages. The initial noncanonical Host shared-process run and Extension missing-fixture run remain failure evidence; they are not counted as passing. Product/App are not included in these totals. |
+| E999 | All original bridge lifecycle cases and independent contracts must pass on final artifacts. | `product-preview-final-independent.json`: Registry refusal, acquisition and AST query pass; its old AST stale-review oracle fails and is corrected in E995. `readonly-bridge-preview-final-independent/summary.json`: 23/24 PASS, Pi disable-handoff fails with `thread.durable_commit_failed`. | FAIL. The earlier Direct Pi withdrawal failure remains an intermittent concern. No claim of stable bridge closure or final product acceptance. |
+| E1000 | Consecutive real Runs must release only DATA whose concrete consumers returned. | Complete Core in `product-file-plan-owned-canonical-current.json` reaches the stale-proposal negative, then fails before dispatch with `input_attachment.capacity`. Read-only `workflow-preview-owned-scope-hold.log` identifies Raw metadata getters in actual Native Host and file-plan executors invoking `PreparedMetadataOwner204.holdUnknown204`. | FAIL. Add actual metadata consumers through complete private helpers, asynchronous broker and result ACK lifetimes. Preserve unknown Raw exports, shared high-water accounting, original quotas and all Source checks. |
+
+The final standalone AST product artifact is
+`3e30166e6c7a305c180ec71e12a2b12856f6a80c9df9d71ad8436412382558f5`.
+`product-preview-canonical-refusal-current.json` verifies this final build: AST
+edit PASS and complete Core FAIL at the same later attachment capacity boundary.
+The preceding independent/bridge artifact is identified separately in its JSON.
+The final producer also handles exact recorded pre-copy refusal through the
+existing owner protocol. Unknown copy failures remain paid. This narrow failure
+change is not a new complete bridge acceptance.
+The five package results apply to the production changes before that test-only
+edit. Official SDK and StdX identities remain unchanged.
+
+Generated root, Program and standalone Product locks were preserved with exact
+bytes, differences and hashes in `preview-followup-lock-preservation`, then
+restored to the approved lock contents after the related builds completed.
+No dependency upgrade or DB migration is introduced. Rollback can revert this
+follow-up without rewriting historical Operations or stored artifacts.
+
+The E993-E1000 production and fixture changes are committed in `dc5657e9`.
+The current Python regression suite passes 105 cases. Full architecture,
+documentation, dependency-pin and test-source inventory checks also pass in
+`static-gates-preview-final.json` and `preview-followup-final-inventory/summary.json`.
+These static results do not close the failing actual Core or bridge requirements.
