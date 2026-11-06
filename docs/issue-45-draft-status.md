@@ -1788,3 +1788,19 @@ E967 closes the specific headless **performance** failure in E965. Capturing
 headless scenarios and the remaining activation/IPC/load/memory/cancellation
 performance matrix stay open. No completion credit is transferred to the
 still-failing Product, model-resource or complete release requirements.
+
+
+| Evidence | Executed source and scope | Actual result and remaining limit | Retained entry point |
+| --- | --- | --- | --- |
+| E968 | Hosted pinned PR runs at `951e6bd6`, `682585e9`, `c9621d55` | First generated-authority reference corrected; next fake-SDK test export leak corrected. Latest run passes static and clean compilation, fails AST product contract; complete units/release not run. Installer regression fails before fix, then 4/4 pass. | [latest executed hosted run](https://github.com/lIlIIlIll/Axyndra/actions/runs/42142285196); `scripts/setup_ci_sdk_test.py` |
+| E969 | `d6cd56e9`, independently built Workspace package and fixed current App | Worker 43/43 and payload 9/9 pass. Real CLI read/count/paging 1000+100/path escape pass at original ten-second limits. Single-file filename regression fails before fix. Complete unbundled CLI diagnostic still fails at missing search capability. | `workspace-grep-current/package-validation/summary.json`; `entry-read-current-v6.json`; `entry-full-current.json` |
+| E970 | Explicitly authorized two-call real DeepSeek diagnostic, recovery disabled | One Attempt per endpoint; Completions `http.exchange_outcome_unknown`, Messages `model.plugin_failure`; no expected marker, both FAIL. No retry or extended smoke credit. | `real-two-authorized-result.json`; `real-two-authorized-v2-process.json` |
+| E971 | Fresh Coding9 and Full17 at `d6cd56e9`, packaged App `96e8651e` | Both complete packages, setup and clean-env PASS. These artifacts predate the subsequent Product Registry bridge and do not validate it. The current Coding import core matches this binary and enters `GCTib::ForEachBitmapWord`; GC deferred. | `distributions-grep-final.json`; private matching core metadata |
+| E972 | `65039c03` actual Product Registry-aware worker adapter and contract binary `00142f63` | Registry refusal, AST query and AST edit all PASS, preserving original fence/sandbox/Derived/Receipt. Stale edit now asserts precise canonical conflict, zero writes and failed Receipt. Product unit compilation times out twice at original 900 seconds; unit and complete focused/release gates remain unaccepted. | `registry-worker-canonical3.json`; `registry-worker-adapter-current/product-build.log.process.json`; `registry-worker-adapter-current2/product-build.log.process.json` |
+
+Real-provider authorization is resolved by E970; real-provider acceptance still
+fails. E972 closes the specific missing Product-to-Host Registry worker bridge,
+not every baseline or model-resource bridge requirement. GC remains deferred.
+Remaining required work includes positive Model-resource fixture migration,
+other Product failures, capturing headless lifetime, the full performance
+matrix, final artifacts after the bridge change and complete mandatory gates.

@@ -784,8 +784,8 @@ Private evidence under `<evidence>` includes `minimal-model-long-before.json`,
 `baseline-cjpm1-bridge.json`, `baseline-cjpm1-build.json`,
 `performance-final.json` and `acp-isolated-current.json`.
 The original full unit, focused, release and hosted pinned CI requirements
-remain open. No live DeepSeek request has run. Explicit external-payload
-approval has been requested after automatic review rejected the earlier call.
+remain open at that checkpoint. The later authorized two-call smoke and its
+failures are recorded below; authorization is no longer pending.
 
 Current Python regressions pass 102/102. The full architecture gate passes,
 including documentation, dependency pins, library boundaries and the 39-package
@@ -835,3 +835,88 @@ identities. The upstream cjtui identity remains unchanged; the intentional
 local overlay and API checksum record the new entry and four tests. No database
 migration is introduced. Reverting this change restores the prior headless
 performance failure; original native and capturing APIs keep their contracts.
+
+
+### Hosted CI, Workspace output and Product Registry bridge follow-up
+
+The manually dispatched pinned PR gate at `951e6bd6` failed because an old
+status entry named a generated target directory as source authority. `682585e9`
+corrects that reference without weakening the documentation gate; its 19
+regressions pass. The next hosted run exposed an installer-test isolation bug:
+the fake SDK installer inherited the real `GITHUB_ENV` and `GITHUB_PATH`, so
+subsequent steps selected an already-deleted fake SDK. `c9621d55` gives each
+fixture private output files. Its new regression fails before the fix and all
+four tests pass afterwards, including exact fixture exports and unchanged
+parent output files. The next hosted run passes static checks and clean
+compilation, then fails the actual AST product contract. It is not a green CI
+result; later unit and release stages remain unrun.
+
+`d6cd56e9` fixes single-file Workspace grep output by retaining filenames in
+ripgrep line mode. The strengthened existing regression fails against the old
+real package and the independently rebuilt package passes all 43 worker and
+nine payload tests. CLI tests now import and enable the actual package, select
+its real digest and write explicit readonly operator grants. Issue #48 section
+0.6 permits replacing old interface tests with corresponding current contracts:
+case/count/skip and a real 1,100-line fixture prove the fixed 1,000-line page
+and remaining 100 lines. Actual read, count, paging and path-escape assertions
+pass under the original ten-second invocation limits. The isolated test
+workspace excludes unrelated build artifacts; production resource limits are
+unchanged. This is a fixed-App diagnostic with a real installed package, not
+Minimal or complete Coding acceptance. The complete diagnostic reaches the
+missing search-plugin capability and fails there.
+
+Coding9 and Full17 are rebuilt at `d6cd56e9`; both pass setup and clean-
+environment checks. Both use packaged App hash
+`96e8651ea8ac81977ce3c110b672dba549ad2df90b37881ddeb01822d960b0df`.
+These packages predate the Product Registry bridge change below and must not
+be credited as final artifacts for that later production change. A core from
+the current Coding import failure matches this executable and contains
+`GCTib::ForEachBitmapWord`; that GC path remains explicitly deferred.
+
+The user subsequently authorized exactly one normal Agent call per official
+DeepSeek endpoint. Recovery retries were disabled and each database records
+one ModelAttempt. Neither call passes: Completions returns
+`http.exchange_outcome_unknown`; Messages returns `model.plugin_failure`.
+Neither returns its marker. This proves neither model availability nor an
+external root cause. No further request was made. These calls used the fixed
+current App with only the actual provider installed; they are not complete
+Coding/Full or extended tool/approval/cancel smoke evidence.
+
+Local reproduction of the hosted AST failure reveals
+`plugin.registry_package_worker_unsupported` behind the plugin's generic
+invalid-JSON error. Product's `LocalProcessPort` omitted the existing
+`HostRegistryPackageProcessPort` interface. At `65039c03` the adapter delegates its
+Registry-aware readonly entry directly to the same native owner. The original
+launch fence, readonly sandbox, denied network and canonical Derived/Receipt
+path remain authoritative. No seal, source, permission or second owner is
+introduced. A separate actual refusal contract is added to the focused gate
+without removing the original complete command.
+
+The current product contract binary
+`00142f63c032f3aee24a6f50b7d816a8b98d6d79b01f3ab035b13fa1023b48d9`
+builds within the original 900-second cap and passes Registry launch refusal,
+AST query and AST edit contracts. Query covers structural matches, pagination
+and escape refusal. Edit covers actual proposal, approval/reject/cancel,
+concurrent conflict, recovery and final write. The old stale-plan assertion
+mistook the final explanatory reply's success for a successful write. Its
+replacement requires the canonical failed ToolResult, precise conflict,
+`no_effect`, zero applied items, one failed Receipt and unchanged concurrent
+bytes. The normal approved replacement remains asserted. The complete Product
+unit compilation times out twice at the unchanged 900-second cap; no selected
+unit case receives acceptance credit. The added refusal unit case and the
+complete unit/focused/release suites still require validation.
+
+Private evidence under `<evidence>`: `workspace-grep-current/package-validation/summary.json`,
+`entry-read-current-v6.json`, `entry-full-current.json`,
+`distributions-grep-final.json`, `real-two-authorized-result.json`,
+`real-two-authorized-v2-process.json`, `ast-current-contract.json`,
+`registry-worker-canonical3.json` and both
+`registry-worker-adapter-current*/product-build.log.process.json` files.
+The private local syscall trace diagnoses only the AST refusal and is not
+publication evidence. The bridge changes no database schema or plugin protocol;
+rollback restores the prior refusal rather than granting an alternative path.
+
+The Registry bridge checkpoint also passes 103 Python regressions and the full
+architecture gate on the current source. These are static/script results,
+not substitutes for the two timed-out Product unit builds. Evidence is
+`static-gates-registry-worker.json`.
