@@ -8,7 +8,12 @@ import subprocess
 def install_provider(binary: Path, home: Path, workspace: Path):
     selected = os.environ.get("AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE")
     package = Path(selected) if selected else binary.parent.parent / "share/axyndra/plugins/model-providers"
-    assert (package / "axyndra.plugin.json").is_file(), "actual packaged model provider is required"
+    return install_package(binary, home, workspace, package, "axyndra:model-providers")
+
+
+def install_package(binary: Path, home: Path, workspace: Path, package: Path, namespace: str):
+    """Import, identify and enable one actual package through the operator CLI."""
+    assert (package / "axyndra.plugin.json").is_file(), "actual packaged plugin is required"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("AXYNDRA_")}
     environment["AXYNDRA_HOME"] = str(home)
 
@@ -20,7 +25,7 @@ def install_provider(binary: Path, home: Path, workspace: Path):
 
     command("import", str(package.resolve()), "--scope", "user")
     record = next(item for item in json.loads(command("list", "--json"))
-                  if item["namespace"] == "axyndra:model-providers")
+                  if item["namespace"] == namespace)
     command("enable", record["id"], "--scope", "user")
     return record
 

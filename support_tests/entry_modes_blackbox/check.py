@@ -7,23 +7,48 @@ import json
 import os
 import select
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get("AXYNDRA_BINARY", ROOT / "target/release/bin/agent_app"))
+sys.path.insert(0, str(ROOT / "support_tests"))
+from provider_operator import install_package
 
 
-def invoke(*arguments: str) -> subprocess.CompletedProcess[str]:
+def configure_workspace(home: Path, workspace: Path) -> None:
+    """This fixture operator explicitly grants the selected readonly tools."""
+    selected = os.environ.get("AXYNDRA_WORKSPACE_PLUGIN_PACKAGE")
+    package = Path(selected) if selected else BINARY.parent.parent / "share/axyndra/plugins/workspace"
+    record = install_package(BINARY, home, workspace, package, "axyndra:workspace")
+    names = ["read", "grep", "glob"]
+    plugin = dict(namespace=record["namespace"], package_digest=record["content_digest"],
+                  configuration={}, requests=[], credentials=[],
+                  tool_read_grants=[dict(kind="tool", name=name, effect="read_only",
+                                         services=["process.readview"]) for name in names])
+    path = home / "plugins/services.json"
+    document = json.loads(path.read_text()) if path.exists() else dict(version=1, plugins=[])
+    assert document["version"] == 1 and isinstance(document["plugins"], list)
+    document["plugins"] = [item for item in document["plugins"] if item["namespace"] != record["namespace"]] + [plugin]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    (home / "plugins/workspace-tools.json").write_text(json.dumps(dict(
+        schema="axyndra.workspace-tools/v1", namespace=record["namespace"],
+        package_digest=record["content_digest"])), encoding="utf-8")
+
+
+def invoke(*arguments: str, workspace: Path = ROOT) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory(
         prefix="axyndra-entry-mode-"
     ) as directory:
         environment = os.environ.copy()
         environment["AXYNDRA_HOME"] = directory
+        if arguments and arguments[0] in {"read", "grep"}:
+            configure_workspace(Path(directory), workspace)
         return subprocess.run(
             [str(BINARY), "--fixture", *arguments],
-            cwd=ROOT,
+            cwd=workspace,
             text=True,
             capture_output=True,
             env=environment,
@@ -83,30 +108,50 @@ def main() -> None:
     ]
     assert "fixture response" not in models.stdout
 
-    read = invoke("read", "README.md:1")
-    assert read.returncode == 0, read.stdout + read.stderr
-    assert "# Axyndra" in read.stdout
-    assert "fixture response" not in read.stdout
+    # Keep source/build artifacts out of this bounded test workspace. The
+    # production resource ceiling still applies to every actual read view.
+    with tempfile.TemporaryDirectory(prefix="axyndra-entry-workspace-") as directory:
+        search_workspace = Path(directory)
+        (search_workspace / "README.md").write_bytes((ROOT / "README.md").read_bytes())
 
-    grep = invoke(
-        "grep",
-        "A",
-        "README.md",
-        "--limit",
-        "2",
-        "--context",
-        "0",
-    )
-    assert grep.returncode == 0, grep.stdout + grep.stderr
-    assert "Total matches:" in grep.stdout
-    assert "Files with matches: 1" in grep.stdout
-    assert "Limit reached: true" in grep.stdout
-    assert "README.md:1:# Axyndra" in grep.stdout
-    assert "fixture response" not in grep.stdout
+        def read_invoke(*arguments: str, workspace: Path = search_workspace):
+            return invoke(*arguments, workspace=workspace)
 
-    escaped_grep = invoke("grep", "needle", "../")
-    assert escaped_grep.returncode == 1
-    assert "workspace.path_escape" in escaped_grep.stdout
+        read = read_invoke("read", "README.md:1")
+        assert read.returncode == 0, read.stdout + read.stderr
+        assert "# Axyndra" in read.stdout
+        assert "fixture response" not in read.stdout
+
+        # Issue #48 section 0.6 permits replacing old interface tests with the
+        # corresponding new contract. Native grep documents case/count/skip and
+        # a fixed 1,000-line page, rather than the former limit/context interface.
+        grep = read_invoke("grep", "^# Axyndra$", "README.md", "--case")
+        assert grep.returncode == 0, grep.stdout + grep.stderr
+        assert grep.stdout.splitlines() == ["README.md:1:# Axyndra"]
+        assert "fixture response" not in grep.stdout
+
+        counted = read_invoke("grep", "^# Axyndra$", "README.md", "--case", "--count")
+        assert counted.returncode == 0, counted.stdout + counted.stderr
+        assert json.loads(counted.stdout) == dict(
+            files=[dict(path="README.md", count=1)], total=1, truncated=False)
+
+        with tempfile.TemporaryDirectory(prefix="axyndra-search-page-") as directory:
+            workspace = Path(directory)
+            (workspace / "bounded.txt").write_text("needle\n" * 1100, encoding="utf-8")
+            page = read_invoke("grep", "needle", "bounded.txt", "--case", workspace=workspace)
+            assert page.returncode == 0, page.stdout + page.stderr
+            assert len(page.stdout.splitlines()) == 1000
+            assert page.stdout.splitlines()[0] == "bounded.txt:1:needle"
+            assert page.stdout.splitlines()[-1] == "bounded.txt:1000:needle"
+            tail = read_invoke("grep", "needle", "bounded.txt", "--case", "--skip", "1000", workspace=workspace)
+            assert tail.returncode == 0, tail.stdout + tail.stderr
+            assert len(tail.stdout.splitlines()) == 100
+            assert tail.stdout.splitlines()[0] == "bounded.txt:1001:needle"
+            assert tail.stdout.splitlines()[-1] == "bounded.txt:1100:needle"
+
+        escaped_grep = read_invoke("grep", "needle", "../")
+        assert escaped_grep.returncode == 1
+        assert "workspace.path_escape" in escaped_grep.stdout
 
     explicit_launch = invoke("launch", "--print", "hello")
     assert explicit_launch.returncode == 0

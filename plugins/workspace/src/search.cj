@@ -30,8 +30,8 @@ func wsSearch(tool: String, input: JsonNode, root: String, executable: String): 
         if (wsBool(input, "hidden")) { args.add("--hidden") }
         if (pattern != ".") { args.add("--glob"); args.add(pattern) }
     } else {
-        args.add(all: ["--line-number", "--no-heading"])
-        if (wsBool(input, "count")) { args.add(all: ["-c", "--with-filename"]) }
+        args.add(all: ["--line-number", "--no-heading", "--with-filename"])
+        if (wsBool(input, "count")) { args.add("-c") }
         if (!wsBool(input, "case")) { args.add("--ignore-case") }
         let selection = wsText(input, "path", fallback: ".")
         if (selection.size > 4096 || selection.split(";").size > 32) { throw WorkspaceFailure("workspace.argument", "Search path selection exceeds its limit") }

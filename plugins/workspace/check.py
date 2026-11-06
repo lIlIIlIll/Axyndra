@@ -175,7 +175,11 @@ class WorkspacePackageTests(unittest.TestCase):
         self.reject('read', {'path': 'blob://digest'}, 'workspace.path_unsupported')
         self.reject('read', {'path': 'first.txt', 'destination': 'x'}, 'artifact.export_arguments')
     def test_real_grep_case_regex_skip(self):
-        self.assertEqual(self.run_tool('grep', {'pattern': 'BEF.RE', 'path': 'first.txt'})['count'], 1)
+        single = self.run_tool('grep', {'pattern': 'BEF.RE', 'path': 'first.txt'})
+        self.assertEqual(single['count'], 1)
+        self.assertEqual(single['matches'], 'first.txt:1:before')
+        multiple = self.run_tool('grep', {'pattern': 'before|beta', 'path': 'first.txt;second.txt'})
+        self.assertEqual(multiple['matches'].splitlines(), ['first.txt:1:before', 'second.txt:2:beta'])
         self.assertFalse(self.run_tool('grep', {'pattern': 'BEFORE', 'path': 'first.txt', 'case': True})['found'])
         value = self.run_tool('grep', {'pattern': 'a', 'path': 'second.txt', 'skip': 1})
         self.assertEqual(value['count'], 2); self.assertIn('2:beta', value['matches'])
