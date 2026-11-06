@@ -780,29 +780,7 @@ public class JavaScriptExtensionHost {
             closeAfterProtocolFailure()
             return hostError("extension.payload_capacity", error.message)
         } catch (error: ProcessError) {
-            match (invocationCancellationCause(cancellation, timeoutSource)) {
-                case Some(cause) =>
-                    closeForCancellation(cause)
-                    return hostError(cause.code, cause.message)
-                case None =>
-                    match (error.kind) {
-                        case ProcessErrorKind.OutputLimit =>
-                            if (isPrepare) {
-                                closeAfterProtocolFailure()
-                                return hostError("extension.prepare_output_too_large", "pure preparation output exceeds its bounded frame limit")
-                            }
-                            return hostError("extension.protocol_frame_too_large", error.message)
-                        case ProcessErrorKind.DeadlineExceeded =>
-                            closeAfterProtocolFailure()
-                            return hostError("extension.invocation_timeout", error.message)
-                        case ProcessErrorKind.Frame =>
-                            closeAfterProtocolFailure()
-                            return hostError("extension.protocol_failed", error.message)
-                        case _ =>
-                            closeAfterProtocolFailure()
-                            return hostError("extension.process_failed", error.message)
-                    }
-            }
+            return translateInvocationProcessFailure(error, cancellation, timeoutSource, isPrepare)
         } catch (error: Exception) {
             closeAfterProtocolFailure()
             return hostError("extension.protocol_failed", error.message)
@@ -820,6 +798,36 @@ public class JavaScriptExtensionHost {
             endInvocation()
         }
         hostError("extension.protocol_failed", "extension invocation loop ended")
+    }
+
+    // Error translation has no live frame while the worker invokes nested
+    // host services. Keep the original ordering and cancellation precedence.
+    private func translateInvocationProcessFailure(error: ProcessError,
+        cancellation: CancellationToken, timeoutSource: CancellationSource,
+        isPrepare: Bool): JavaScriptHostResult<JavaScriptHostInvocationResult> {
+        match (invocationCancellationCause(cancellation, timeoutSource)) {
+            case Some(cause) =>
+                closeForCancellation(cause)
+                return hostError(cause.code, cause.message)
+            case None =>
+                match (error.kind) {
+                    case ProcessErrorKind.OutputLimit =>
+                        if (isPrepare) {
+                            closeAfterProtocolFailure()
+                            return hostError("extension.prepare_output_too_large", "pure preparation output exceeds its bounded frame limit")
+                        }
+                        return hostError("extension.protocol_frame_too_large", error.message)
+                    case ProcessErrorKind.DeadlineExceeded =>
+                        closeAfterProtocolFailure()
+                        return hostError("extension.invocation_timeout", error.message)
+                    case ProcessErrorKind.Frame =>
+                        closeAfterProtocolFailure()
+                        return hostError("extension.protocol_failed", error.message)
+                    case _ =>
+                        closeAfterProtocolFailure()
+                        return hostError("extension.process_failed", error.message)
+                }
+        }
     }
 
     private func buildInvocationFrame(invocationId: String, toolName: String,

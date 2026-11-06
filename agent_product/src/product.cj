@@ -5061,6 +5061,9 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
                 canonicalizeProductFileApplicationPlan(
                     context, call, workspace, artifactStore, operationRuntime: Some(operations)
                 )
+            }),
+            ownedCanonicalArgumentsResolver204: Some({ context, call =>
+                ownedProductFilePlanCanonical204(catalog, context, call, workspace, artifactStore, operations, false)
             })
         ),
         ProductFilePlanApplicationExecutor(workspace, artifactStore, operationRuntime: Some(operations))
@@ -5094,6 +5097,9 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
                 canonicalizeProductFileRecoveryPlan(
                     context, call, workspace, artifactStore, operationRuntime: Some(operations)
                 )
+            }),
+            ownedCanonicalArgumentsResolver204: Some({ context, call =>
+                ownedProductFilePlanCanonical204(catalog, context, call, workspace, artifactStore, operations, true)
             })
         ),
         ProductFilePlanRecoveryExecutor(workspace, artifactStore, operationRuntime: Some(operations))

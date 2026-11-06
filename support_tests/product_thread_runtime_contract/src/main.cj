@@ -1562,22 +1562,15 @@ func runAstEditPluginContract(root: String, parentWorkspace: String): Unit {
             let stale = astPlanApprovalSession(product, "ast-edit-stale", plan)
             File.writeTo(path, (original + "# concurrent edit\n").toArray())
             let staleResult = stale.decide(stale.approval().getOrThrow().operationId.value, ApprovalDecision.Approve)
-            // A known failed ToolResult is committed canonically; the Agent
-            // may then finish its explanatory reply successfully. Verify the
-            // actual conflict and failed Receipt, not the outer reply status.
-            let (staleOutput, staleError) = productThreadToolResult(database, "ast-edit-stale", "ast-edit-stale")
-            expect(staleResult.isOk() && staleError &&
-                staleOutput.field("status").getOrThrow().text == "no_effect" &&
-                !staleOutput.field("applied").getOrThrow().asBool() &&
-                staleOutput.field("applied_count").getOrThrow().asNumberText() == "0" &&
-                staleOutput.field("conflict_count").getOrThrow().asNumberText() == "1" &&
-                staleOutput.field("results").getOrThrow().items.size == 1 &&
-                staleOutput.field("results").getOrThrow().items[0].field("error_code").getOrThrow().text == "application_plan.precondition_conflict" &&
+            let staleCode = match (staleResult) {
+                case Result.Err(error) => error.code; case Result.Ok(_) => "unexpected_success" }
+            expect(staleCode == "application_plan.precondition_conflict" && stale.approval().isSome() &&
                 database.scalarInt("SELECT COUNT(*) FROM operation_receipts receipt JOIN operations op ON op.id=receipt.operation_id " +
                     "JOIN operation_effect_records e ON e.operation_id=op.id JOIN runs r ON r.id=op.run_id " +
-                    "WHERE r.thread_id='ast-edit-stale' AND e.tool_id='apply_file_plan' AND receipt.outcome='failed'") == 1 &&
+                    "WHERE r.thread_id='ast-edit-stale' AND e.tool_id='apply_file_plan'") == 0 &&
                 String.fromUtf8(File.readFrom(path)) == original + "# concurrent edit\n",
-                "exact AST plan application commits the conflict without overwriting the changed file; actual=" + canonicalAgentValue(staleOutput))
+                "stale AST approval is refused before consuming the decision or dispatching a write; actual=" + staleCode)
+            expect(stale.cancel().isOk(), "the unchanged pending stale review remains cancellable")
             File.writeTo(path, original.toArray())
             let recovered = product.vnext.executeCanonicalTool(SessionId("ast-edit-recover"),
                 CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
@@ -3955,6 +3948,7 @@ func runProductProgramToolCall(
     callId: String,
     source: String
 ): (AgentValue, Bool) {
+    println("Program plan scenario: " + sessionName)
     let sessionId = SessionId(sessionName)
     product.fixtureProbe.getOrThrow().enqueueToolCallReply(
         callId,
@@ -4008,7 +4002,8 @@ func expectRejectedFilePlan(
         case None => ""
     }
     expect(isError && actualCode == expectedCode,
-        label + "; expected=" + expectedCode + "; actual=" + actualCode)
+        label + "; expected=" + expectedCode + "; actual=" + actualCode +
+            "; is_error=" + isError.toString() + "; output=" + encodeAgentValue(output))
 }
 
 func runProductFileApplicationPlanContracts(
@@ -4018,9 +4013,22 @@ func runProductFileApplicationPlanContracts(
     product: ProductRuntime,
     binding: NativeProgramContractBinding
 ): Unit {
-    binding.configure(true)
+    binding.configure(false)
     let database = SqliteDatabase(stateRoot + "/state.db")
     try {
+        let deniedPath = workspace + "/src/e5-02-not-granted.cj"
+        expect(!exists(Path(deniedPath)), "ungranted preview target begins absent")
+        let (deniedOutput, deniedIsError) = runProductProgramToolCall(product, database,
+            "e5-02-not-granted", "fixture-e5-02-not-granted",
+            filePlanProgramSource(filePlanProposal([filePlanCreateOperation("src/e5-02-not-granted.cj", "forbidden")])) )
+        expect(deniedIsError && deniedOutput.field("error_code").getOrThrow().text == "readonly_delegation.service_denied",
+            "actual operator must grant preview before any derived primitive is prepared; is_error=" +
+                deniedIsError.toString() + "; output=" + encodeAgentValue(deniedOutput))
+        expect(!exists(Path(deniedPath)) && database.scalarInt("SELECT COUNT(*) FROM operations o JOIN runs run ON run.id=o.run_id " +
+            "JOIN operation_effect_records effect ON effect.operation_id=o.id WHERE run.thread_id='e5-02-not-granted' " +
+            "AND effect.tool_id='host.file.plan.propose'") == 0,
+            "ungranted preview creates neither a file nor a derived preview Operation")
+        binding.configure(true)
         let artifacts = ProductArtifactStore(stateRoot, database: Some(database))
         let alphaPath = workspace + "/src/alpha.cj"
         let originalAlpha = String.fromUtf8(File.readFrom(Path(alphaPath)))
@@ -4173,7 +4181,7 @@ func runProductFileApplicationPlanContracts(
         ])
         expectRejectedFilePlan(product, database, "e5-02-invalid-shape",
             "fixture-e5-02-invalid-shape", filePlanProgramSource(malformed),
-            "application_plan.structure_invalid", "invalid proposal structure is rejected")
+            "application_plan.plugin_proposal_invalid", "invalid proposal structure is rejected by the Host envelope validator")
         let traversal = filePlanProposal([
             filePlanCreateOperation("../e5-02-outside.cj", "not written")
         ])
@@ -4295,10 +4303,11 @@ func runProductFilePlanAuthorizationContracts(
         case Some(value) => value.text
         case None => ""
     }
-    expect(nestedProgramIsError && nestedProgramError == "tool_program.tool_not_allowed" &&
+    expect(nestedProgramIsError && nestedProgramError == "readonly_delegation.tool_denied" &&
         String.fromUtf8(File.readFrom(Path(alphaPath))) == originalAlpha &&
         !exists(Path(createdPath)) && !exists(Path(largeCreatedPath)),
-        "a Program child cannot bypass Core authorization for a file plan")
+        "a Program child cannot bypass Core authorization for a file plan; actual=" +
+            nestedProgramError + "; output=" + encodeAgentValue(nestedProgramOutput))
 
     let validSessionName = "e5-03-authorize-valid"
     let validCallId = "fixture-e5-03-authorize-valid"
@@ -4434,7 +4443,11 @@ func runProductFilePlanAuthorizationContracts(
         } && staleSession.approval().isSome() &&
             String.fromUtf8(File.readFrom(Path(alphaPath))) == concurrentAlpha &&
             !exists(Path(createdPath)) && !exists(Path(largeCreatedPath)),
-            "approval revalidates target preconditions and refuses stale contents")
+            "approval revalidates target preconditions and refuses stale contents; result=" +
+                match (staleDecision) { case Result.Err(error) => error.code + ": " + error.message
+                    case Result.Ok(_) => "ok" } + "; pending=" + staleSession.approval().isSome().toString() +
+                "; alpha_unchanged=" + (String.fromUtf8(File.readFrom(Path(alphaPath))) == concurrentAlpha).toString() +
+                "; created=" + exists(Path(createdPath)).toString() + "; large=" + exists(Path(largeCreatedPath)).toString())
     } finally {
         let _ = staleSession.cancel()
         File.writeTo(alphaPath, originalAlpha.toArray())

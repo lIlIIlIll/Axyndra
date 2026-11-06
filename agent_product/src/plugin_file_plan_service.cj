@@ -38,7 +38,7 @@ func registerPluginFilePlanService(
                 schemaProperty("package_digest", "string"), schemaProperty("proposal", "object"), schemaProperty("managed_binding", "object")
             ], ["plugin", "generation", "package_digest", "proposal"])
         ),
-        Capability(CapabilityKind.WorkspaceRead, resource: workspace.rootPath()), hostServiceOnly: true,
+        Capability(CapabilityKind.WorkspaceRead, resource: workspace.rootPath()), hostServiceOnly: true, neverReplay: true,
         implementationVersion: "host-file-plan-v2", implementationFingerprint: "host-file-plan-v2",
         networkPolicyResolver: Some({ _ => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) })
     ), PluginFilePlanProposeExecutor(host, operations, workspace, artifacts))

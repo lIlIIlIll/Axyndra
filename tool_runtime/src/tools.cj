@@ -2637,12 +2637,12 @@ public class ToolPipeline {
         }
         if (!supervised && !context.planReviewControl) { return Result.Ok(()) }
         let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name,
-            allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name))) {
+            allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name, pipelineCall204(context, prepared).callId))) {
             case Some(value) => value
             case None => return planExecutionError("plan.tool_contract_missing", "supervised tool registration is unavailable")
         }
         if (!registration.descriptor.supervisedExecutionSafe && !initializationRead &&
-            !inheritedHostSource(prepared.source, registration.descriptor, pipelineCall204(context, prepared).name)) {
+            !inheritedHostSource(prepared.source, registration.descriptor, pipelineCall204(context, prepared).name, pipelineCall204(context, prepared).callId)) {
             return planExecutionError("plan.tool_contract_required", "tool has no trusted supervised execution contract")
         }
         if (context.planReviewControl && !initializationRead && !reviewReadChild) {
@@ -2692,10 +2692,10 @@ public class ToolPipeline {
             case _ => false
         }
     }
-    private func inheritedHostSource(source: PreparedInvocationSource, descriptor: ToolDescriptor, name: String): Bool {
+    private func inheritedHostSource(source: PreparedInvocationSource, descriptor: ToolDescriptor, name: String, callId: String): Bool {
         source.kind == PreparedInvocationSourceKind.Derived && source.parentOperationId.isSome() &&
             source.operationRoot.isSome() && source.parentCallId != "" && source.requestKey != "" &&
-            descriptor.hostServiceOnly && hostServiceSourceAllowed(source, name)
+            descriptor.hostServiceOnly && hostServiceSourceAllowed(source, name, callId)
     }
 
     private func canonicalizedInvocationCall204(context: ToolInvocationContext, call: ToolCall,
@@ -2874,7 +2874,19 @@ public class ToolPipeline {
 
     private func registrationConsumerBody204<T>(action: () -> T): T { action() }
 
-    private func hostServiceSourceAllowed(source: PreparedInvocationSource, name: String): Bool {
+    private func hostServiceSourceAllowed(source: PreparedInvocationSource, name: String, callId: String): Bool {
+        // Routing only. A readonly-delegation preview uses the same exact
+        // generated key as its ordinary child. ParentIntent and Store still
+        // independently validate the frozen operator flag, actual Root,
+        // parent, epoch, capability ceiling, handoff and reserved Receipt.
+        if (name == "host.file.plan.propose" && source.requestKey.startsWith("readonly-delegation:")) {
+            if (source.kind != PreparedInvocationSourceKind.Derived || source.parentOperationId.isNone() ||
+                source.parentCallId == "" || callId == "" || callId == source.parentCallId ||
+                source.requestKey != readonlyDelegationRequestKey(source.parentCallId, callId)) { return false }
+            return match (source.operationRoot) {
+                case Some(root) => root.toolName().startsWith("plugin.") && root.callId() == source.parentCallId
+                case None => false }
+        }
         if([HOST_MANAGED_CHANNEL_WRITE_TOOL,HOST_MANAGED_CHANNEL_SPAWN_TOOL,HOST_MANAGED_CHANNEL_CLOSE_TOOL].contains(name)){
             if(source.kind!=PreparedInvocationSourceKind.Derived || source.parentOperationId.isNone() || source.parentCallId==""){return false}
             return match(source.operationRoot){case Some(root)=>root.toolName().startsWith("plugin.") && root.callId()==source.parentCallId &&
@@ -3605,7 +3617,7 @@ public class ToolPipeline {
         if(httpIntentText(actual,"run_id")!=context.runId.value || httpIntentText(actual,"target_thread_id")!=context.sessionId.value ||
             actual.field("epoch").getOrThrow().asNumberText()!=context.epoch.toString()){
             return livePolicyPreparationError("tool.live_prepared_enclosure_changed")}
-        let registration=match(registrationForRun(context,prepared.call.name,allowHostService:hostServiceSourceAllowed(source,prepared.call.name))){
+        let registration=match(registrationForRun(context,prepared.call.name,allowHostService:hostServiceSourceAllowed(source,prepared.call.name,prepared.call.callId))){
             case Some(value)=>value;case None=>return livePolicyPreparationError("tool.live_prepared_registration_missing")}
         if(isManagedChannelOwnedParentPlan(prepared.borrowOperationPlanFrame204())){
             if((registration.executor as ManagedChannelOwnedExecutor).isNone()){return livePolicyPreparationError("managed_channel.parent_executor_missing")}
@@ -4400,7 +4412,7 @@ public class ToolPipeline {
         if(httpIntentText(actual,"run_id")!=context.runId.value || httpIntentText(actual,"thread_id")!=context.sessionId.value ||
             actual.field("epoch").getOrThrow().asNumberText()!=context.epoch.toString()){
             return livePolicyPreparationError("tool.live_prepared_enclosure_changed")}
-        let registration=match(registrationForRun(context,prepared.call.name,allowHostService:hostServiceSourceAllowed(source,prepared.call.name))){
+        let registration=match(registrationForRun(context,prepared.call.name,allowHostService:hostServiceSourceAllowed(source,prepared.call.name,prepared.call.callId))){
             case Some(value)=>value;case None=>return livePolicyPreparationError("tool.live_prepared_registration_missing")}
         // Approval preflight revalidates the frozen invocation, never Native preparation.
         // A waiting Run cannot stage a fresh payload or adapt its approved plan.
@@ -4819,7 +4831,7 @@ public class ToolPipeline {
             case Result.Err(error) => return Result.Err(error)
         }
         let registration = match (registrationForRun(context, requestedCall.name, newPreparation: true,
-            allowHostService: hostServiceSourceAllowed(source, requestedCall.name))) {
+            allowHostService: hostServiceSourceAllowed(source, requestedCall.name, requestedCall.callId))) {
             case Some(value) => value
             case None =>
                 let error = AgentError(
@@ -4851,7 +4863,7 @@ public class ToolPipeline {
             return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
         }
         if ((supervised || context.planReviewControl) && !registration.descriptor.supervisedExecutionSafe &&
-            !initializationRead && !inheritedHostSource(source, registration.descriptor, call.name)) {
+            !initializationRead && !inheritedHostSource(source, registration.descriptor, call.name, call.callId)) {
             return planExecutionError("plan.tool_contract_required", "tool has no trusted supervised execution contract")
         }
         // Freeze and validate network authorization before schema-dependent
@@ -4924,7 +4936,7 @@ public class ToolPipeline {
         }
         if (initializationRead) {
             if (!isContextReadPlan(plan)) { return planExecutionError("plan.initialization_read_invalid", "initialization source must keep its canonical read-only contract") }
-        } else if (!(context.planReviewControl && inheritedHostSource(source, registration.descriptor, call.name) &&
+        } else if (!(context.planReviewControl && inheritedHostSource(source, registration.descriptor, call.name, call.callId) &&
             isReadViewServiceChildPlan(plan))) {
             match (validatePlanReviewControl(context, plan)) {
                 case Result.Ok(_) => ()
@@ -5502,7 +5514,7 @@ public class ToolPipeline {
         }
         match (admitPrepared(context, prepared)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let registration = match (registrationForRun(context, pipelineCall204(context, prepared).name,
-            allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name))) {
+            allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name, pipelineCall204(context, prepared).callId))) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,
@@ -5756,9 +5768,11 @@ public class ToolPipeline {
                 }
                 return Result.Err(error)
         }
-        validateDecisionPolicy(
+        match (validateDecisionPolicy(
             context, pipelineCall204(context, prepared), prepared.borrowOperationPlanFrame204(), decision
-        )
+        )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        validateFrozenApprovalTarget(context, pipelineCall204(context, prepared),
+            prepared.borrowOperationPlanFrame204(), decision)
     
             })
             match (consumerFrame204) { case Some(value) => value.holdReturnedResultData204(result204); case None => () }
@@ -5830,7 +5844,9 @@ public class ToolPipeline {
             frozenCall, current, contextReadFacts: readFacts))) {
             return Result.Err(AgentError(AgentErrorKind.Conflict,
                 "tool.approval_context_changed", "normalized Operation policy changed while approval was pending")) }
-        validateDecisionPolicy(context, call, plan, decision)
+        match (validateDecisionPolicy(context, call, plan, decision)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        validateFrozenApprovalTarget(context, call, plan, decision)
     
             })
             match (consumerFrame204) { case Some(value) => value.holdReturnedResultData204(result204); case None => () }
@@ -5924,6 +5940,24 @@ public class ToolPipeline {
         } finally {
             if (returnedConsumer204) { match (consumerFrame204) { case Some(value) => value.returnedWholeAction204(); case None => () } }
         }
+    }
+
+    private func validateFrozenApprovalTarget(context: ToolInvocationContext, call: ToolCall,
+        plan: NormalizedOperationPlan, decision: ApprovalDecision): Result<Unit> {
+        match (decision) { case ApprovalDecision.Reject | ApprovalDecision.RejectWithReason(_) => return Result.Ok(())
+            case _ => () }
+        let registration = match (registrationForRun(context, call.name)) {
+            case Some(value) => value; case None => return Result.Ok(()) }
+        let target = match (registration.executor as ToolApprovalTargetValidator) {
+            case Some(value) => value; case None => return Result.Ok(()) }
+        if (!target.requiresFrozenTargetValidation()) { return Result.Ok(()) }
+        let frozen = ToolCall(call.callId, call.name, plan.canonicalArguments)
+        let current = match (canonicalizedInvocationCall204(context, frozen, registration.descriptor)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (canonicalAgentValue(current.arguments) != canonicalAgentValue(plan.canonicalArguments)) {
+            return Result.Err(AgentError(AgentErrorKind.Conflict, "tool.approval_context_changed",
+                "the frozen approval target changed before the decision")) }
+        Result.Ok(())
     }
 
     private func validateDecisionPolicy(
@@ -6336,7 +6370,7 @@ public class ToolPipeline {
         }
         let retainedJob: ?DirectToolCallRef = if (prepared.source.kind == PreparedInvocationSourceKind.Direct) { managedJobRoot(prepared.source) } else { None }
         let selected = if (retainedJob.isSome()) { managedJobRegistration(prepared.source, pipelineCall204(context, prepared).name) } else {
-            registrationForRun(context, pipelineCall204(context, prepared).name, allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name)) }
+            registrationForRun(context, pipelineCall204(context, prepared).name, allowHostService: hostServiceSourceAllowed(prepared.source, pipelineCall204(context, prepared).name, pipelineCall204(context, prepared).callId)) }
         let registration = match (selected) {
             case Some(value) => value
             case None => return Result.Err(AgentError(

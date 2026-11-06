@@ -1982,7 +1982,11 @@ public func hostValidPluginServiceIdentifier(value: String): Bool {
 }
 
 public func hostPluginServiceResultError(result: ToolResult): AgentError {
-    let code = hostPluginReceiptText(result.output, "code")
+    let legacyCode = hostPluginReceiptText(result.output, "code")
+    // Canonical recoverable ToolResult errors use `error`; older service
+    // payloads use `code`. Preserve the actual refusal before the fixed
+    // fallback, without changing preparation or execution authority.
+    let code = if (legacyCode != "") { legacyCode } else { hostPluginReceiptText(result.output, "error") }
     let message = hostPluginReceiptText(result.output, "message")
     AgentError(
         AgentErrorKind.InvalidInput,

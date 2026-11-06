@@ -117,7 +117,13 @@ class ProgramHost <: ProgramSubOperationExecutor {
                 return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,"tool_program.receipt_missing","preview has no matching durable Receipt"))}
             let isError=child.field("is_error").getOrThrow();require(isError.unifiedKind==UnifiedJsonKind.Boolean)
             if(isError.asBool()){
-                return Result.Err(AgentError(AgentErrorKind.InvalidInput,"tool_program.plan_proposal_failed","actual preview child did not succeed"))}
+                let output=child.field("output").getOrThrow()
+                let legacyCode=stringField(output,"error_code")
+                let code=if(legacyCode!=""){legacyCode}else{stringField(output,"error")}
+                let message=stringField(output,"message")
+                return Result.Err(AgentError(AgentErrorKind.InvalidInput,
+                    if(code!=""){code}else{"tool_program.plan_proposal_failed"},
+                    if(message!=""){message}else{"actual preview child did not succeed"}))}
             let sanitized=ArrayList<JsonObjectEntry>()
             for(field in value.fields){sanitized.add(JsonObjectEntry(field.name,
                 if(field.name=="application_plan"){child.field("output").getOrThrow()}else{field.value}))}

@@ -1633,7 +1633,7 @@ func productApplicationRiskRank(value: ApprovalRiskLevel): Int64 {
     }
 }
 
-class ProductFilePlanApplicationExecutor <: ToolExecutor {
+class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetValidator {
     private let workspace: LocalWorkspace
     private let artifacts: ProductArtifactStore
     private let operationRuntime: ?OperationRuntimePort
@@ -1643,6 +1643,8 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor {
         this.artifacts = artifacts
         this.operationRuntime = operationRuntime
     }
+
+    public func requiresFrozenTargetValidation(): Bool { true }
 
     public func execute(
         context: ToolInvocationContext,

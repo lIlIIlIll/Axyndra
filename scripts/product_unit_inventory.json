@@ -279,6 +279,7 @@
     "agent_host_runtime/src/plugin_read_view_parameter_reference_test.cj",
     "agent_host_runtime/src/plugin_task_context_scope_test.cj",
     "agent_host_runtime/src/resource_root_shape_test.cj",
+    "agent_host_runtime/src/service_preparation_error159_test.cj",
     "agent_host_runtime/src/task_executor_data204_test.cj",
     "agent_host_runtime/src/tool_input_attachment_metadata_test.cj"
   ],

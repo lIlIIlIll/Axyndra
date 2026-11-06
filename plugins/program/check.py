@@ -313,6 +313,23 @@ class ProgramFilePlanRequestPackageTests(unittest.TestCase):
             self.assertEqual(reply['result']['status'],'failed')
             self.assertEqual(reply['result']['error_code'],'tool.readonly_plan_proposal_denied')
             self.assertEqual(reply['result']['sub_call_count'],1)
+        # A completed but failed child carries the ordinary ToolResult error
+        # shape. Wire-only Receipt text is correlation, never Store authority.
+        for output, expected in [
+                ({'error': 'application_plan.path_invalid', 'message': 'invalid target'},
+                 'application_plan.path_invalid'),
+                ({'error_code': 'legacy.refusal', 'error': 'other.refusal'}, 'legacy.refusal'),
+                ({}, 'tool_program.plan_proposal_failed')]:
+            with self.subTest(output=output), Peer() as peer:
+                peer.invoke('return {"application_plan":{"schema":"axyndra.file-change-proposal/v1","operations":[]}};')
+                request=peer.physical();fields={key:request[key] for key in KEYS}
+                peer.send(dict(fields,type='service_response',request_id=request['request_id'],ok=True,
+                    result=dict(request_id=request['request_id'],service='file.plan.propose',
+                        receipt_id='wire-only',is_error=True,output=output)))
+                reply=peer.receive();self.assertFalse(reply['ok'])
+                self.assertEqual(reply['result']['status'],'failed')
+                self.assertEqual(reply['result']['error_code'],expected)
+                self.assertEqual(reply['result']['sub_call_count'],1)
         # The interpreter used all32 actual readonly calls. An un-emitted
         # preview is refused at the same32 ceiling and must not count as33.
         with Peer(payload=True) as peer:

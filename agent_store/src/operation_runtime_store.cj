@@ -805,8 +805,15 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
             case OperationRootSource.Committed(value) => value.block.name == "run_program"
             case OperationRootSource.Direct(_) => false
         }
+        // Candidate routing only: the transaction below still loads the real
+        // frozen parent and proves the complete preview predicate and edge.
+        let readonlyPreviewCandidate = match (boundCall) {
+            case Some(call) => plan.toolName == "host.file.plan.propose" &&
+                call.name == plan.toolName && call.callId != rootSource.callId() &&
+                requestKey == readonlyDelegationRequestKey(rootSource.callId(), call.callId)
+            case None => false }
         let readonlyCandidate = boundCall.isSome() && isJavaScriptPluginName(rootSource.toolName()) &&
-            (isReadonlyDelegatedChildPlan(plan) || isReadViewServiceChildPlan(plan))
+            (isReadonlyDelegatedChildPlan(plan) || isReadViewServiceChildPlan(plan) || readonlyPreviewCandidate)
         let isExactChild = isExactServiceChildPlan(plan)
         let isPluginServiceChild = isJavaScriptPluginName(rootSource.toolName()) &&
             isSupportedDerivedChildPlan(rootSource.toolName(), rootSource.callId(), requestKey, plan)

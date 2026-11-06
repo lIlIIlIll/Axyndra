@@ -39,6 +39,8 @@ class CoreRunControl <: PaidExecutionFailureSink173 & PlanCopyDataConsumer204 {
     private let canonicalDeliveryDebts=ArrayList<CoreOwnedCanonicalDeliveryResource>()
     private let checkpointFailures113 = CoreCheckpointFailureQueue113()
     private var modelInputHead159: ?CoreModelInput159 = None<CoreModelInput159>
+    private var coreContextHead159: ?CoreContextFrame159 = None<CoreContextFrame159>
+    private var coreContextCollectorActive159 = false
     private var modelInputCollectorActive159 = false
     private var planRequestHead204: ?CorePlanRequestConsumer204 = None<CorePlanRequestConsumer204>
     private var planRequestCollectorActive204 = false
@@ -393,7 +395,56 @@ class CoreRunControl <: PaidExecutionFailureSink173 & PlanCopyDataConsumer204 {
         } finally {
             lock.lock()
             try { modelInputCollectorActive159 = false } finally { lock.unlock() }
+            collectReturnedCoreContexts159()
             collectReturnedPlanRequests204()
+        }
+    }
+
+    func retainCoreContextFrame159(frame: CoreContextFrame159): Unit {
+        lock.lock()
+        try { frame.next159 = coreContextHead159; coreContextHead159 = Some(frame) }
+        finally { lock.unlock() }
+    }
+    private func collectReturnedCoreContexts159(): Unit {
+        lock.lock()
+        try {
+            if (coreContextCollectorActive159) { return }
+            coreContextCollectorActive159 = true
+        } finally { lock.unlock() }
+        try { collectReturnedCoreContextFrame159() }
+        finally { lock.lock(); try { coreContextCollectorActive159 = false } finally { lock.unlock() } }
+    }
+    private func collectReturnedCoreContextFrame159(): Unit {
+        // Terminal state alone is not a return proof. All existing pending
+        // DATA consumers must be clear and the original task scope must have
+        // completed its exact Future.get witnesses, in addition to each
+        // concrete Context-producing helper having physically returned.
+        if (!planRequestOtherConsumersReturned204()) { return }
+        let witness = try { lock.lock(); checkpointReturnWitness113 } finally { lock.unlock() }
+        let quiet = match (witness) { case Some(value) => value.allOwnedProducersReturned113()
+            case None => try { lock.lock(); checkpointProducerQuiet113 } finally { lock.unlock() } }
+        if (!quiet) { return }
+        var cursor = try { lock.lock(); coreContextHead159 } finally { lock.unlock() }
+        while (cursor.isSome()) {
+            let current = cursor.getOrThrow()
+            let next = try { lock.lock(); current.next159 } finally { lock.unlock() }
+            if (current.returnAfterActualTasks159()) {
+                lock.lock()
+                try {
+                    var previous: ?CoreContextFrame159 = None<CoreContextFrame159>
+                    var selected = coreContextHead159
+                    while (selected.isSome()) {
+                        let actual = selected.getOrThrow()
+                        if (refEq(actual, current)) {
+                            match (previous) { case Some(value) => value.next159 = actual.next159
+                                case None => coreContextHead159 = actual.next159 }
+                            actual.next159 = None<CoreContextFrame159>; break
+                        }
+                        previous = selected; selected = actual.next159
+                    }
+                } finally { lock.unlock() }
+            }
+            cursor = next
         }
     }
 
@@ -606,7 +657,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 & PlanCopyDataConsumer204 {
     }
 
     func hasResultAckDebt():Bool{lock.lock();try{
-        !retainedResultAckDebts.isEmpty() || !retainedFailureCleanupDebts.isEmpty() || !canonicalDeliveryDebts.isEmpty() || checkpointFailures113.hasDebt() || modelInputHead159.isSome() || planRequestHead204.isSome() || planCopyPayment204.isSome() || planCopyReadHead204.isSome() || catalogSourceHead204.isSome()
+        !retainedResultAckDebts.isEmpty() || !retainedFailureCleanupDebts.isEmpty() || !canonicalDeliveryDebts.isEmpty() || checkpointFailures113.hasDebt() || modelInputHead159.isSome() || coreContextHead159.isSome() || planRequestHead204.isSome() || planCopyPayment204.isSome() || planCopyReadHead204.isSome() || catalogSourceHead204.isSome()
     }finally{lock.unlock()}}
     func retryResultAckDebt():Result<Unit>{
         let values=try{lock.lock();retainedResultAckDebts.toArray()}finally{lock.unlock()}

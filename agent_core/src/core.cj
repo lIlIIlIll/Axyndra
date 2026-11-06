@@ -937,9 +937,25 @@ public class AgentCore <: AgentRunner {
                 finishControl(request.runId)
                 return Result.Err(error)
         }
+        // An open initial-context preparer may retain the actual root. Keep
+        // that compatibility path conservative; only this private Core-only
+        // context path has a complete concrete producer frame below.
+        let contextFrame = if (request.initializeContext) { None<CoreContextFrame159> }
+            else { match (catalog.reserveRegistryData180(16384)) {
+                case Some(payment) =>
+                    let frame = CoreContextFrame159(payment); control.retainCoreContextFrame159(frame); Some(frame)
+                case None => None<CoreContextFrame159> } }
         try {
-            startAcceptedRunFrame159(request, sink, continuation, restriction,
-                contextProjection, user, runtime, control, active, startRevalidationError)
+            let result = startAcceptedRunFrame159(request, sink, continuation, restriction,
+                contextProjection, user, runtime, control, active, startRevalidationError, contextFrame)
+            match (contextFrame) { case Some(frame) =>
+                if (result.isOk()) { frame.returnedPrivateHelper159() } else { frame.holdUnknown159() }
+                case None => () }
+            control.collectReturnedModelInputs159()
+            result
+        } catch (error: Exception) {
+            match (contextFrame) { case Some(frame) => frame.holdUnknown159(); case None => () }
+            throw error
         } finally {
             // The real enclosing helper returned or threw. Deferred Contexts
             // keep independent paid shares; a failure cannot skip this view.
@@ -950,7 +966,7 @@ public class AgentCore <: AgentRunner {
         continuation: ?AgentContinuationStart, restriction: ?AgentRunStartRestriction111,
         contextProjection: InvocationContextProjection, user: ModelMessage,
         runtime: AgentThreadRuntime, control: CoreRunControl, active: ActiveRunSnapshot,
-        startRevalidationError: ?AgentError): Result<AgentRunOutcome> {
+        startRevalidationError: ?AgentError, contextFrame: ?CoreContextFrame159): Result<AgentRunOutcome> {
         let transition = RunTransition(
             active.transitionSequence,
             RunState.Created,
@@ -990,6 +1006,7 @@ public class AgentCore <: AgentRunner {
             toolSetSnapshot: active.lane.legacyToolSetSnapshot159(),
             ownedToolSetSnapshot159: active.lane.forkOwnedToolSetSnapshot159()
         )
+        match (contextFrame) { case Some(frame) => frame.capture159(context); case None => () }
         bindToolOutputSink(context, control, sink, toolOutputSink)
         bindBudgetChargeHandler(context, control, sink)
         match (emitTyped(context, control, AgentEventPayload.RunStarted, sink)) {

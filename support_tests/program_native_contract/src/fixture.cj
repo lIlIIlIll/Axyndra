@@ -243,7 +243,7 @@ public class NativeProgramContractBinding {
             row.required(7)!="host.file.plan.propose" || row.required(8)!=row.required(9) || row.required(10)!="completed" ||
             row.required(11)!=row.required(12) || store.loadCall(generated,run).value().getOrThrow().callId!=row.required(3)){
             throw IllegalStateException("actual generation Source/Root/Receipt enclosure")}
-        let observed=parseUnifiedJson(row.required(13),maxBytes:1048576).field("output").getOrThrow()
+        let observed=decodeStoredValue(row.required(13)).field("output").getOrThrow()
         if(canonicalAgentValue(observed)!=canonicalAgentValue(summary)){
             throw IllegalStateException("proposal summary must equal the actual completed generation result")}
     }
