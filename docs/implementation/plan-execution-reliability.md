@@ -1123,3 +1123,37 @@ subsequent diagnostic runs pass without reproducing the failure. They do not
 establish stable acceptance or identify its cause. Evidence is
 `readonly-bridge-resolver-owned-final/summary.json` and
 `product-resolver-disable-diagnostic.json`. This remains a non-GC open item.
+
+
+### Closed checkpoint protocol lookup
+
+A further read-only trace finds `projectContext` marking the actual lane's
+protocol as historical before calling the open checkpoint repository. The new
+optional `ContextCheckpointProtocolRead159` port receives only an exact Boolean
+matcher. The Runtime closes that matcher after the complete repository helper
+returns. A retained matcher cannot read text or perform late comparisons.
+SqliteContextCheckpointStore selects a database-owned protocol string and
+uses the existing exact load, canonical-prefix digest and boundary checks.
+The original repository API and historical payment remain for compatibility.
+No Source, quota or execution acknowledgement is added.
+
+All 37 Runtime and 257 Store tests pass without skips. New cases cover exact
+and mismatched protocols, expired matchers after success and exception, the
+original Raw retention behavior, a real SQLite selected checkpoint with UTF8
+and embedded zero, and unchanged rejection after prefix-digest corruption.
+Evidence is `checkpoint-protocol-runtime-full.json`,
+`checkpoint-protocol-store-full.json` and their selected-case build logs.
+The current product binary SHA-256 is `b0ec5bfdad762cda65c12fb435e8785348988db383f41a7781ff07f6e8b8cfc9`. It passes all four independent contracts and all 24 original
+readonly bridge cases. The earlier 23/24 withdrawal failure remains an open
+intermittent concern; a single passing rerun does not establish its cause or
+stable resolution. Evidence is `product-checkpoint-protocol-current.json` and
+`readonly-bridge-checkpoint-protocol-current/summary.json`.
+
+The complete Core/recovery case still fails at the first file-plan read child
+with `read_view.output_capacity`. The three matched samples pass; later
+file-plan assertions remain unverified. Read-only ledger checks at the prior
+checkpoint reconcile 5,796/5,796 and report no unknown Catalog-callback holds.
+Their large `reserveSnapshotCatalogData159` group includes actual tool-set
+snapshots and must not be mislabeled as only Core Catalog source loans.
+Root-context and other lane consumers still require a complete lifetime audit.
+No Core-context retirement change is included in this checkpoint.

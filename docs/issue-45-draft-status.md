@@ -1860,3 +1860,13 @@ attempts nor the deferred GC repair receives acceptance credit.
 E988-E990 supersede E986-E987 for the latest changed source. The PR remains
 incomplete. No new contextual submission API, quota change, SDK build or extra
 external provider call is included.
+
+
+| Evidence | Requirement and actual result | Private evidence under the existing evidence root |
+| --- | --- | --- |
+| E991 | Closed checkpoint protocol matcher prevents an open Raw lane-text export on the actual SQLite path. Compatibility readers keep historical payment. Full Runtime 37/37 and Store 257/257 PASS without skips, including real selected-checkpoint and digest-corruption controls. | `checkpoint-protocol-runtime-full.json`; `checkpoint-protocol-store-full.json` |
+| E992 | Current protocol-lookup product binary `b0ec5bfd` passes four independent contracts and the full 24-case bridge. Earlier intermittent generation-withdrawal failure remains recorded. Complete Core still FAILS at first file-plan `read_view.output_capacity` after all three matched samples. No quota/guard changes or downstream acceptance. | `product-checkpoint-protocol-current.json`; `readonly-bridge-checkpoint-protocol-current/summary.json` |
+
+E991-E992 describe the new checkpoint lookup only. Full Core/context retirement,
+latest App/packages and the other previously recorded mandatory gates remain
+open. GC remains deferred, and no new provider call is authorized.
