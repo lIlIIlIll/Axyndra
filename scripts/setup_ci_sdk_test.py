@@ -7,6 +7,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '1.3.0-alpha.20261104001050'
@@ -20,7 +21,8 @@ class SdkArchiveTests(unittest.TestCase):
         curl.chmod(0o755)
         return subprocess.run(['bash', str(ROOT / 'scripts/setup_ci_sdk.sh'), VERSION,
             str(base / 'download'), digest], env=dict(os.environ, PATH=str(commands)+':'+os.environ['PATH'],
-            TEST_ARCHIVE=str(archive)), capture_output=True, text=True)
+            TEST_ARCHIVE=str(archive), GITHUB_ENV=str(base / 'fixture-env'),
+            GITHUB_PATH=str(base / 'fixture-path')), capture_output=True, text=True)
 
     def archive(self, base, escape=False):
         path = base / 'input.tar.gz'
@@ -37,6 +39,26 @@ class SdkArchiveTests(unittest.TestCase):
             result=self.invoke(base, archive, hashlib.sha256(archive.read_bytes()).hexdigest())
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((Path(result.stdout.strip()) / 'bin/cjc').exists())
+
+    def test_installer_fixture_exports_stay_out_of_parent_github_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            parent_env = base / 'parent-env'
+            parent_path = base / 'parent-path'
+            parent_env.write_text('real-sdk-environment\n')
+            parent_path.write_text('real-sdk-path\n')
+            archive = self.archive(base)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.dict(os.environ, GITHUB_ENV=str(parent_env), GITHUB_PATH=str(parent_path)):
+                result = self.invoke(base, archive, digest)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(parent_env.read_text(), 'real-sdk-environment\n')
+            self.assertEqual(parent_path.read_text(), 'real-sdk-path\n')
+            installed = Path(result.stdout.strip())
+            self.assertEqual((base / 'fixture-env').read_text(),
+                f'AXYNDRA_CI_SDK_ACTUAL_SHA256={digest}\nAXYNDRA_SDK_ROOT={installed}\n')
+            self.assertEqual((base / 'fixture-path').read_text(),
+                f'{installed}/bin\n{installed}/tools/bin\n')
 
     def test_digest_mismatch_prevents_extraction(self):
         with tempfile.TemporaryDirectory() as temp:
