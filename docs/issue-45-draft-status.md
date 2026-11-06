@@ -1905,3 +1905,13 @@ The ten Pi withdrawal diagnostic passes do not close the intermittent failure.
 GC stays deferred, both authorized external provider calls remain failed, and
 no further provider call was made. This checkpoint does not make the PR ready
 or authorize Issue closure.
+
+
+[E1008](implementation/plan-execution-reliability.md#installed-model-resource-fixture-migration)
+records the nine model-resource fixture migrations in `ebaddf93`. They now
+compose the actual installed Host and retain the original resource assertions;
+production claim verification is unchanged. Final full test-profile compilation
+and the 1,077-case inventory pass, but no runtime case is accepted. Both full
+Product and independently focused runs crash in Runtime GC frames. GC remains
+deferred, and this does not close the model-resource, Core, bridge, performance
+or release acceptance requirements.

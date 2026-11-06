@@ -1214,7 +1214,7 @@ provider call was made. Evidence below uses the existing private evidence root.
 | E1004 | Real one-page pipes expose a write-path bug: `POLLOUT` can be absent although a small nonblocking write fits the partial page. Both new regressions fail before the fix: `partial-pipe-page-red/unit.log` and `partial-pipe-page-borrowed-red-current/unit.log`. Both writers now attempt the nonblocking syscall first and wait only on no progress. Guarded writes retain the original per-syscall admission lease, recheck revocation before waiting, and hold no lease across the wait. The original assertions, deadlines and byte limits are unchanged. `partial-pipe-page-green/unit.log` passes all 45 Process4cj tests at the original O2 profile. | PASS for the two pipe regressions and the complete Process4cj suite. This is a process-library fix, not an SDK/runtime change. |
 | E1005 | Operation-only channel cancellation now carries `process.channel_cancelled`, preserves an earlier parent cause, and does not cancel the caller Run. The HTTP test formatter compares the canonical primary error once rather than counting its repeated structured detail. Optional service `max_instances` accepts 1..32 and freezes the minimum of service/plugin ceilings. `product-partial-pipe-page-current/summary.json` passes all 34 selected Product channel-service, raw-channel, HTTP and lifecycle-configuration tests, including the former cross-Thread blocked-write failure. `nongc-pipe-canonical-packages/summary.json` passes all 272 isolated Host and 100 Extension tests without skips. | PASS for these actual paths and package suites. The new quota boundary rejects 0, 33 and text values; a larger service value cannot raise the plugin ceiling. No Source, authorization, replay or unknown-outcome guard was relaxed. |
 | E1006 | The historical connection fixture declares the actual Codex root schema and still preserves malformed historical connection bytes without launching them; its original assertions pass. Memory fixtures now distinguish installation from Host policy selection, and use the installed Native ranking path for explicit CRUD. The Skills fixture creates the settings root passed to the actual distribution recipe. The Pi queue test checks a unique caller cancellation reason and independent second token. The installed DAP smaller-quota scenario is also retained. | PARTIAL / UNVERIFIED. These five fixture cases reached Runtime `CheckAndPush` crashes in `product-nongc-fixes-current/summary.json` and are not passes. Those crash logs precede the pipe follow-up. GC remains deferred; no claim is made that the final artifact accepts these cases. |
-| E1007 | Nine old model-resource positive fixtures still use compatibility claims that cannot satisfy the internal installed-provider seal. They must migrate to the actual installed Host path and preserve real launch, cancellation, resource-debt, retry and cleanup assertions. | OPEN. Do not admit compatibility claims or replace actual resource ownership with fixture DTOs. Stable full bridge, complete Core, current release artifacts, performance matrix and the other earlier mandatory gates also remain open. |
+| E1007 | At `37ecd51d`, nine model-resource positive fixtures still used compatibility claims that cannot satisfy the internal installed-provider seal. E1008 records their source migration; runtime acceptance remains open. | OPEN. Do not admit compatibility claims or replace actual resource ownership with fixture DTOs. Stable full bridge, complete Core, current release artifacts, performance matrix and the other earlier mandatory gates also remain open. |
 
 The code checkpoints are `e136bc5a` (pipe writes), `53b5f15b` (channel
 cancellation), `e93e6999` (service ceilings), `0d2a0622` (fixtures and diagnostics)
@@ -1242,3 +1242,56 @@ Draft and the complete delivery remains **incomplete**.
 complete original architecture entry, including documentation, boundaries,
 dependency pins and package checks. `nongc-pipe-final-inventory/summary.json`
 passes source inventory only. Neither result substitutes for runtime acceptance.
+
+
+## Installed model-resource fixture migration
+
+E1008 updates E1007's implementation gap. Commit `ebaddf93` changes tests only.
+The production Host verifier and its internal installed-provider seal are
+unchanged. The fixture composes the real installed local-HTTP package, original
+Host model port, Core, Store and process launcher. Its native observer forwards
+policy checks, transcript loans and the exact original Returned/Held envelope;
+it does not construct a claim, Dispatch, replacement debt or return credential.
+
+| Evidence | Required behavior and implementation | Actual verification | State and remaining gap |
+| --- | --- | --- | --- |
+| E1008 | All nine existing resource cases use the actual installed Host path. Preserve raw refusals; model timeout 0/3,600,001; the original 64 MiB zero-timeout input allowance; exact 17,825,792-byte input and N+1 refusal; typed-owner isolation; actual Run/package cancellation; safe-cut refusal; ordinary background-task independence; one Attempt under pending cleanup; and no cleanup ACK from cancellation alone. `installed_model_resource_fixture204_test.cj` contains the shared real composition and observable assertions. | The complete final Product test profile compiles under the unchanged SDK/O2 and original 900-second cap. `installed-model-resource-reviewed-compilation/summary.json` enumerates all 1,077 cases and reports `COMPILED_NOT_ACCEPTED`, with no runtime pass credit. | Implemented but runtime-unverified. GC remains deferred; none of these nine cases is accepted. |
+
+Source reverse review uses ten control-flow paths, nine semantic scenarios and
+nine existing test IDs in private `model-resource-reverse-review.md`; its
+structural validator passes. The review restored repeated channel-close
+idempotence and the zero-Operation assertion inside the live dispatch callback,
+not merely after the Run. Original case names, loop variants, deadlines and
+input limits remain. The old fake-provider worker count of zero is replaced by
+one actual installed worker, one Attempt and zero HTTP/decisions for failed or
+cancelled requests. Cleanup failure is observed on the original factory's
+Runtime task and canonical recovery state, including when physical exit has
+already occurred; no fixture-generated ACK substitutes for that state.
+
+`installed-model-resource-first-composed-current/summary.json` and
+`installed-model-resource-remaining-slot-current/summary.json` retain the full
+Product runs: all nine cases crash in Runtime GC frames. A separate focused
+artifact extracts the same nine case bodies and required helper declarations,
+records their source hashes, links the original production archives and keeps
+the same SDK/O2, real Host/Store/native boundaries and budgets. It also fails all
+nine cases: eight show CheckAndPush/GcPhaseEnum and one shows the GC bitmap walk
+in `installed-model-focused-linked-current/classification.json`. This focused
+artifact proves no passing behavior and does not replace the full Product gate.
+Those runtime logs precede the final quota/assertion restoration; the final
+source was compiled and enumerated, not rerun into the unchanged GC blocker.
+
+The final full Product test executable SHA-256 is
+`03855dd30471ff24263f1bf6dc462f296f2562925a4d891563f0c762d02918fb`.
+`model-resource-migration-lock-preservation` retains generated root lock bytes,
+diff and hashes before restoration to the approved dependency pins. Complete
+Core, stable bridge, current release artifacts, performance and other mandatory
+requirements remain open. No further external provider call was made.
+
+
+The 105 Python regressions and complete architecture/documentation/dependency
+entry pass in `static-gates-model-resource-final.json`. The source inventory
+first rejected the missing new helper-file registration; the migration commit
+now adds exactly that file and removes none. Registered inventory passes in
+`model-resource-final-registered-inventory/summary.json`, and all 30 related
+runner regressions pass with the original scripts module path. These are
+structural checks, not runtime acceptance for E1008.
