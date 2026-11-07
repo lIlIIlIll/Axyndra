@@ -389,6 +389,14 @@ private class OwnerAcpClient180 {
             case Result.Ok(actual) => actual
         }
         channel.decodedData180 = Some(value)
+        if (value.field("kind").isNone() && value.field("ok").isSome()) {
+            // The Root can fail after accepting this frontend. Its complete
+            // error envelope is not an ACP data frame. Keep the original raw
+            // and codec owners on Err, exactly as readPeer180 already does.
+            match (decodeProductOwnerFrontendFailure180(value)) {
+                case Result.Ok(error) => return Result.Err(error)
+                case Result.Err(error) => return Result.Err(error) }
+        }
         match (ownerFrontendText180(value, "kind")) {
             case "input_credit" => channel.grantCredit180(); Result.Ok(None<Int64>)
             case "acp_request_id" => match (allocatePermission180(channel, value)) {

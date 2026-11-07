@@ -614,6 +614,7 @@
     "agent_app/src/owned_tui_failure113_test.cj",
     "agent_app/src/owned_tui_tool_projection_test.cj",
     "agent_app/src/owned_tui_tool_registry_test.cj",
+    "agent_app/src/owner_frontend_failure204_test.cj",
     "agent_app/src/registry_cli_print_retirement158_test.cj",
     "agent_app/src/registry_session_cli_retirement161_test.cj",
     "agent_app/src/tui_tool_projection_test.cj"

@@ -213,6 +213,15 @@ private class OwnerNativeClientFrontend180 <: ProductOwnerClientFrontend180 {
             case Result.Ok(decoded) => decoded
             case Result.Err(error) => consoleCliIo180.eprintln(error.describe()); return Some(1) }
         decodedData180 = Some(value)
+        if (value.field("kind").isNone() && value.field("ok").isSome()) {
+            // The complete private helper owns the original raw/DOM frame
+            // until this checked stderr writer returns. A failed write throws
+            // before retireFrame180; decoding supplies no cleanup ACK.
+            match (decodeProductOwnerFrontendFailure180(value)) {
+                case Result.Ok(error) => consoleCliIo180.eprintln(error.describe())
+                case Result.Err(error) => consoleCliIo180.eprintln(error.describe()) }
+            return Some(1)
+        }
         match (ownerFrontendText180(value, "kind")) {
             case "input_credit" => if (stream) { credit.grant180() }; None<Int64>
             case "output" | "error_output" => writeOwnerFrontendOutput180(actual, value,

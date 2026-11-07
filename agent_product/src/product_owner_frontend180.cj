@@ -1,7 +1,10 @@
 package agent_product
 
 import agent_domain.*
+import yjson.*
+import yjson_support.*
 import agent_runtime.*
+import persistence_runtime.decodeCompleteProcessBrokerError180
 import std.time.MonoTime
 
 // Authenticated operator request DATA arrives here before Tool resolution,
@@ -50,4 +53,23 @@ public class ProductOwnerFrontendFailureConsumed180 {
 public interface ProductOwnerClientFrontend180 {
     func runOwnerClientFrontend180(): Int64
     func closeOwnerClientFrontend180(): Result<Unit>
+}
+
+// DATA decoding on the already authenticated Owner connection. The reader
+// prepays and retains its original raw/DOM frame through error consumption.
+// A decoded error supplies no Source, effect or cleanup acknowledgement.
+public func decodeProductOwnerFrontendFailure180(value: AgentValue): Result<AgentError> {
+    if (!httpIntentExactFields(value, ["version", "requestId", "ok", "error"]) ||
+        value.field("version").getOrThrow().unifiedKind != ValueKind.Number ||
+        value.field("version").getOrThrow().asNumberText() != "1" ||
+        value.field("ok").getOrThrow().unifiedKind != ValueKind.Boolean ||
+        value.field("ok").getOrThrow().asBool() ||
+        httpIntentText(value, "requestId").trimAscii() == "" ||
+        httpIntentText(value, "requestId").size > 256) {
+        return Result.Err(AgentError(AgentErrorKind.Protocol,
+            "owner.frontend_error_invalid", "Owner failure envelope differs from its transport schema"))
+    }
+    // Preserve every typed attachment and diagnostic through the same strict
+    // eight-field decoder used by the existing broker transport.
+    decodeCompleteProcessBrokerError180(value.field("error").getOrThrow())
 }
