@@ -962,6 +962,28 @@ public class AgentCore <: AgentRunner {
             active.returnOwnedLaneView159()
         }
     }
+    // Only concrete private Core producer helpers enter this DATA scope.
+    // Returning a Result is not task completion: the existing control still
+    // checks pending consumers and the original Future.get return witnesses.
+    private func withPrivateCoreContextFrame159<T>(control: CoreRunControl,
+        action: (?CoreContextFrame159) -> Result<T>): Result<T> {
+        let contextFrame = match (catalog.reserveRegistryData180(16384)) {
+            case Some(payment) =>
+                let frame = CoreContextFrame159(payment)
+                control.retainCoreContextFrame159(frame); Some(frame)
+            case None => None<CoreContextFrame159> }
+        try {
+            let result = action(contextFrame)
+            match (contextFrame) { case Some(frame) =>
+                if (result.isOk()) { frame.returnedPrivateHelper159() } else { frame.holdUnknown159() }
+                case None => () }
+            control.collectReturnedModelInputs159()
+            result
+        } catch (error: Exception) {
+            match (contextFrame) { case Some(frame) => frame.holdUnknown159(); case None => () }
+            throw error
+        }
+    }
     private func startAcceptedRunFrame159(request: AgentRunRequest, sink: AgentEventSink,
         continuation: ?AgentContinuationStart, restriction: ?AgentRunStartRestriction111,
         contextProjection: InvocationContextProjection, user: ModelMessage,
@@ -1231,6 +1253,7 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
+        withPrivateCoreContextFrame159(control, { contextFrame =>
         let toolOutputSink = CoreToolOutputSink()
         let context = ToolInvocationContext(
             durableRequest.runId, durableRequest.sessionId,
@@ -1247,6 +1270,7 @@ public class AgentCore <: AgentRunner {
             ownedToolSetSnapshot159: runToolSet.forkOwnedToolSetSnapshot159()
         )
         runToolSet.returnOwnedLaneFrame159()
+        match (contextFrame) { case Some(frame) => frame.capture159(context); case None => () }
         bindToolOutputSink(context, control, sink, toolOutputSink)
         bindBudgetChargeHandler(context, control, sink)
         let counter = BudgetCounter(
@@ -1532,6 +1556,7 @@ public class AgentCore <: AgentRunner {
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
         }
+        })
     }
 
     public func resume(request: AgentRunRequest): Result<AgentRunOutcome> {
@@ -1684,11 +1709,13 @@ public class AgentCore <: AgentRunner {
                     }
                 case Result.Err(_) => ()
             }
+            let frozenPreflightSequence159 = preflightSequence
+            let validation = withPrivateCoreContextFrame159<Unit>(preflightControl, { contextFrame: ?CoreContextFrame159 =>
             let preflightContext = ToolInvocationContext(
                 durableRequest.runId,
                 durableRequest.sessionId,
                 durableRequest.capabilities,
-                sequence: preflightSequence,
+                sequence: frozenPreflightSequence159,
                 epoch: coreOwnedControlMetadata(preflightControl.runtime).activeEpoch,
                 toolContext: durableRequest.toolContext,
                 cancellation: preflightControl.source.token,
@@ -1700,6 +1727,7 @@ public class AgentCore <: AgentRunner {
                 ownedToolSetSnapshot159: preflightToolSet.forkOwnedToolSetSnapshot159()
             )
             preflightToolSet.returnOwnedLaneFrame159()
+            match (contextFrame) { case Some(frame) => frame.capture159(preflightContext); case None => () }
             let retainedOwned = preflightControl.pendingOwnedExecutionFor(durableApproval.operationId)
             let retainedParent = preflightControl.pendingOwnedParentFor(durableApproval.operationId)
             if (retainedOwned.isNone() && retainedParent.isNone()) {
@@ -1731,6 +1759,8 @@ public class AgentCore <: AgentRunner {
                         case None => tools.validateApprovalDecision(preflightContext, durableApproval.operationId, decision) }
                     case None => tools.validateApprovalDecision(preflightContext, durableApproval.operationId, decision) }
             }
+            validation
+            })
             match (validation) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
@@ -1775,12 +1805,14 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
+        let frozenDecisionSequence159 = sequence
+        withPrivateCoreContextFrame159(control, { contextFrame =>
         let toolOutputSink = CoreToolOutputSink()
         let context = ToolInvocationContext(
             durableRequest.runId,
             durableRequest.sessionId,
             durableRequest.capabilities,
-            sequence: sequence,
+            sequence: frozenDecisionSequence159,
             epoch: coreOwnedControlMetadata(control.runtime).activeEpoch,
             toolContext: durableRequest.toolContext,
             cancellation: control.source.token,
@@ -1793,6 +1825,7 @@ public class AgentCore <: AgentRunner {
             ownedToolSetSnapshot159: runToolSet.forkOwnedToolSetSnapshot159()
         )
         runToolSet.returnOwnedLaneFrame159()
+        match (contextFrame) { case Some(frame) => frame.capture159(context); case None => () }
         bindToolOutputSink(context, control, sink, toolOutputSink)
         bindBudgetChargeHandler(context, control, sink)
         let resumed = match (control.resumeAfterApproval()) {
@@ -2058,6 +2091,7 @@ public class AgentCore <: AgentRunner {
             sink,
             toolLoopState: Some(resumedToolState)
         )
+        })
     }
 
     public func decide(

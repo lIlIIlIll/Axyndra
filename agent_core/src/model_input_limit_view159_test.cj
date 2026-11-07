@@ -2,6 +2,7 @@ package agent_core
 
 import agent_domain.*
 import agent_runtime.*
+import tool_runtime.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -54,5 +55,57 @@ class ModelInputLimitView159Tests {
         lane.returnOwnedLaneFrame159()
         shared.close159()
         root.close()
+    }
+}
+
+// The Context itself is created only in this complete private producer frame.
+// Tests grant no Source, Run settlement or arbitrary callback acknowledgement.
+private func contextCopyProducer159(frame: CoreContextFrame159,
+    shared: SharedToolSetSnapshot159): Unit {
+    frame.capture159(ToolInvocationContext(RunId("context-copy-run"),
+        SessionId("context-copy-thread"), CapabilitySet(),
+        ownedToolSetSnapshot159: Some(shared.fork159())))
+}
+
+@Test
+class CoreContextFrameLifetime159Tests {
+    @TestCase
+    func completeProducerReturnsOnlyItsOwnContextSnapshotShare(): Unit {
+        let bank = LogicalJsonOwnerBudget()
+        let root = bank.acquire(131072)
+        let snapshot = OwnedToolSetSnapshot159(root.deriveRetainedLease())
+        inputLimitSnapshotProducer159(snapshot)
+        snapshot.returnedSnapshotProducer159()
+        let shared = snapshot.transferSharedSnapshot159()
+        let frame = CoreContextFrame159(root.deriveRetainedLease())
+        let before = root.retainedCustodyUsage113()
+        contextCopyProducer159(frame, shared)
+        @Expect(frame.returnAfterActualTasks159(), false)
+        @Expect(root.retainedCustodyUsage113()[0] > before[0], true)
+        frame.returnedPrivateHelper159()
+        @Expect(frame.returnAfterActualTasks159(), true)
+        // The separate original snapshot is still live and usable.
+        @Expect(shared.identityEqualsValue159("input-limit-tools"), true)
+        @Expect(frame.returnAfterActualTasks159(), true)
+        shared.close159(); root.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+    @TestCase
+    func unknownProducerKeepsItsActualContextAndPayment(): Unit {
+        let bank = LogicalJsonOwnerBudget()
+        let root = bank.acquire(131072)
+        let snapshot = OwnedToolSetSnapshot159(root.deriveRetainedLease())
+        inputLimitSnapshotProducer159(snapshot)
+        snapshot.returnedSnapshotProducer159()
+        let shared = snapshot.transferSharedSnapshot159()
+        let frame = CoreContextFrame159(root.deriveRetainedLease())
+        contextCopyProducer159(frame, shared)
+        frame.holdUnknown159(); frame.returnedPrivateHelper159()
+        let before = root.retainedCustodyUsage113()
+        @Expect(frame.returnAfterActualTasks159(), false)
+        @Expect(root.retainedCustodyUsage113()[0], before[0])
+        @Expect(root.retainedCustodyUsage113()[2], before[2])
+        shared.close159(); root.close()
+        @Expect(bank.usage()[1] > 0, true)
     }
 }
