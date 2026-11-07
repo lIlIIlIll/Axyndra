@@ -1927,3 +1927,15 @@ eight-task/sixteen-Operation case now has an explicit Runtime GC crash trace;
 it remains deferred and unaccepted. Final App, full release, performance and
 all other open mandatory requirements remain incomplete. No additional external
 provider call was made. The PR remains Draft.
+
+
+[E1013-E1018](implementation/plan-execution-reliability.md#owner-failure-transport-and-current-distribution-closure)
+record strict Owner failure forwarding and exact bootstrap-package fixture reuse.
+The final App build and three new tests pass; the complete App run has 41 of 43
+cases passing and two deferred GC errors. Current genuine Minimal source closure,
+40 units, nine offline checks, ten Host and ten installed-model contracts pass.
+Current Full packaging, setup, clean-environment checks, AST edit and the formal
+24-case bridge pass. Coding provider/ACP/entry success, capturing TUI retirement,
+complete Core, full performance and release acceptance remain incomplete. The
+original limits and permission checks remain; neither approval-required output
+nor an Owner disconnect is relabeled as success. The PR remains Draft.

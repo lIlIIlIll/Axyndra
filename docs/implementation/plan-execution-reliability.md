@@ -1329,3 +1329,48 @@ regressions and full original architecture entry pass in
 `static-gates-core-context-final.json`, including documentation, dependency
 pins, package inventory and library boundaries. Those checks do not change
 the failing full Core or deferred GC verdicts.
+
+
+## Owner failure transport and current distribution closure
+
+This follow-up starts at `f28abba9` and uses the same pinned official SDK.
+The source and executable hashes are recorded in each named evidence summary;
+the subsequent commits preserve these tested source bytes. GC remains deferred.
+No additional external provider request or SDK build was made.
+
+| Evidence | Requirement, implementation and actual result | Status and remaining gap |
+| --- | --- | --- |
+| E1013 | The authenticated Owner can return its complete broker failure envelope after accepting a frontend. ACP previously replaced it with `owner.acp_frame_invalid`; CLI/RPC printed an unexpected-frame message. Both readers now use the strict existing eight-field broker error decoder through `decodeProductOwnerFrontendFailure180`. The original raw/DOM frame remains paid through the complete error consumer; a failed checked write retains it. `owner-error-final-current/summary.json` records successful Product/App compilation and all three new transport tests. The actual Coding ACP rerun in `owner-error-profiles-current/summary.json` preserves `owner.acp_frontend_close_pending`. | Error preservation PASS. The original server close failure remains open; decoding is no Source or cleanup acknowledgement. Full App has 43 cases: 41 PASS and two Runtime `CheckAndPush` GC errors, with zero skipped cases. |
+| E1014 | The fixture operator now inspects the actual package before using its installation. It reuses Coding/Full bootstrap only when one real user-scope record matches the inspected identity and full package-tree digest, explicitly enables it and rechecks that same record. Four Python regressions cover absent, exact installed, changed-content and foreign-scope cases. Actual inspected-package fixtures pass the former duplicate-namespace point. | Fixture setup corrected. Coding provider profiles still time out at the original five-second limit. The same App with an empty diagnostic distribution passes both local HTTP profiles, but that package is not genuine Minimal. No production Registry rule or grant was relaxed. |
+| E1015 | Current Coding packaging succeeds. Its original entry-mode gate still fails, most recently when a real operator list loses its Owner peer. A separate actual `launch --print` returns approval-required status 3. Explicit `never` on a fresh empty workspace rejects the required canonical initial-context read; a separate `trusted` probe still loses the peer. `owner-error-final-current/summary.json` and `launch-approval-contract-current/summary.json` retain those outcomes. | FAIL, not a successful authorized product path. No broad trusted mode, longer deadline or skipped assertion was added to the acceptance fixture. |
+| E1016 | `current-distribution-closure-bounded/summary.json` rebuilds the genuine isolated Minimal source closure: 19 packages, 40 Registry/History unit cases and nine original offline CLI checks PASS. Its fresh portable Minimal package then passes all ten real Host contracts and all ten installed-model contracts, including Chat Completions, Responses, Messages, restart, missing credentials, partial replies and cancellation against local HTTP fixtures. | PASS for the named final Minimal artifact, not for external provider availability. Source closure and portable packaging remain distinct evidence. The packaged Minimal SHA-256 is `e5feb880bacb8b950d4954757adab8e80ec42eb0076cb9929ed907e353355021`. |
+| E1017 | The same batch builds the current Full seventeen-package distribution from the newly compiled App. Full setup and clean-environment package checks PASS. A fresh standalone Product build passes AST edit and all 24 cases in the original formal readonly bridge gate. | PASS for these current artifacts and bridge cases. Complete Core/recovery still has the separately recorded capacity failure; this batch does not rerun or close it. |
+| E1018 | At `f28abba9`, the original 100 cold-start samples and all 40 noncapturing TUI journeys pass, with candidate P50/P95 413.8/413.9 ms. The original seven plugin performance records also pass after using a verified short disk-backed home. Capturing golden still exits 1 after its first semantic marker and leaves an owned Broker for bounded cleanup. | PARTIAL. `current-app-f28-gates/summary.json` and `f28-short-home-gates/summary.json` retain both failed and passing stages. These samples are not the full activation, concurrency, output-load, memory and cancellation comparison, or final-source golden acceptance. |
+
+The strict decoder and fixture changes add no database migration. Reverting
+those changes restores the earlier error presentation and unconditional fixture
+import. It does not resolve any underlying Owner, Core or GC failure. Existing
+permissions, message bounds, timeouts and physical process witnesses are intact.
+
+All 13 generated tracked dependency locks from this batch were saved with
+original/generated bytes, hashes and diffs in `owner-error-lock-preservation`.
+Guarded restoration checked the exact approved HEAD bytes before writing them
+back. The approved dependency pins are unchanged.
+
+Read-only broker diagnostics record only fixed source error codes and function
+names. A debugger run that allowed a startup shell selected an ambient runtime
+and is excluded from pinned-SDK evidence. With startup shells disabled, a
+separate run observes a GC crash in the packaged runtime; another observes
+`acp.workers_pending` and the original close failure. Neither debugger result
+is product acceptance or proof that every disconnect is GC.
+
+The remaining required work includes complete Core consumer retirement,
+authorized Coding model/ACP/entry success, capturing TUI retirement, the full
+performance matrix and all remaining Product/release and hosted CI gates.
+The two previously authorized external calls remain failed. The PR is Draft
+and the overall task is not complete.
+
+The final static run in `static-gates-owner-error-final.json` passes all 109
+Python regressions and the original architecture, documentation, dependency,
+package inventory and plugin-boundary gates. This does not replace any failed
+runtime gate above.
