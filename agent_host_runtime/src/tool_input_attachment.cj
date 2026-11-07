@@ -33,6 +33,11 @@ class HostToolInputAttachmentOwner {
             let session = HostToolInputAttachmentSession(artifacts, host, context, prepared, namespace, contribution, generation)
             retained.add(session)
             Result.Ok(session)
+        } catch (_: LogicalJsonPayloadError) {
+            // An actual shared-bank refusal is a budget failure. It grants
+            // no permission, retry, fallback or replacement allocation.
+            Result.Err(AgentError(AgentErrorKind.BudgetExceeded,
+                "input_attachment.capacity", "input attachment could not claim the existing aggregate"))
         } catch (_: Exception) {
             hostPluginResourceError("input_attachment.capacity", "input attachment could not claim the existing aggregate")
         } finally { lock.unlock() }
