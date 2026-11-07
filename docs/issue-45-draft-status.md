@@ -1898,8 +1898,8 @@ entry passes 272/272 and Extension passes 100/100. Three existing file-plan
 service guards also pass on the exact current Product unit binary, with the
 direct-binary evidence limitation recorded in E1001.
 
-The five GC-blocked fixture cases are not passes. Nine model-resource fixtures
-still need actual installed-Host migration, and complete Core, stable bridge,
+The five GC-blocked fixture cases are not passes. At E1007, nine model-resource fixtures still needed installed-Host migration;
+E1008 records that source change. Complete Core, stable bridge,
 current release artifacts, performance and other mandatory gates remain open.
 The ten Pi withdrawal diagnostic passes do not close the intermittent failure.
 GC stays deferred, both authorized external provider calls remain failed, and
@@ -1915,3 +1915,15 @@ and the 1,077-case inventory pass, but no runtime case is accepted. Both full
 Product and independently focused runs crash in Runtime GC frames. GC remains
 deferred, and this does not close the model-resource, Core, bridge, performance
 or release acceptance requirements.
+
+
+[E1009-E1012](implementation/plan-execution-reliability.md#current-distribution-and-core-context-follow-up)
+record the next current-artifact checks. At `737d9127`, Full and Coding package,
+setup and clean-environment entry checks pass; AST edit and the formal 24-case
+bridge also pass. Complete Core still fails with `input_attachment.capacity`.
+The added private resume/approval Context scopes pass all 49 Core tests but do
+not close that failure. A staged full Product rebuild succeeds, and its original
+eight-task/sixteen-Operation case now has an explicit Runtime GC crash trace;
+it remains deferred and unaccepted. Final App, full release, performance and
+all other open mandatory requirements remain incomplete. No additional external
+provider call was made. The PR remains Draft.

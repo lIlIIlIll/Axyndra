@@ -1295,3 +1295,37 @@ now adds exactly that file and removes none. Registered inventory passes in
 `model-resource-final-registered-inventory/summary.json`, and all 30 related
 runner regressions pass with the original scripts module path. These are
 structural checks, not runtime acceptance for E1008.
+
+
+## Current distribution and Core Context follow-up
+
+Overall acceptance remains incomplete. GC stays deferred. No additional
+external provider call was made, and the two authorized calls remain failed.
+
+| Evidence | Current behavior and verification | Status and remaining gap |
+|---|---|---|
+| E1009 | At `737d9127`, a fresh O2 App and independent Product contract compile. The first package attempt fails because its old engine path no longer exists; `current-product-artifacts/summary.json` remains FAIL. A separate rerun uses the existing ripgrep 15.2.0 cache after verifying all four asset hashes against the unchanged reviewed lock. `current-product-artifacts-pinned/summary.json` records Full 17 and Coding 9 packaging, both setup blackboxes and both clean-environment package checks passing. | PASS for these artifacts and entry checks. The original failed attempt is retained. This is not full release acceptance; the later Core change requires a fresh final App. |
+| E1010 | The same fresh standalone contract passes AST edit and all 24 formal readonly bridge cases in `current-product-artifacts-pinned/readonly-bridge/summary.json`. The full Core/recovery entry still fails at the stale-precondition scenario with `input_attachment.capacity`. | Bridge and AST PASS for the named artifact; complete Core FAIL. This does not turn earlier intermittent failures into a proven general fix. |
+| E1011 | Core model resume, approval preflight and approval resume now retain their actual private Context producer in the existing control. The same original pending-consumer and real task-return witnesses govern collection; errors and unknown producers remain paid. `core-context-resume-typed-current/summary.json` passes all 49 Core tests, including two real shared-snapshot lifetime cases. The standalone Product rebuild succeeds, but full Core/recovery still fails at the same capacity boundary. | PARTIAL. Context lifetime coverage is extended; E1000 is not closed. The open initial-context preparer and Native Host/Broker Raw metadata consumers still need complete consumer proof. No budget, Source, permission or unknown-outcome guard changed. |
+| E1012 | The original current-source Product test build reaches its 900-second cap in `product-eight-task-current/build.json`. The existing dependency staging path builds Host and then Product within their separate unchanged 900-second caps. `product-eight-task-staged-current/summary.json` inventories all 1,077 Product cases and executes the original eight-task/sixteen-Operation case once. It crashes in `gc-main-thread` at Runtime `CheckAndPush`. | GC-blocked, not PASS. This classifies the formerly unexplained physical crash on the new artifact; no workload or assertion was reduced. The other 1,076 inventory cases receive no runtime credit from this run. |
+
+Read-only diagnostics at `737d9127` retain actual Raw metadata export call
+stacks in `current737-prepared-metadata-diagnostic.log`. The shared Native
+allocation ledger in `current737-bank-diagnostic.log` reconciles all 7,099
+observations without an unknown identity. These are diagnostic facts, not DATA
+return acknowledgements. The later Context scopes do not establish that all
+Raw consumers have returned.
+
+`current-product-lock-preservation` and `core-context-lock-preservation` keep
+all generated lock bytes, hashes and diffs before guarded restoration of the
+approved pins. The Core source hashes and exact executable hashes are in the
+named build summaries. SDK/runtime sources and binaries remain unchanged.
+Complete Core, final App/release, performance, remaining Product requirements
+and supported-platform CI remain open. Refs #45.
+
+The Context implementation and its tests are committed in `f7ea5c45`. The
+49-case Core evidence applies to the same source bytes. The 105 Python
+regressions and full original architecture entry pass in
+`static-gates-core-context-final.json`, including documentation, dependency
+pins, package inventory and library boundaries. Those checks do not change
+the failing full Core or deferred GC verdicts.
