@@ -1939,3 +1939,12 @@ Current Full packaging, setup, clean-environment checks, AST edit and the formal
 complete Core, full performance and release acceptance remain incomplete. The
 original limits and permission checks remain; neither approval-required output
 nor an Owner disconnect is relabeled as success. The PR remains Draft.
+
+
+[E1019](implementation/plan-execution-reliability.md#input-attachment-capacity-classification)
+corrects real input-attachment budget refusal classification without changing
+its code, limits, refunds or permission checks. Both new bank-pressure tests
+fail before the fix and pass after it; the original full Host gate passes
+274/274. A rebuilt complete Core contract still fails at the same capacity
+boundary, now with the correct nested `budget_exceeded` error. This is a
+failure-semantics fix, not closure of the Core or final release requirements.

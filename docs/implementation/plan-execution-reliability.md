@@ -1374,3 +1374,41 @@ The final static run in `static-gates-owner-error-final.json` passes all 109
 Python regressions and the original architecture, documentation, dependency,
 package inventory and plugin-boundary gates. This does not replace any failed
 runtime gate above.
+
+
+## Input attachment capacity classification
+
+| Evidence | Requirement, implementation and actual result | Status and remaining gap |
+| --- | --- | --- |
+| E1019 | An actual Native shared-bank refusal was returned through the permission-denied resource helper. `HostToolInputAttachmentOwner.acquire` now catches `LogicalJsonPayloadError` separately and returns `BudgetExceeded` with the unchanged `input_attachment.capacity` code. Both original retry/fallback flags stay false. Two real-bank tests prepare a readonly call through the actual Pipeline, then exhaust the initial floor or the existing 64 MiB growth invoice. They verify precise attempt refunds and restoration of their own pressure leases. Both fail the kind assertion before the fix in `attachment-budget-pipeline-red/summary.json` and pass after it in `attachment-budget-green/summary.json`. The original complete Host isolation gate passes **274/274**, without skips, in `attachment-budget-host-full/summary.json`. | Classification regression PASS. No quota, alternate bank, Source construction, admission, cleanup witness or retry right changed. This does not fix the retained-consumer capacity deficit. |
+
+A fresh standalone Product build succeeds with this Host source. The original
+complete Core/recovery contract still fails at the same stale-precondition
+scenario. Its actual ToolResult now contains `error.kind = budget_exceeded`
+and `error.code = input_attachment.capacity`; it is no longer mislabeled as a
+policy refusal. `attachment-budget-core-current/typed-budget-readback.json`
+checks that exact nested JSON. The original summary's first probe searched the
+legacy `error_kind` shape and is retained with its false observation; the raw
+failing contract output is unchanged. Complete Core remains FAIL.
+
+The first new-test compile attempt is retained separately in
+`attachment-budget-red/summary.json`. The corrected test uses the real
+Pipeline and existing Runtime/SQLite fixture rather than constructing a
+nonpublic Prepared invocation. Both tracked generated locks from the final
+builds are saved and restored against their exact approved HEAD bytes in
+`attachment-budget-lock-preservation`.
+
+No public API, database schema or dependency pin changes. Reverting this fix
+restores the old permission-denied classification; no data migration is needed.
+The earlier distribution evidence names the artifacts built before this
+error-branch change. It remains evidence for those artifacts and does not
+claim final release validation of a newer App. E1013-E1018's open Core,
+Coding/ACP/TUI, performance, Product and release requirements remain open.
+
+After these runtime gates, only the pressure-test comment was corrected to
+name its existing canonical Runtime fixture. Executable test and production
+source are unchanged from the recorded successful Host build.
+
+`static-gates-attachment-budget-final.json` also passes all 109 Python
+regressions and the original architecture, documentation, dependency and
+inventory gates for this source.
