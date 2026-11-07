@@ -84,7 +84,7 @@ class HostToolInputAttachmentSession {
         try {
             // Full Root SQL verification may coexist with canonical input,
             // plan encoding and its bounded DOM. This is paid in the existing
-            // 128 MiB aggregate, not a new pool or a Run/output budget increase.
+            // 144 MiB aggregate, not a new pool or a Run/output budget increase.
             allocation.ensureRetainedPeak(67108864)
             charge = allocation
         } catch (error: Exception) { allocation.close(); throw error }

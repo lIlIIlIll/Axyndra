@@ -351,7 +351,7 @@ The decoded message must repeat the same identity and `payload_window`; a transf
 the original invocation deadline. Duplicate, overlapping, late or foreign chunks close the endpoint.
 
 Both ordinary and logical profile messages reserve bounded memory before expanded JSON parsing.
-The host's shared 128 MiB pool has at most 32 reservations, with two per endpoint; every reservation
+The host's shared 144 MiB pool has at most 32 reservations, with two per endpoint; every reservation
 charges at least 16 MiB and eight times the selected byte bound. A lexical 65,536-node guard and
 JSON depth 32 apply before decoding. Plugin caches and active assembly have their own bounded
 aggregate accounting. Cancellation, malformed frames and consumer completion release ownership;

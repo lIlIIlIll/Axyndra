@@ -1412,3 +1412,26 @@ source are unchanged from the recorded successful Host build.
 `static-gates-attachment-budget-final.json` also passes all 109 Python
 regressions and the original architecture, documentation, dependency and
 inventory gates for this source.
+
+
+## Current Core numeric accounting boundary
+
+E1020 records a read-only check of the exact E1019 standalone executable in
+`core-bank-numeric-current/summary.json`. Constructor disassembly verifies the
+fields read by the debugger, and debugger startup shells are disabled. At the
+last input-attachment growth, the existing bank has capacity 150,994,944 bytes
+(144 MiB), charged bytes 101,021,296 and a requested growth of 50,331,648 bytes.
+The total exceeds that unchanged capacity by 358,000 bytes. This identifies
+the actual refusal; it grants no return witness or permission to raise quotas.
+The protocol reference and attachment comment now describe the existing
+144 MiB product quota. Historical 128 MiB saturation evidence stays unchanged.
+
+The separate fixed-buffer origin trace does not reconcile its 104 tracked
+entries with the actual bank count of 25. Its `validation.json` explicitly
+marks it `INVALID_AS_LIVE_LEDGER`. Those groups are not proof of outstanding
+owners or leaks and must not drive a refund or lifecycle change. The numeric
+capacity check is independent of that incomplete acquire/close trace.
+
+These are diagnostic observations, not a passing Core contract. The existing
+E1019 raw failure and all open requirements remain. Only documentation and a
+source comment change after the tested E1019 production code.
