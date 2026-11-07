@@ -3,6 +3,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from package_distribution import package_digest
 
 
 def install_provider(binary: Path, home: Path, workspace: Path):
@@ -23,11 +27,37 @@ def install_package(binary: Path, home: Path, workspace: Path, package: Path, na
         assert process.returncode == 0, process.stdout + process.stderr
         return process.stdout
 
-    command("import", str(package.resolve()), "--scope", "user")
-    record = next(item for item in json.loads(command("list", "--json"))
-                  if item["namespace"] == namespace)
+    inspected = json.loads(command("inspect", str(package.resolve()), "--json"))
+    assert inspected["namespace"] == namespace, "requested package has another namespace"
+    expected_digest = package_digest(package)
+
+    def selected_record():
+        records = [item for item in json.loads(command("list", "--json"))
+                   if item["namespace"] == namespace]
+        if not records:
+            return None
+        assert len(records) == 1 and records[0]["scope"] == "user", \
+            "fixture package must have one exact user installation"
+        record = records[0]
+        assert record["id"] == inspected["id"], "installed package identity differs from inspection"
+        assert record["content_digest"] == expected_digest, \
+            "installed package differs from the requested fixture bytes"
+        return record
+
+    # Coding/Full bootstrap may already install this exact package. Reuse its
+    # real record only after full tree hashing; never overwrite another version
+    # or fabricate an installation lock to make the fixture pass.
+    record = selected_record()
+    if record is None:
+        command("import", str(package.resolve()), "--scope", "user")
+        record = selected_record()
+        assert record is not None, "actual import did not publish the package"
     command("enable", record["id"], "--scope", "user")
-    return record
+    enabled = selected_record()
+    assert enabled is not None and enabled["id"] == record["id"] and enabled["enabled"], \
+        "operator enable did not preserve the actual fixture installation"
+    return enabled
+
 
 
 def write_provider_grants(home: Path, record, mappings, requests, credentials):
