@@ -27,17 +27,13 @@ public class NativeEvalContractBinding {
         executable!: String = "/usr/bin/python3", maxOutputBytes!: Int64 = 1048576, startupTimeoutMillis!: Int64 = 30000) {
         this.product = product
         this.language = language
-        let record = match (product.importLocalPlugin(getVariable("AXYNDRA_EVAL_PLUGIN_PACKAGE").getOrThrow())) {
-            case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
-            case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))
-        }
+        let record = supportRegistryRecord96(nativeEvalRegistryMutation204({ =>
+            product.importLocalPlugin(getVariable("AXYNDRA_EVAL_PLUGIN_PACKAGE").getOrThrow()) }))
         if (supportRegistryDescriptor96(record,"namespace") != "axyndra:eval") {
             throw IllegalStateException("actual installed Eval package required")
         }
-        match (product.setPluginEnabled(supportRegistryDescriptor96(record,"namespace"), true)) {
-            case PluginRegistryResult.Ok(discard96) => supportRegistryDiscard96(discard96)
-            case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))
-        }
+        supportRegistryDiscard96(nativeEvalRegistryMutation204({ =>
+            product.setPluginEnabled(supportRegistryDescriptor96(record,"namespace"), true) }))
         namespace = supportRegistryDescriptor96(record,"namespace")
         name = "plugin." + namespace + ".service.stdio.eval"
         let runner = match (language) {
@@ -478,4 +474,20 @@ func supportRegistryDescriptor96(record:ProductPluginRecord,key:String):String{
 }
 func supportRegistryField96(record:ProductPluginRecord,key:String):String{
     supportRegistryData96(record).text(key)
+}
+
+// Actual Registry readers and writers contend even across separate Products.
+// Only writer-fence refusal is safe to retry: it precedes materialization and
+// publication. Never retry startup, a cell, or an uncertain/accepted effect.
+func nativeEvalRegistryMutation204(action: () -> PluginRegistryResult<ProductPluginRecord>): ProductPluginRecord {
+    for (attempt in 0..16) {
+        match (action()) {
+            case PluginRegistryResult.Ok(record) => return record
+            case PluginRegistryResult.Err(error) =>
+                let code = supportRegistryExclusiveErrorCode96(error)
+                if (code != "plugin.registry_busy" || attempt == 15) { throw IllegalStateException(code) }
+                sleep(Duration.millisecond * 10)
+        }
+    }
+    throw IllegalStateException("plugin.registry_busy")
 }

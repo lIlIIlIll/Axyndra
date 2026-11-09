@@ -508,6 +508,15 @@ public class HostPluginManagedService {
             finally { lock.unlock() }
         resource.isActive() && selectedEndpoint.isSome() && selectedEndpoint.getOrThrow().available()
     }
+    private func revokedForMonitoring(): Bool {
+        lock.lock()
+        let selectedEndpoint = try {
+            if (closing || publication.isNone()) { return true }
+            endpoint
+        } finally { lock.unlock() }
+        !resource.isActive() || selectedEndpoint.isNone() ||
+            selectedEndpoint.getOrThrow().revokedForMonitoring()
+    }
     private func protocolLimits(): ServiceProtocolLimits { serviceProtocolLimits(grant.endpointBinding()).value().getOrThrow() }
     func freezeDirectory(value: AgentValue): Result<AgentValue> {
         try {
@@ -586,7 +595,7 @@ public class HostPluginManagedService {
             if(!closing && !released){monitor = Some(spawn {
                 while (!monitorStop.load()) {
                     lock.lock();let shuttingDown=try{closing}finally{lock.unlock()}
-                    if (!shuttingDown && !active()) { let _ = revoke() }
+                    if (!shuttingDown && revokedForMonitoring()) { let _ = revoke() }
                     sleep(Duration.millisecond * 25)
                 }
             })}

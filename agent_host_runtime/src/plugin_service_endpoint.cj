@@ -109,6 +109,17 @@ public class HostPinnedNativeServiceEndpoint {
         finally { stateLock.unlock() }
     }
 
+    // Observation only: never use this predicate to admit a call or publish a
+    // new endpoint. A transient Registry writer is retried by the existing
+    // monitor within this endpoint's unchanged finite lifetime.
+    func revokedForMonitoring(): Bool {
+        stateLock.lock()
+        try {
+            stopping || worker.isClosed || worker.processExited ||
+                MonoTime.now() >= deadline || generation.revokedForMonitoring()
+        } finally { stateLock.unlock() }
+    }
+
     public func observeRevocation(callback: () -> Unit): process.CancellationRegistration {
         // Registering after revocation invokes immediately, so a manager can
         // install its publication fence then recheck without a lost event.

@@ -471,7 +471,12 @@ public class HostPluginLifecycleLease {
                         if(graceful && (source.token.isCancelled() || agentUtcMillis()>=expiresAt)){let _=revoke()}
                         else if(graceful && agentUtcMillis()>=nextConfigurationCheck){
                             let current=match(managedGrant){case Some(actual)=>actual.stillCurrentForCleanup();case None=>grant.stillCurrent()}
-                            if(current.isError()){let _=revoke()}
+                            // Inconclusive passive observation while a Registry writer holds
+                            // the fence. Actual effect admission still fails closed.
+                            match (current) {
+                                case Result.Err(error) => if (error.code != "plugin.registry_busy") { let _ = revoke() }
+                                case Result.Ok(_) => ()
+                            }
                             nextConfigurationCheck=agentUtcMillis()+250
                         }
                         tryCleanup()
@@ -481,7 +486,12 @@ public class HostPluginLifecycleLease {
                     else if (agentUtcMillis() >= nextConfigurationCheck) {
                         let current = match (managedGrant) {
                             case Some(actual) => actual.stillCurrent(); case None => grant.stillCurrent() }
-                        if (current.isError()) { let _ = revoke() }
+                        // Inconclusive passive observation while a Registry writer holds
+                        // the fence. Actual effect admission still fails closed.
+                        match (current) {
+                            case Result.Err(error) => if (error.code != "plugin.registry_busy") { let _ = revoke() }
+                            case Result.Ok(_) => ()
+                        }
                         // Full configuration and bounded executable hashing is
                         // separate from the faster cancellation/lifetime poll.
                         nextConfigurationCheck = agentUtcMillis() + 250

@@ -86,6 +86,16 @@ main(): Int64 {
             println("product approved plan execution contract passed")
             return 0
         }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-languages")) {
+            runEvalLanguagesProductContract204(root)
+            println("product Eval languages contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-registry-contention")) {
+            runEvalRegistryContentionContract204(root)
+            println("product Eval Registry contention contract passed")
+            return 0
+        }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-runtime-config")) {
             prepareContractFiles(root)
             runToolContracts(root)
@@ -7112,7 +7122,7 @@ func completedFrom(result: Result<ToolInvocationResult>): ToolResult {
     match (result) {
         case Result.Ok(ToolInvocationResult.Completed(value)) => value
         case Result.Ok(_) => throw IllegalStateException("expected completed tool")
-        case Result.Err(error) => throw IllegalStateException(error.message)
+        case Result.Err(error) => throw IllegalStateException(error.describe())
     }
 }
 

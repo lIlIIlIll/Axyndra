@@ -2292,6 +2292,16 @@ public class HostJavaScriptPluginGeneration {
         if (unavailable) { return true }
         match (registryPin.current()) { case PluginImportResult.Err(_) => true; case PluginImportResult.Ok(_) => false }
     }
+    // Passive monitoring cannot infer revocation while an actual Registry
+    // writer owns the read fence. Effect admission still uses current()/enter()
+    // and fails closed on that same busy result.
+    func revokedForMonitoring(): Bool {
+        if (synchronized(hostLock) { closing }) { return true }
+        match (registryPin.current()) {
+            case PluginImportResult.Ok(_) => false
+            case PluginImportResult.Err(error) => error.code != "plugin.registry_busy"
+        }
+    }
     // Distinguishes a genuine revocation from a resource refusal that happens
     // to make the pin unenterable. `isClosing()` collapses both into `true`,
     // which downstream maps to "revoked" and hides the real cause.
