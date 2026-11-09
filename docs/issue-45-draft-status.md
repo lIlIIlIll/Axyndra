@@ -1968,3 +1968,15 @@ The complete Eval flow now passes Python reset but still fails JavaScript
 startup. An actual sandboxed Bun process and a standalone persistent replay
 abort under the unchanged limits. Full acceptance remains incomplete; the PR
 stays Draft and Cangjie GC work remains deferred.
+
+
+[E1029](implementation/plan-execution-reliability.md#current-o2-coding-artifact-and-owner-crash-evidence)
+records a new O2 App and actual nine-package Coding assembly, with all three
+original provider/ACP/CLI blackboxes still failing. An exact readonly diagnostic
+Owner has GC frames in metadata, without reading core memory.
+[E1030](implementation/plan-execution-reliability.md#narrow-initial-preparation-input)
+avoids an unnecessary initial-preparer ModelLane fork through a narrower input.
+Core 49/49 and the real two-stage initial-read approval and configuration-change
+contract pass. All conservative Context payments remain. Complete continuous
+Core still fails its original capacity assertion, and the O2 artifact predates
+this input change. Full acceptance remains incomplete.

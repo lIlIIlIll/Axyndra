@@ -1575,3 +1575,103 @@ final real regression and full Host reports match that commit, as checked in
 and the architecture gate pass in `static-gates-eval-monitor-final.json`, with
 2,957 tracked paths. Its documentation, dependency, inventory and boundary
 checks pass. These checks do not replace the open broader acceptance gates.
+
+
+## Current O2 Coding artifact and Owner crash evidence
+
+E1029 rebuilds the App from `ca726b3d`. The first whole-App compilation hits
+its unchanged 900-second cap in `monitor-coding-entry-current/summary.json` and
+remains a failure. The existing dependency-staging path then compiles Product
+in 833 seconds and App in 320 seconds, each within its own original 900-second
+cap. `monitor-coding-staged-current/summary.json` records successful O2 App
+compilation and actual nine-package Coding assembly. The source executable is
+`7180ef5939b5aa1abc942e8c58e0fa1300fdfab25741ad24eee3c16d51aa7146`, and the
+packaged executable is
+`26a9764c468b1aef33d7e827f3dbf0f2401bbe3d005a66fc498bc5b17d6f3523`.
+
+The original blackboxes still fail: the local HTTP profile exceeds its
+five-second invocation limit, ACP does not return its expected frame and retains
+`owner.acp_frontend_close_pending`, and CLI read exceeds ten seconds. All actual
+process custody closes. No deadline, fixture assertion or permission changes.
+`monitor-coding-lock-preservation` retains the nine generated lock files before
+restoring the approved pins. This artifact does not pass complete Coding or
+final release acceptance.
+
+A separate diagnostic repeats the original operator setup and readonly command
+on that exact package. Its first long-path attempt rejects the Unix socket
+length and receives no acceptance credit. The short-path attempt in
+`coding-read-short-physical-current` reaches an actual Owner `SIGSEGV` followed
+by `owner.peer_disconnected`. Metadata for that exact executable and process
+shows `gc-main-thread`, `GCTib::ForEachBitmapWord` and `Mutator::GcPhaseEnum`.
+`owner-core-classification.json` records metadata-only inspection. Core memory
+and credentials are not read. This identifies a GC failure for that diagnostic,
+not a cause for every earlier timeout. The user's GC deferral remains in force.
+
+
+## Narrow initial preparation input
+
+E1030 adds the optional `InitialContextPreparationInputPort159` composition
+interface. Its input contains only Thread and Run identity, epoch, immutable
+context projection and cancellation. It contains no ModelLane, Catalog/tool
+snapshot, Source or invocation grant. The existing open preparation interface
+and constructor parameters remain available. Core still gives an old port its
+independently paid active snapshot.
+
+Product's concrete initial preparer uses the narrower input. Its single,
+multiple, document, window and journal preparation paths retain the same
+identity/projection data instead of the whole active ModelLane. Existing
+non-initial context-read helpers keep their old signatures and project into the
+same narrow implementation. Product builds a powerless preparation Context for
+its pure selection helpers. Actual reads continue through the original Core,
+policy, approval, Operation, capability and Store paths.
+
+This avoids allocating a full active-snapshot fork that the preparer does not
+need. It does not attest that every open continuation returned its DATA. The
+proposed automatic Core Context retirement is withdrawn; all original
+conservative Context payments remain. No generic closed flag, receipt, cleanup
+observation or input-interface type becomes a retirement witness. The exact
+scope and withdrawn proposal are recorded in
+`initial-context-input159-source/disposition.json`.
+
+`initial-context-input-conservative-core-current/summary.json` passes all
+**49/49** original Core tests without skips. The actual Product contract in
+`initial-context-input-sequence-conservative-current/summary.json` uses the real
+installed Native Workspace Catalog and Skills provider. Metadata and selected
+body each require their own canonical approval and distinct Operation. Before
+body approval, one actual read Receipt exists and no model Attempt exists.
+Afterward exactly one Run, two completed read Receipts, one safe cut and one
+model Attempt carry the exact immutable instructions. Changed configuration
+rejects the first pending read before a completed Receipt or model Attempt.
+The public entry is `AXYNDRA_PRODUCT_CONTRACT_SCOPE=initial-context-input` in
+`support_tests/product_contract`.
+
+The initial provider-only diagnostic entered the historical unowned fixture
+observation path. Its borrowed last-request observer could not prove model
+content. Those failed attempts remain recorded. The final test adds the real
+ordinary Native Catalog so it exercises the funded snapshot boundary. It keeps
+the complete positive and changed-configuration assertions. Source readback in
+`initial-context-input-product-source-readback.json` verifies every tested file;
+the only later difference is an exact explanatory comment in Core.
+
+The original continuous Core/recovery build succeeds in 605 seconds, but its
+execution still fails at the stale-precondition scenario with
+`input_attachment.capacity`. `initial-context-input-complete-core-current`
+retains the failure. The nested error has `kind=budget_exceeded`; the diagnostic
+runner's old `error_kind` probe was false and is preserved alongside the exact
+JSON readback in `typed-error-readback.json`. No assertion is lowered and no
+quota changes. The full capacity, other Raw consumer retirement, final App,
+release and performance requirements remain open. The current O2 artifact in
+E1029 precedes this additive input change and is not final-source release proof.
+
+
+The narrow-input code and regression are committed as `0c1bbfdd`. Exact Core
+and continuous-contract source hashes match that commit in
+`initial-context-input-commit-readback.json`. The real two-stage Product
+executable is
+`1c1a558d79fc78e78e9e91f45ca057ab36238dd0880614f31d87a8378b29a753`.
+`static-gates-initial-context-input-final.json` passes all 109 original Python
+regressions and the full architecture, documentation, dependency, inventory and
+boundary gates with 2,958 tracked paths. Existing open preparers and persisted
+schemas are unchanged; no database migration or plugin wire-protocol upgrade
+is required. Roll back this whole coherent input commit if needed. None of
+these results closes the original complete Core or final release requirements.
