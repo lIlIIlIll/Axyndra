@@ -86,6 +86,11 @@ main(): Int64 {
             println("product approved plan execution contract passed")
             return 0
         }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("initial-context-input")) {
+            runInitialContextInputContract159(root)
+            println("product initial context input contract passed")
+            return 0
+        }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-languages")) {
             runEvalLanguagesProductContract204(root)
             println("product Eval languages contract passed")

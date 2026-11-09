@@ -20,6 +20,15 @@ func productContextProviderRead(host: ProductJavaScriptPluginHost, namespace: St
     before: ActiveRunSnapshot, resources: AgentValue, query: AgentValue, cancellation: CancellationToken,
     selectedIds: Array<String>, invocationId: String,
     sourceDigest!: String = "", sourceValidity!: () -> Result<Unit> = { => Result.Ok(()) }): Result<ProductContextProviderRead> {
+    productContextProviderReadInput159(host, namespace, provider,
+        InitialContextPreparationInput159(before.threadId, before.runId, before.epoch, before.contextSnapshot, cancellation),
+        resources, query, cancellation, selectedIds, invocationId, sourceDigest: sourceDigest, sourceValidity: sourceValidity)
+}
+
+func productContextProviderReadInput159(host: ProductJavaScriptPluginHost, namespace: String, provider: String,
+    before: InitialContextPreparationInput159, resources: AgentValue, query: AgentValue, cancellation: CancellationToken,
+    selectedIds: Array<String>, invocationId: String,
+    sourceDigest!: String = "", sourceValidity!: () -> Result<Unit> = { => Result.Ok(()) }): Result<ProductContextProviderRead> {
     let binding = match (host.contentProviderBinding(namespace, provider, false)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
     let frozenQuery = try { FrozenPluginContentQuery(query, selectedIds) } catch (_: Exception) {

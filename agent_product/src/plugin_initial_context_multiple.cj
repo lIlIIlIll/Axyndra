@@ -92,7 +92,7 @@ class ProductInitialContextMultipleSequence {
     private let host: ProductJavaScriptPluginHost
     private let selections: Array<ProductInitialContextSelection>
     private let plans: Array<InitialContextPreparation>
-    private let before: ActiveRunSnapshot
+    private let before: InitialContextPreparationInput159
     private let cancellation: domain.CancellationToken
     private let generationValues: Array<UInt64>
     private let projections = ArrayList<InvocationContextProjection>()
@@ -102,7 +102,7 @@ class ProductInitialContextMultipleSequence {
     private var transitionFrom: ?ToolPreparationRead = None
     private var transitionTo: ?ToolPreparationRead = None
     init(host: ProductJavaScriptPluginHost, selections: Array<ProductInitialContextSelection>,
-        plans: Array<InitialContextPreparation>, before: ActiveRunSnapshot, cancellation: domain.CancellationToken) {
+        plans: Array<InitialContextPreparation>, before: InitialContextPreparationInput159, cancellation: domain.CancellationToken) {
         this.host = host; this.selections = selections.clone(); this.plans = plans.clone()
         this.before = before; this.cancellation = cancellation; this.currentRead = plans[0].read
         let generations = ArrayList<UInt64>(); var reads: Int64 = 0

@@ -1049,9 +1049,17 @@ public class AgentCore <: AgentRunner {
             let port = match (initialContext) { case Some(value) => value
                 case None => return fail(request, context, control, AgentError(AgentErrorKind.RecoveryRequired,
                     "context.initial_preparation_unavailable", "host did not install an initial context preparer"), sink) }
-            // This open port can retain its snapshot. It gets an independent
-            // paid view; only a separate explicit returning port may retire it.
-            let captured = try { port.prepare(request, context, active.forkIndependentView159()) } catch (_: Exception) {
+            // The open compatibility port gets its independent paid snapshot.
+            // The narrower prepare call needs no Context or ModelLane copy.
+            // Neither selection authorizes retirement of open callback data.
+            let captured = try {
+                match (port as InitialContextPreparationInputPort159) {
+                    case Some(actual) => actual.prepareInput159(request.prompt,
+                        InitialContextPreparationInput159(active.threadId, active.runId, active.epoch,
+                            active.contextSnapshot, context.cancellation))
+                    case None => port.prepare(request, context, active.forkIndependentView159())
+                }
+            } catch (_: Exception) {
                 Result<InitialContextPreparation>.Err(AgentError(AgentErrorKind.Internal,
                     "context.initial_preparation_failed", "host initial context preparation failed")) }
             let preparation = match (captured) {

@@ -49,7 +49,7 @@ func preflightInitialDocumentWindowSelection(host:ProductJavaScriptPluginHost,se
 }
 
 func productInitialDocumentWindowPreparation(host:ProductJavaScriptPluginHost,operations:OperationRuntimePort,
-    selection:ProductInitialContextSelection,finalBinding:ProductPluginContentBinding,before:ActiveRunSnapshot,
+    selection:ProductInitialContextSelection,finalBinding:ProductPluginContentBinding,before:InitialContextPreparationInput159,
     context:ToolInvocationContext,prompt:String,ids:ProductIds):Result<InitialContextPreparation>{
     let configuration=match(initialDocumentWindowConfiguration(host,selection,finalBinding)){
         case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
@@ -86,7 +86,7 @@ class ProductInitialDocumentWindowSequence {
     private let selection:ProductInitialContextSelection
     private let configuration:HostPluginDocumentContextWindowConfiguration
     private let finalBinding:ProductPluginContentBinding
-    private let before:ActiveRunSnapshot
+    private let before:InitialContextPreparationInput159
     private let initial:ToolInvocationContext
     private let identityJson:String
     private let queryJson:String
@@ -98,7 +98,7 @@ class ProductInitialDocumentWindowSequence {
     private var completed:Bool=false
     init(host:ProductJavaScriptPluginHost,selection:ProductInitialContextSelection,
         configuration:HostPluginDocumentContextWindowConfiguration,finalBinding:ProductPluginContentBinding,
-        before:ActiveRunSnapshot,initial:ToolInvocationContext,identity:AgentValue,query:AgentValue,ids:ProductIds){
+        before:InitialContextPreparationInput159,initial:ToolInvocationContext,identity:AgentValue,query:AgentValue,ids:ProductIds){
         this.host=host;this.selection=selection;this.configuration=configuration;this.finalBinding=finalBinding
         this.before=before;this.initial=initial;this.identityJson=stringifyUnifiedJson(identity)
         this.queryJson=stringifyUnifiedJson(query);this.ids=ids

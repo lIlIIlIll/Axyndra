@@ -152,7 +152,7 @@ func parseInitialContextSelection(settingsRoot: String, text: String, runtime: ?
     } catch (_: Exception) { initialContextError("context.initial_configuration_invalid") }
 }
 
-class ProductInitialContextPreparation <: InitialContextPreparationPort {
+class ProductInitialContextPreparation <: InitialContextPreparationInputPort159 {
     private let settingsRoot: String
     private let host: ProductJavaScriptPluginHost
     private let ids: ProductIds
@@ -163,14 +163,24 @@ class ProductInitialContextPreparation <: InitialContextPreparationPort {
     }
     public func prepare(request: AgentRunRequest, context: ToolInvocationContext,
         active: ActiveRunSnapshot): Result<InitialContextPreparation> {
+        if (active.threadId.value != context.sessionId.value || active.runId.value != request.runId.value ||
+            active.epoch != context.epoch) { return initialContextError("context.initial_binding_changed") }
+        prepareInput159(request.prompt, InitialContextPreparationInput159(active.threadId, active.runId,
+            active.epoch, active.contextSnapshot, context.cancellation))
+    }
+    public func prepareInput159(prompt: String, active: InitialContextPreparationInput159): Result<InitialContextPreparation> {
+        // A powerless projection for existing pure selection helpers. Actual
+        // reads still receive their canonical Context in the ordinary pipeline.
+        let context = ToolInvocationContext(active.runId, SessionId(active.threadId.value), CapabilitySet(),
+            epoch: active.epoch, contextProjection: active.contextSnapshot, cancellation: active.cancellation)
         let selections = match (loadInitialContextSelections(settingsRoot, runtime: Some(runtime))) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-        match (preflightInitialContextSelections(host, selections, request.prompt)) {
+        match (preflightInitialContextSelections(host, selections, prompt)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        if (selections.size == 1) { return prepareOne(selections[0], request, context, active) }
+        if (selections.size == 1) { return prepareOne(selections[0], prompt, context, active) }
         let plans = ArrayList<InitialContextPreparation>()
         for (selection in selections) {
-            match (prepareOne(selection, request, context, active)) {
+            match (prepareOne(selection, prompt, context, active)) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => plans.add(value) }
         }
         let multiple = ProductInitialContextMultipleSequence(host, selections, plans.toArray(), active, context.cancellation)
@@ -178,34 +188,34 @@ class ProductInitialContextPreparation <: InitialContextPreparationPort {
             sequence: Some(ContextReadSequence(multiple.maximumReads, { current, facts => multiple.advance(current, facts) },
                 transition: Some({ old, next => multiple.validateTransition(old, next) })))))
     }
-    private func prepareOne(selection: ProductInitialContextSelection, request: AgentRunRequest,
-        context: ToolInvocationContext, active: ActiveRunSnapshot): Result<InitialContextPreparation> {
+    private func prepareOne(selection: ProductInitialContextSelection, prompt: String,
+        context: ToolInvocationContext, active: InitialContextPreparationInput159): Result<InitialContextPreparation> {
         let actual = match (host.contentProviderBinding(selection.namespace, selection.provider, false)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         if (actual.digest != selection.packageDigest || active.threadId.value != context.sessionId.value ||
-            active.runId.value != request.runId.value || active.epoch != context.epoch) {
+            active.runId.value != context.runId.value || active.epoch != context.epoch) {
             return initialContextError("context.initial_binding_changed") }
         if(selection.journalProtocol){
-            return productInitialJournalContextPreparation(host, operations, selection, actual, active, context, request.prompt, ids)
+            return productInitialJournalContextPreparation(host, operations, selection, actual, active, context, prompt, ids)
         }
         if(selection.windowProtocol){
-            return productInitialDocumentWindowPreparation(host, operations, selection, actual, active, context, request.prompt, ids)
+            return productInitialDocumentWindowPreparation(host, operations, selection, actual, active, context, prompt, ids)
         }
         if(selection.documentProtocol){
-            let prepared=match(productDocumentContextProviderRead(host,operations,selection.namespace,selection.provider,active,context,
-                selection.resources(),selection.query(request.prompt),ids.nextInvocationId(),{=>selection.current()})){
+            let prepared=match(productDocumentContextProviderReadInput159(host,operations,selection.namespace,selection.provider,active,context,
+                selection.resources(),selection.query(prompt),ids.nextInvocationId(),{=>selection.current()})){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
             return Result.Ok(InitialContextPreparation(prepared.read,validity:prepared.validity))
         }
         if (selection.preparationProtocol) {
-            let inputs = match (contextComponentInputs(host, selection, actual, request.prompt, active.threadId, context.cancellation, ids)) {
+            let inputs = match (contextComponentInputs(host, selection, actual, prompt, active.threadId, context.cancellation, ids)) {
                 case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-            let sequence = ProductInitialContextSequence(host, selection, actual, active, request.prompt, context.cancellation, ids, inputs)
+            let sequence = ProductInitialContextSequence(host, selection, actual, active, prompt, context.cancellation, ids, inputs)
             return Result.Ok(InitialContextPreparation(sequence.first(), validity: { => sequence.validate() },
                 sequence: Some(ContextReadSequence(if (selection.componentSources.isSome()) { 3 } else { 2 }, { current, facts => sequence.advance(current, facts) }))))
         }
-        let prepared = match (productContextProviderRead(host, selection.namespace, selection.provider,
-            active, selection.resources(), selection.query(request.prompt), context.cancellation, [], ids.nextInvocationId(),
+        let prepared = match (productContextProviderReadInput159(host, selection.namespace, selection.provider,
+            active, selection.resources(), selection.query(prompt), context.cancellation, [], ids.nextInvocationId(),
             sourceDigest: selection.digest, sourceValidity: { => selection.current() })) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         Result.Ok(InitialContextPreparation(prepared.read, validity: prepared.validity))

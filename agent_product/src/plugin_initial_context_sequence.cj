@@ -16,7 +16,7 @@ class ProductInitialContextSequence {
     private let host: ProductJavaScriptPluginHost
     private let selection: ProductInitialContextSelection
     private let binding: ProductPluginContentBinding
-    private let before: ActiveRunSnapshot
+    private let before: InitialContextPreparationInput159
     private let prompt: String
     private let cancellation: CancellationToken
     private let ids: ProductIds
@@ -28,7 +28,7 @@ class ProductInitialContextSequence {
     private var componentHeaderPaths: Array<String> = []
 
     init(host: ProductJavaScriptPluginHost, selection: ProductInitialContextSelection,
-        binding: ProductPluginContentBinding, before: ActiveRunSnapshot, prompt: String,
+        binding: ProductPluginContentBinding, before: InitialContextPreparationInput159, prompt: String,
         cancellation: CancellationToken, ids: ProductIds, inputs: ProductInitialContextInputs) {
         this.host = host; this.selection = selection; this.binding = binding; this.before = before
         this.prompt = prompt; this.cancellation = cancellation; this.ids = ids; this.inputs = inputs

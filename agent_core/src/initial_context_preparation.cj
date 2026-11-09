@@ -22,6 +22,29 @@ public interface InitialContextPreparationPort {
         active: ActiveRunSnapshot): Result<InitialContextPreparation>
 }
 
+// Preparation DATA only. This carries no ModelLane, Catalog/tool snapshot,
+// invocation authority, Source or execution handoff. Retaining this input
+// cannot retain the Core's private tool-set view.
+public class InitialContextPreparationInput159 {
+    public let threadId: ThreadId
+    public let runId: RunId
+    public let epoch: Int64
+    public let contextSnapshot: InvocationContextProjection
+    public let cancellation: CancellationToken
+    public init(threadId: ThreadId, runId: RunId, epoch: Int64,
+        contextSnapshot: InvocationContextProjection, cancellation: CancellationToken) {
+        this.threadId = threadId; this.runId = runId; this.epoch = epoch
+        this.contextSnapshot = contextSnapshot; this.cancellation = cancellation
+    }
+}
+// An optional narrower host composition port. Avoiding an unnecessary lane
+// copy is not a retirement witness. Core keeps the original conservative
+// Context payments for open preparation/continuation callbacks. The legacy
+// port still receives its independent paid snapshot.
+public interface InitialContextPreparationInputPort159 <: InitialContextPreparationPort {
+    func prepareInput159(prompt: String, input: InitialContextPreparationInput159): Result<InitialContextPreparation>
+}
+
 // Diagnostic data, deliberately not a RunningModel/WaitingApproval encoding.
 // A crash here cannot turn a host closure into a replayable model Attempt.
 func initialContextRequestValue(request: AgentRunRequest, epoch: Int64): AgentValue {

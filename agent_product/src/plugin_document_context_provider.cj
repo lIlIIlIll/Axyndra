@@ -13,6 +13,14 @@ import yjson_support.*
 func productDocumentContextProviderRead(host:ProductJavaScriptPluginHost,operations:OperationRuntimePort,
     namespace:String,provider:String,before:ActiveRunSnapshot,context:ToolInvocationContext,
     keys:AgentValue,query:AgentValue,invocationId:String,sourceValidity:()->Result<Unit>):Result<ProductContextProviderRead>{
+    productDocumentContextProviderReadInput159(host,operations,namespace,provider,
+        InitialContextPreparationInput159(before.threadId,before.runId,before.epoch,before.contextSnapshot,context.cancellation),
+        context,keys,query,invocationId,sourceValidity)
+}
+
+func productDocumentContextProviderReadInput159(host:ProductJavaScriptPluginHost,operations:OperationRuntimePort,
+    namespace:String,provider:String,before:InitialContextPreparationInput159,context:ToolInvocationContext,
+    keys:AgentValue,query:AgentValue,invocationId:String,sourceValidity:()->Result<Unit>):Result<ProductContextProviderRead>{
     let binding=match(host.contentProviderBinding(namespace,provider,false)){
         case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
     let configuration=match(host.documentContextConfiguration(namespace,binding.digest,provider)){

@@ -98,7 +98,7 @@ func preflightInitialJournalContextSelection(host:ProductJavaScriptPluginHost,se
 }
 
 func productInitialJournalContextPreparation(host:ProductJavaScriptPluginHost,operations:OperationRuntimePort,
-    selection:ProductInitialContextSelection,finalBinding:ProductPluginContentBinding,before:ActiveRunSnapshot,
+    selection:ProductInitialContextSelection,finalBinding:ProductPluginContentBinding,before:InitialContextPreparationInput159,
     context:ToolInvocationContext,prompt:String,ids:ProductIds):Result<InitialContextPreparation>{
     let configurations=match(initialJournalContextConfigurations(host,selection,finalBinding)){
         case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
@@ -130,7 +130,7 @@ class ProductInitialJournalContextSequence {
     private let selection:ProductInitialContextSelection
     private let configurations:InitialJournalContextConfigurations
     private let finalBinding:ProductPluginContentBinding
-    private let before:ActiveRunSnapshot
+    private let before:InitialContextPreparationInput159
     private let initial:ToolInvocationContext
     private let prompt:String
     private let identity:String
@@ -138,7 +138,7 @@ class ProductInitialJournalContextSequence {
     private var requestJson=""
     private var completed=false
     init(host:ProductJavaScriptPluginHost,selection:ProductInitialContextSelection,configurations:InitialJournalContextConfigurations,
-        finalBinding:ProductPluginContentBinding,before:ActiveRunSnapshot,initial:ToolInvocationContext,prompt:String,binding:AgentValue,ids:ProductIds){
+        finalBinding:ProductPluginContentBinding,before:InitialContextPreparationInput159,initial:ToolInvocationContext,prompt:String,binding:AgentValue,ids:ProductIds){
         this.host=host;this.selection=selection;this.configurations=configurations;this.finalBinding=finalBinding;this.before=before
         this.initial=initial;this.prompt=prompt;this.identity=stringifyUnifiedJson(binding);this.ids=ids}
     func validate():Result<Unit>{
