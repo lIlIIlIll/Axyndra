@@ -1958,3 +1958,13 @@ fails. A real public selected-Shell JSON contract passes after the frontend and
 Native baseline codec corrections. Corrected context and cancellation fixtures
 compile; nine affected unit cases remain GC-blocked. The broader Eval baseline
 now reaches a released-service reset failure. Full acceptance remains incomplete.
+
+
+The [E1026–E1028 follow-up](implementation/plan-execution-reliability.md#passive-registry-contention-and-remaining-eval-startup-failure)
+fixes two passive monitors that permanently withdrew services on transient
+Registry writer contention. The real preservation and disable regression fails
+before the fix and passes after it. The original full Host gate passes 274/274.
+The complete Eval flow now passes Python reset but still fails JavaScript
+startup. An actual sandboxed Bun process and a standalone persistent replay
+abort under the unchanged limits. Full acceptance remains incomplete; the PR
+stays Draft and Cangjie GC work remains deferred.

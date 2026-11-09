@@ -1499,3 +1499,79 @@ gate also passes with the new regression source staged (2,956 tracked paths).
 See `static-gates-native-json-final.json` and
 `architecture-native-json-tracked.json`. These checks do not replace the open
 Product, performance or release acceptance.
+
+
+## Passive Registry contention and remaining Eval startup failure
+
+E1026 fixes an observed permanent withdrawal of an idle Native service during
+an independent Product's Registry write. `PluginRegistryExecutionPin.current()`
+returns `plugin.registry_busy` while a real writer holds its fence. That result
+does not revoke the pin. The service monitor previously interpreted every
+unsuccessful check as revocation. A separate process-lease monitor did the same.
+Temporary probes identify both paths and are withdrawn from the final source.
+
+The generation, endpoint and manager now distinguish that exact busy result
+for passive observation. The lease monitor also defers its passive recheck on
+that result. Both monitors retain their original polling intervals and finite
+lease deadlines. All other errors, physical closure, cancellation, expiration
+and actual Registry revocation still withdraw the service. `isClosing()`,
+`available()`, publication and effect admission retain their strict checks.
+No busy result grants permission or authorizes an invocation.
+
+`AXYNDRA_PRODUCT_CONTRACT_SCOPE=eval-registry-contention` exercises actual
+installed packages through public Product and Application paths. It preserves
+an original Python service's state across an independent package installation,
+activation and accepted-cell cancellation. It then resets the original service
+with exactly one startup Operation. A real Registry disable rejects the next
+cell before another child Receipt. The disabled record view is closed.
+`eval-monitor-regression-red-current/summary.json` fails the preservation
+assertion with the original production monitors. The same contract passes on
+the corrected monitors in `eval-monitor-owned-disable-current/summary.json`.
+The latter executable is `79d67cedd2dc64b384d1b80047b54c8dd7066dd38ab985deacc8d5c17c72aee0`.
+The original complete Host isolation gate also passes **274/274**, without
+skips, in `eval-monitor-host-full-current/summary.json`.
+
+E1027 bounds test setup's actual Registry mutation retries at 16 attempts with
+10-millisecond pauses. Only `plugin.registry_busy` qualifies: that writer-fence
+refusal precedes materialization and publication. Each refused owned error is
+closed. Other errors fail immediately. Startup, cells, accepted effects and
+Unknown results are never retried. Original service limits, capability checks,
+assertions and case deadlines stay unchanged. This prevents read-fence
+contention from becoming an unrelated fixture-construction failure.
+
+E1028 keeps the broader Eval acceptance open. The original flow now passes its
+Python reset and reaches JavaScript startup, which returns
+`plugin.lifecycle_start_unknown`. The separate `eval-languages` scope runs the
+same original language assertions to isolate this boundary. Both scopes fail
+in `eval-monitor-fixture-fenced-current/summary.json`; neither is a passing
+whole-flow gate. The contention-only final rerun does not replace them.
+
+The actual sandboxed Bun process terminates with `SIGABRT`, as recorded in
+`eval-languages-fenced-physical-current`. A standalone replay of the same
+sandbox and original 512 MiB address-space, eight-process, file and CPU limits
+reproduces that exit with stdin held open. It emits READY, then aborts after
+about one second. Immediate EOF incorrectly appears healthy and is not
+persistent-service evidence. `eval-js-allocation-probe-current` records failed
+memory mappings (`ENOMEM`) and a final thread creation (`EAGAIN`) before the
+abort. Bun `--smol` and the tested GC worker options do not resolve it. None of
+those options is retained in source or operator configuration. This is a Bun
+process failure, not evidence of a Cangjie GC crash. No resource limit is raised
+to turn it into a pass.
+
+| Requirement | Final status in this follow-up | Remaining evidence |
+| --- | --- | --- |
+| Preserve idle services across transient Registry writer contention | Acceptance passed for the real regression and full Host gate | Full Product acceptance remains separate |
+| Keep actual revocation, cancellation and effect admission strict | Real disable and independent cancellation assertions pass | No new authority or recovery bypass introduced |
+| Complete the original Native Eval baseline | Partial; Python reset advances, JavaScript startup fails | Compatible persistent interpreter execution under the original limits, then remaining language assertions |
+| Complete all non-GC PR requirements | Incomplete | Existing Core capacity, unknown crashes, oracle allocation, resource-bound startup, Coding, ACP, TUI, performance and final release gaps |
+
+The user-deferred Cangjie GC work remains incomplete. No SDK component, Native
+C launcher, quota, Source, seal, receipt authority or DATA acknowledgment changes
+in this follow-up.
+
+The follow-up code is committed as `20cc39b0`. Exact source hashes in both the
+final real regression and full Host reports match that commit, as checked in
+`eval-monitor-source-readback-current.json`. The 109 original Python regressions
+and the architecture gate pass in `static-gates-eval-monitor-final.json`, with
+2,957 tracked paths. Its documentation, dependency, inventory and boundary
+checks pass. These checks do not replace the open broader acceptance gates.
