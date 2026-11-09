@@ -1811,3 +1811,48 @@ approval paths; never treat the changed content digest as preserving an old
 Source grant. Complete Core capacity, deferred GC, unknown failures, capturing
 TUI, broader performance and complete release acceptance remain open.
 
+The coherent Workflow change is committed as `a90c3c8d`; the Minimal check is
+`0a7b7336`. `current-release-static/static-gates-release-final.json` passes all
+109 original Python regressions and the complete architecture gate, including
+documentation, dependency pins, package inventory and library/UI boundaries.
+`release-source-readback.json` binds the tested build manifest and clean-entry
+check to these commits. Later changes in this checkpoint are documentation only.
+
+
+### Current fixed-SDK crash boundaries
+
+E1034 records current physical evidence without expanding the user's GC scope.
+The official November 4 SDK and StdX are restored from the same approved archive
+hashes after the earlier temporary source/SDK trees became incomplete. The cause
+of that external loss is unknown. An independent checkout restores exact
+`0766ca0`; the original user worktree is not reset or overwritten. No SDK,
+runtime, compiler, standard library or StdX component is built or patched.
+
+`memory-current-compatible-staged/summary.json` completes all six normal O2
+dependency/Product compilations within each original 900-second cap. The current
+full Product unit executable is
+`5cd59e4a81b5ca1607d39da4e38d380c407febde2aae71a10637a6ac28cec351`.
+The original 63 MiB Memory case then fails with an explicit
+`gc-main-thread`/`CheckAndPush` SIGSEGV before its historical oracle OOM can be
+assessed. `memory-final-classification.json` preserves both conclusions: this
+attempt is GC-blocked; the earlier `OutOfMemoryError` remains unresolved and is
+not waived. Original sample bytes, heap, assertions, oracle and case deadlines
+are unchanged.
+
+`current-coding-physical/owner-core-metadata-classification.json` identifies
+collector frames in the two actual current-package Owner crashes observed
+while setting up the profile and CLI entry tests. ACP's readonly durable
+snapshot has zero Runs, model Attempts and Operations before its original
+five-second timeout. A separate parent-debugger diagnostic in
+`acp-owner-parent-stack` observes SIGSEGV in `GCTib::ForEachBitmapWord` while the
+actual Owner loads installed state, with only packaged fixed-runtime libraries
+loaded. It captures no arguments, locals or core memory. The earlier debugger
+attempt used its extra startup shell and loaded an ambient SDK; that attempt is
+excluded from fixed-runtime causal evidence. The corrected diagnostic disables
+that startup shell. It is not a passing timing test and does not prove that
+every historical ACP timeout has the same cause.
+
+The current GC-bound attempts stay incomplete under the user's deferral. The
+separate complete Core `input_attachment.capacity` failure and unclassified
+historical failures remain distinct; no GC observation releases a DATA payment,
+changes a quota or supplies a consumer acknowledgment. PR #49 remains Draft.

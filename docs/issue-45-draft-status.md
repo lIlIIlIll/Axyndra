@@ -2006,3 +2006,11 @@ setup and complete Workflow checks; exact unchanged endpoint hashes also retain
 429 other passing protocol cases. This is 601 protocol cases across 16 Native
 endpoints, not Memory application or Product authority acceptance.
 
+[E1034](implementation/plan-execution-reliability.md#current-fixed-sdk-crash-boundaries)
+records the fresh full Product compilation and original 63 MiB Memory case's
+collector crash before the historical OOM can be assessed. That OOM remains
+unresolved. Current profile/entry Owner crashes and the corrected ACP parent
+stack have specific collector evidence; historical timeouts are not all
+reclassified. SDK/runtime changes remain deferred. Complete Core capacity,
+unclassified failures, capturing TUI, broader performance and complete release
+acceptance remain incomplete. PR #49 stays Draft.
