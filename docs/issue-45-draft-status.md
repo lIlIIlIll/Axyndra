@@ -2029,3 +2029,29 @@ the fix; the complete unchanged Host gate passes 275/275. Complete Core still
 fails the same original capacity assertion after rebuilding with the fix.
 Other descriptor consumers retain their payments, GC remains deferred and
 PR #49 remains Draft.
+
+
+[E1037](implementation/plan-execution-reliability.md#actual-prepared-exports-keep-their-original-payments)
+locates actual retained Prepared exports with reconciled numeric records and
+function-name stacks; it does not authorize refunds or close Core capacity.
+[E1038](implementation/plan-execution-reliability.md#captured-headless-frames-have-a-separate-concrete-producer)
+records the captured producer, original rejection preservation, bounded real
+approval-input fixture, full 558-case cjtui pass and subsequent invoice
+correction with 13 focused passes. Final invoice integration passes the actual Todo golden; the complete
+five-scenario golden remains incomplete because initial prompt still times out. The new public enum alternative requires
+coherent consumer rebuilds; old-binary compatibility is unverified.
+[E1039](implementation/plan-execution-reliability.md#cold-todo-hints-and-explicit-execution-use-different-readiness-paths)
+records passive configured hints, original cancellable readiness for explicit
+Todo execution, passing hint/early-cancel evidence and retained Native GC-blocked
+cases. Truthful Native phase/task save summaries preserve the original golden
+assertions. No Source, quota, deadline or persisted schema changes are made.
+Overall acceptance remains incomplete and PR #49 stays Draft.
+
+
+[E1040](implementation/plan-execution-reliability.md#final-captured-todo-artifact-and-remaining-initial-prompt-timeout)
+binds the final App and Coding artifact hashes to passing clean-env/setup and
+four original TUI scenarios, including actual Todo read/save/view/copy with
+canonical receipts. Initial prompt retains its 45-second timeout and remains
+unclassified. Final Product test compilation reaches its original 900-second
+limit; no new unit pass is claimed. All failure evidence remains recorded,
+GC stays deferred and PR #49 remains Draft.

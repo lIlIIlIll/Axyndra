@@ -1960,3 +1960,188 @@ No provider calls or SDK component builds occur in these checks.
 109 Python regressions and complete architecture gate on this final source and
 regression. Generated dependency locks are preserved with hashes before
 restoring their approved bytes. No dependency version changes are committed.
+
+
+### Actual Prepared exports keep their original payments
+
+E1037 extends the temporary numeric diagnostic in
+`core-custody-ledger-qualified`. All **167,270** actual counter and lease
+SUM/count checks reconcile. Its ownership tags distinguish private Catalog
+snapshots, real Prepared consumers and actual producer returns. The trace
+observes Prepared metadata remaining held after producer return because the
+legacy call/metadata getters export aliases. All eight temporary source files
+are restored byte-for-byte; the probe is not a shipped implementation.
+
+`core-export-call-stacks-loaded/stacks.json` records 2,870 getter hits across
+86 distinct function-name stacks on the exact diagnostic executable. Actual
+Host/Broker validation, execution and Pipeline fallback paths appear there.
+The parent debugger disables its startup shell and loads the fixed SDK. It
+reads no arguments, locals or core memory. The earlier attempt missing the
+native dynamic library remains failed and supplies no stack evidence.
+
+These observations locate real consumers. They do not prove those exported
+aliases returned, authorize closing their payments or solve the original
+complete Core capacity assertion. No generic closed flag, getter exemption,
+quota increase or Source substitute is introduced.
+
+
+### Captured headless frames have a separate concrete producer
+
+E1038 adds `HeadlessCapturedFrameScope` and
+`AppTestRunner.runWithCaptureCustody` in the local cjtui overlay. The scope
+registers actual Terminal, TestBackend, command and AsyncRuntime objects. It
+rejects retirement during an active runner and later clears only those actual
+internal references. Exported result Buffers and snapshots remain readable;
+internal retirement conveys no output acknowledgment or bank refund. The old
+noncapturing `runOwned` capture rejection remains unchanged.
+
+The concrete `HeadlessDisplayProducer180` owns the complete private golden
+inspection helper and the exact stdout writer. It combines real internal
+retirement with whole-helper return, output flush and the existing backend
+retirement checks before Screen can clear its copied data. Legacy headless
+callers retain their old path. Unknown exceptions and backend obligations stay
+conservatively held.
+
+Native Todo now uses bounded `HeadlessScript.waitUntil` steps to pump the
+ordinary input/update/async loop. Only a reached state is captured during a
+wait, so polling does not accumulate duplicate raster frames. Timeout aborts
+later scripted input and conveys no task/Data acknowledgment. The Native
+fixture uses ordinary selection and Enter keys for AllowOnce on the current
+expected ContextRead/Todo request. It writes no approval, Source or Receipt.
+The original semantic assertions and 45-second TUI process deadline remain.
+Operator CLI preparation retains its separate original 20-second command cap.
+
+The explicit `--workflow-package` fixture option uses the existing actual
+inspect/import/enable helper. It binds the exact installed content digest and
+Todo document rights, rejects another existing selection, and does not copy or
+fabricate Registry records. `scripts/release_gate.sh` supplies its already built
+Workflow package. Cards/ask require no such installation.
+
+`captured-frame-await-focused/summary.json` passes all 11 focused O2 lifecycle,
+async-completion, timeout and ordinary-input regressions. The full matching
+cjtui inventory passes **556/556** in
+`captured-frame-await-full-core/summary.json`. The earlier first full run used
+the workspace directory and failed five relative-fixture cases; the same ELF
+passes in the actual Core package directory. Those failures remain recorded.
+The local overlay manifest is updated without changing its upstream identity.
+
+The first invoice conservatively counted raster-sized extents for snapshots
+and carried early unowned fixture captures into a later real display invoice.
+`captured-tui-summary-coding-release` reaches actual Todo read/save completion
+but then rejects a raster invoice. The correction separately measures the
+actual exported Buffer, both retained snapshot strings and container backing.
+It preserves the existing Buffer/text meters and all real retained peaks.
+Only the concrete Screen can report the same absence of copied display owners
+already recognized by its original payment API; that observation grants no
+Source, refund or early retirement. An earlier real invoice never decreases.
+`captured-frame-invoice-focused/summary.json` passes **13/13**, including both
+payment-transition controls. The matching full inventory now passes **558/558** in
+`captured-frame-invoice-full-core/summary.json`. The actual source App also
+passes the unchanged Todo golden in `captured-tui-invoice-existing-todo`: two
+new completed Runs, six committed Operations and six completed Receipts, with
+no model Attempt. Earlier failures remain recorded.
+
+Actual Coding packaging, clean-environment and setup checks pass in
+`captured-tui-await-coding-release`; cards, default and ask pass without owned
+survivors. Initial prompt and Todo remain failed. The later save-summary build
+again passes cards/ask; two operator preparations fail with peer disconnection.
+These are distinct attempts and are not combined into a complete passing gate.
+The initial prompt's cause remains unclassified; no historical timeout is
+relabeled as GC without physical evidence.
+
+The actual fixture database is `sessions/fixture/state.db`, distinct from the
+maintenance CLI's `sessions/state.db`. The readonly inventory proves Todo read
+and save complete as two Runs, six committed Operations and six completed
+Receipts, with revision 1 and no model Attempt. The earlier maintenance-only
+snapshot is not TUI execution evidence. Physical cleanup after a failed golden
+is not consumer acknowledgment or release acceptance.
+
+This local extension adds an `Await` alternative to public `HeadlessStep`.
+Consumers matching that enum exhaustively must handle the new alternative and
+rebuild with the coherent overlay/host. Old-binary compatibility is unverified;
+do not mix independently compiled old/new TUI libraries. No persisted schema or
+Native wire protocol changes, and no SDK component is built. The overall TUI
+acceptance remains PARTIAL, not complete.
+
+
+### Cold Todo hints and explicit execution use different readiness paths
+
+E1039 fixes the cold Owner's selection order. Help and completion describe a
+syntactically valid explicit operator Todo binding without activating plugins.
+They do not claim an active contribution or grant execution. An explicit editor,
+replacement or Todo command uses the original shared cancellable execution
+readiness and atomically frozen Catalog before the complete existing selection.
+The frontend cancellation and selected session remain checked across startup.
+Missing/malformed selection retains its original error without starting unrelated
+contributions. Digest, generation, document rights and Source checks remain.
+
+The new public cold-Owner regressions install through actual APIs, close the
+eager setup runtime and reopen the persisted installation in Owner mode.
+`cold-todo-red-qualified` records the hint/help assertions failing before the
+fix; its other two cases crash in collector frames. `cold-todo-green` passes
+the hint/help case with generation zero and no Run, Operation or model Attempt.
+The actual Native command and Native cancellation cases remain GC-blocked.
+They are not counted as passing and are not repeatedly retried.
+`cold-todo-early-cancellation` independently passes the smaller public test
+without installed packages, proving cancellation precedes any preparation;
+it does not replace the retained Native cancellation case.
+
+The current Native save already commits the correct document, but its frontend
+had replaced the original phase/task confirmation with a generic message.
+The completion now retains only scalar counts from its already validated Native
+result and formats the truthful original confirmation. No host parser,
+normalizer, new write or inferred permission is added. Original golden count
+assertions stay intact, and the actual editor approval regression asserts the
+new public summary. The final Coding artifact validates that summary and the corrected raster
+invoice in the original Todo golden. GC stays deferred; complete Core capacity
+and the other recorded release requirements remain open. PR #49 remains Draft.
+
+
+### Final captured Todo artifact and remaining initial-prompt timeout
+
+E1040 records implementation commit `3f25e3b306116caae04fb2431ec5054dbc573437`.
+It binds the final production build to source App SHA-256
+`8d4d77e86f080e4452b8c601c5bf5e68ff1c78f17414e26ecf78fd565a15bdb9`
+and the actual Coding artifact SHA-256
+`f1ef23101ad1e45095792cd5a327b3e76263b95e5d9aeac1dc303df582f888d6`.
+`captured-tui-final-normal-build/summary.json` records the unchanged fixed SDK
+and successful TUI/App builds. The later producer-comment clarification changes
+no executable code.
+
+`captured-tui-final-coding-release/summary.json` records actual package assembly,
+clean-environment and setup passes. Cards, default, Todo and ask pass their
+original golden assertions. Todo uses a fresh home and actual Workflow operator
+installation. Its fixture database contains two completed Runs, six committed
+Operations and six completed Receipts: two each for `host.context.read`,
+`host.plugin.document` and `plugin.axyndra:workflow.todo`. The Todo document is
+revision 1, and model Attempt count is zero. All recorded process custody closes
+without remaining owned processes or unknown observations.
+
+Initial prompt still times out at the original 45-second process limit after
+one committed ContextRead and one completed Receipt, before any model Attempt.
+The ordinary-key fixture sees the same approval ID again after its first
+AllowOnce choice. It does not repeat a decision against that old card. A
+short-lived diagnostic replaces that wait with an explicit repeated-ID failure;
+its source is restored byte for byte afterward. No result/cleanup is treated as
+an approval, Source or data-consumption acknowledgment.
+
+The original and final-package normal runs retain this failure. Separate
+parent-debugger attempts complete the golden with and without ASLR enabled.
+Those altered executions do not establish ordinary release acceptance or prove
+a cause. No collector stack was captured for the normal timeout; it remains
+UNKNOWN rather than being attributed to the deferred GC issue. Repeating the
+approval, increasing a deadline or weakening a golden assertion is not a fix.
+
+`captured-todo-final-product-focused/summary.json` records a new complete Product
+test compilation timing out at its original 900-second limit. The watcher
+cleans all exact owned descendants; it does not supply a test PASS. Therefore
+the final public saved-summary assertion has no new unit-run acceptance. The
+actual final Todo golden proves its product behavior, while the earlier
+hint/help and early-cancellation passes retain their own source boundaries.
+The two unchanged Native collector-crash tests remain deferred and were not
+retried. The final staged source passes 109 Python regressions and the full
+architecture gate in `captured-todo-final-static`. Vendored cjtui provenance,
+public contract baseline, dependency pins and shell syntax also pass. These
+static results do not replace the retained runtime failures. Complete Core capacity, broader performance, release and other
+previously recorded gaps remain open. PR #49 stays Draft and the task remains
+incomplete.
