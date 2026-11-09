@@ -1967,7 +1967,10 @@ class PluginRuntimeContractTests {
             "    parameters: Type.Object({ token: Type.String() }),\n" +
             "    execute: async (_id, params, _signal, onUpdate) => {\n" +
             "      active++; peak = Math.max(peak, active); onUpdate({ content: [{ type: 'text', text: params.token }] });\n" +
-            "      await new Promise(resolve => setTimeout(resolve, 500)); active--;\n" +
+            "      if (params.token === 'first') {\n" +
+            "        await new Promise(resolve => { if (_signal.aborted) { resolve(); return; }\n" +
+            "          _signal.addEventListener('abort', resolve, { once: true }); });\n" +
+            "      } else { await new Promise(resolve => setTimeout(resolve, 500)); } active--;\n" +
             "      return { content: [{ type: 'text', text: params.token }], details: { peakActive: peak } };\n" +
             "    } });\n" +
             "}\n"

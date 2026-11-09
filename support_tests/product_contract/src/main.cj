@@ -2233,6 +2233,29 @@ func expectNativeEvalToolSchema(binding: NativeEvalContractBinding, thread: Sess
     throw IllegalStateException("actual selected Native Eval schema missing: " + binding.name)
 }
 
+// Inspect the actual exported Native union. A branch projection is descriptive
+// schema data only; it is never registered as a Tool or execution authority.
+func expectInstalledWorkflowTaskSchema204(definitions: Array<ModelToolDefinition>): Unit {
+    for (definition in definitions where definition.name == "plugin.axyndra:workflow.task") {
+        let schema = definition.inputSchema
+        expect(schema.field("type").getOrThrow().text == "object", "actual Task root remains an object")
+        let variants = schema.field("oneOf").getOrThrow().items
+        expect(variants.size == 2, "actual Task supports the single and batch wire contracts")
+        expectToolSchema([ModelToolDefinition("single", "Actual single Task branch", variants[0])], "single",
+            ["name", "agent", "task", "outputSchema", "schemaMode", "context", "effort", "network"], ["task"])
+        expectToolSchema([ModelToolDefinition("batch", "Actual batch Task branch", variants[1])], "batch",
+            ["context", "tasks", "network"], ["context", "tasks"])
+        let tasks = variants[1].field("properties").getOrThrow().field("tasks").getOrThrow()
+        expect(tasks.field("minItems").getOrThrow().asNumberText() == "1" &&
+            tasks.field("maxItems").getOrThrow().asNumberText() == "8", "original one-through-eight Task bound is unchanged")
+        for (variant in variants) {
+            expect(!variant.field("additionalProperties").getOrThrow().asBool(), "actual Task branches reject unknown arguments")
+        }
+        return
+    }
+    throw IllegalStateException("actual installed Native Task schema is missing")
+}
+
 func expectOrchestrationToolSchemas(
     workspace: LocalWorkspace,
     processes: LocalProcessPort
@@ -2260,7 +2283,7 @@ func expectOrchestrationToolSchemas(
     try {
         let _=installWorkflowContractPolicy(actual)
         expectToolSchema(actual.tools(),"plugin.axyndra:workflow.yield",["type","result"],["result"])
-        expectToolSchema(actual.tools(),"plugin.axyndra:workflow.task",["context","tasks"],["context","tasks"])
+        expectInstalledWorkflowTaskSchema204(actual.tools())
     expectToolSchema(
         actual.tools(),
         "plugin.axyndra:workflow.hub_process",
@@ -3971,7 +3994,8 @@ func runEvalLanguageContracts(
     )
     expect(
         !pythonReset.isError && pythonReset.output.field("content").getOrThrow().text.trimAscii() == "missing",
-        "python eval reset clears only the selected runtime"
+        "python eval reset clears only the selected runtime; output=" + encodeAgentValue(pythonReset.output) +
+            "; services=" + encodeAgentValue(listValue(pipeline.binding("py").product.pluginServiceStatuses()))
     )
     let javascriptFirst = completedFrom(
         executeNativeEvalCall(pipeline,

@@ -11,6 +11,27 @@ import std.unittest.testmacro.*
 import yjson.*
 import yjson_support.*
 
+// The removed bare read name cannot exercise the model-cut contract. Install
+// the real package and select only its ordinary read permission for this case.
+func contextUpdateReadTool204(product: ProductRuntime, root: String): String {
+    let record = workspacePluginInstall(product, root)
+    workspaceReadViewConfigure(root, record, ["read"])
+    "plugin." + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + ".read"
+}
+func expectContextUpdateReadReceipts204(database: SqliteDatabase, run: RunId, tool: String): Unit {
+    // One actual ordinary root and its one exact read-view child, on the same
+    // original Run. Neither a missing bare tool nor a fake read can satisfy it.
+    @Expect(productTestBoundScalarInt(database,
+        "SELECT COUNT(*) FROM operation_receipts r JOIN operation_effect_records e ON e.operation_id=r.operation_id " +
+        "JOIN operations o ON o.id=r.operation_id WHERE r.outcome='completed' AND o.run_id=? AND e.tool_id=?",
+        [SqlParameter.Text(run.value), SqlParameter.Text(tool)]), 1)
+    @Expect(productTestBoundScalarInt(database,
+        "SELECT COUNT(*) FROM operation_receipts r JOIN operation_effect_records e ON e.operation_id=r.operation_id " +
+        "JOIN operations o ON o.id=r.operation_id WHERE r.outcome='completed' AND o.run_id=? AND e.tool_id=?",
+        [SqlParameter.Text(run.value), SqlParameter.Text(HOST_READ_VIEW_TOOL)]), 1)
+    @Expect(database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'"), 2)
+}
+
 class ProductContextUpdateCapture {
     let fixture: ContextProviderProductFixture
     let request: AgentRunRequest
@@ -75,7 +96,8 @@ class PluginContextUpdateTests {
                 ContextContentTrust.UntrustedData))
             let before = InvocationContextProjection(contributions: contributions.toArray())
             File.writeTo(fixture.root + "/visible.txt", "one ordinary read".toArray())
-            fixture.product.fixtureProbe.getOrThrow().enqueueToolCallReply("skills-update-read", "read",
+            let readTool = contextUpdateReadTool204(fixture.product, fixture.root)
+            fixture.product.fixtureProbe.getOrThrow().enqueueToolCallReply("skills-update-read", readTool,
                 objectValue([ValueField("path", textValue("visible.txt"))]))
             let request = fixture.product.request("Read the file and then follow the selected skills.",
                 sessionId: Some(SessionId(fixture.thread.value)), contextSnapshot: Some(before))
@@ -92,7 +114,7 @@ class PluginContextUpdateTests {
             @Expect(after.contributions()[1].trust, ContextContentTrust.UserSelected)
             @Expect(before.contributions()[0].id, "review")
             @Expect(productTestBoundScalarInt(fixture.database, "SELECT COUNT(*) FROM runs WHERE thread_id=?", [SqlParameter.Text(fixture.thread.value)]), 1)
-            @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'"), 1)
+            expectContextUpdateReadReceipts204(fixture.database, request.runId, readTool)
             @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='context_snapshot_safe_cut'"), 1)
         } finally { fixture.close() }
     }
@@ -102,7 +124,8 @@ class PluginContextUpdateTests {
         let fixture = ContextProviderProductFixture()
         try {
             File.writeTo(fixture.root + "/visible.txt", "one ordinary read".toArray())
-            fixture.product.fixtureProbe.getOrThrow().enqueueToolCallReply("context-update-read", "read",
+            let readTool = contextUpdateReadTool204(fixture.product, fixture.root)
+            fixture.product.fixtureProbe.getOrThrow().enqueueToolCallReply("context-update-read", readTool,
                 objectValue([ValueField("path", textValue("visible.txt"))]))
             let request = fixture.product.request("Read the file, then use the selected provider context.",
                 sessionId: Some(SessionId(fixture.thread.value)), contextSnapshot: Some(InvocationContextProjection()))
@@ -111,7 +134,7 @@ class PluginContextUpdateTests {
             @Expect(result.isOk()); @Expect(capture.seen, 2); @Expect(capture.pendingHadNoCut)
             @Expect(capture.ticket.getOrThrow().state(), ContextUpdateState.Applied)
             @Expect(productTestBoundScalarInt(fixture.database, "SELECT COUNT(*) FROM runs WHERE thread_id=?", [SqlParameter.Text(fixture.thread.value)]), 1)
-            @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'"), 1)
+            expectContextUpdateReadReceipts204(fixture.database, request.runId, readTool)
             @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='context_snapshot_safe_cut'"), 1)
             let raw = fixture.database.query("SELECT skill_snapshot FROM runs WHERE id=?", [SqlParameter.Text(request.runId.value)])[0].required(0)
             let snapshot = contextSnapshotFromValue(decodeStoredValue(raw))
@@ -132,7 +155,8 @@ class PluginContextUpdateTests {
             let fixture = ContextProviderProductFixture()
             try {
                 File.writeTo(fixture.root + "/visible.txt", "one ordinary read".toArray())
-                fixture.product.fixtureProbe.getOrThrow().enqueueToolCallReply("withdrawn-context-read", "read",
+                let readTool = contextUpdateReadTool204(fixture.product, fixture.root)
+                fixture.product.fixtureProbe.getOrThrow().enqueueToolCallReply("withdrawn-context-read", readTool,
                     objectValue([ValueField("path", textValue("visible.txt"))]))
                 let request = fixture.product.request("Continue using the original context when the queued selection is withdrawn.",
                     sessionId: Some(SessionId(fixture.thread.value)), contextSnapshot: Some(InvocationContextProjection()))
