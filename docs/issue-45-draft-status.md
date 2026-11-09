@@ -1996,3 +1996,13 @@ deadlines and isolation; the six-case Minimal empty/offline matrix also passes.
 Current uninstrumented App and Minimal artifacts are identified there. This is
 entry/artifact evidence; complete Core, model, TUI, performance and release
 acceptance remain incomplete, and PR #49 stays Draft.
+
+
+[E1033](implementation/plan-execution-reliability.md#standalone-workflow-keeps-release-optimization)
+fixes Workflow's standalone release optimization. The original full 172-case
+protocol and all six repeated original 8 MiB cases pass without extending the
+five-second query deadline. Fresh Coding/Full packages pass clean-environment,
+setup and complete Workflow checks; exact unchanged endpoint hashes also retain
+429 other passing protocol cases. This is 601 protocol cases across 16 Native
+endpoints, not Memory application or Product authority acceptance.
+

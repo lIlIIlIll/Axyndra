@@ -1757,3 +1757,57 @@ The named Coding and Full host executable is
 `c9e5f6b7d835943b8ba211798b41ef8f66a555a669a6cf12aa977e57150c9ae2`.
 These are entry and artifact checks, not complete Core, model, TUI, performance
 or release acceptance. No production API, persisted schema or migration changes.
+
+
+### Standalone Workflow keeps release optimization
+
+E1033 fixes the independently packaged Workflow dependency build. Root workspace
+builds apply `-O2` to dependencies, but the standalone Workflow manifest did not
+inherit that override. Its retained build history records yjson's declared
+`-O0`. The actual Full endpoint fails two of the original 172 protocol tests at
+`document.data_timeout`: one complete 8 MiB document and two complete 4 MiB
+continuation slots. The original five-second query deadline and exact samples
+are retained in `current-native-protocols/workflow.log`.
+
+`workflow-large-original-phases/summary.json` repeats each unchanged case three
+times. Uploads consume 3.9–4.4 seconds and computation another 0.6–0.7 seconds;
+one repeat fails and five finish near the limit. The temporary numeric-only
+probe in `workflow-large-internal` observes parsing and hexadecimal append costs.
+Both instrumented files are restored byte-for-byte before the final build.
+These measurements locate costs; they do not isolate yjson as the only cause.
+
+Workflow now declares the same package-level `override-compile-option = "-O2"`
+already used by the MCP plugin and host workspace. No business algorithm,
+dependency pin, deadline, payload, quota or Source contract changes.
+`workflow-actual-compiler-options/summary.json` retains the actual verbose
+compiler commands: all eight dependency/entry commands end their optimization
+flag sequence with `-O2`; yjson's earlier declared `-O0` remains visible before
+the override. The initial log selector expected an absolute compiler path and
+found no commands. Its failed audit is retained; offline qualification reads
+the actual PATH-based `cjc` commands without rerunning or changing compilation.
+
+`workflow-release-regression/summary.json` passes the original complete
+**172/172** protocol cases. All six repeated original large cases pass in
+0.59–0.76 seconds with the same five-second deadline. The independent packaged
+Workflow executable is
+`1a647a27d2b6df01441946c8e2c9f17ef0412495d8494ad5851076c4727a7a6a`.
+This is a controlled build-configuration comparison, not a complete Product
+performance matrix or a claim about every startup timeout.
+
+`current-release-workflow-integration/summary.json` records fresh actual Coding
+(nine plugins) and Full (17 plugins) assembly. Both pass their original
+clean-environment, operator setup and complete 172-case Workflow checks. Both
+contain that exact tested Workflow executable. The other 15 checked Full
+endpoints match the exact binary hashes of their **429 passing protocol cases**
+in `current-native-protocols/summary.json`. Together these establish 601 protocol
+cases across 16 endpoints; they do not replace the separate Memory application
+or Host/Core authority requirements. The original two Workflow failures remain
+in the earlier report. App bytes remain those recorded in E1032.
+
+No database migration or protocol change is required. Existing installations
+keep their exact old package and grants. Adopt or roll back the coherent
+Workflow package through the ordinary plugin update and operator binding/
+approval paths; never treat the changed content digest as preserving an old
+Source grant. Complete Core capacity, deferred GC, unknown failures, capturing
+TUI, broader performance and complete release acceptance remain open.
+

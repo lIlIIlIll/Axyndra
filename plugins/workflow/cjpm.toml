@@ -4,6 +4,9 @@ name = "workflow_plugin"
 version = "1.0.0"
 description = "Independent workflow proposal algorithms"
 output-type = "executable"
+# Standalone packaging does not inherit the workspace's dependency override.
+# Keep the release parser optimized, as in the host and MCP plugin builds.
+override-compile-option = "-O2"
 
 [dependencies]
 "agent_domain" = { path = "../../agent_domain", output-type = "static" }
