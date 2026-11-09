@@ -49,7 +49,7 @@ class ProductSelectedNativeTool {
         try{
             let raw=encodeAgentValue(arguments)
             if(raw.size>131072 || arguments.unifiedKind!=ValueKind.Object){return selectedShellArgumentError("shell.argument_invalid")}
-            let actual=decodeStoredValue(raw)
+            let actual=parseUnifiedJson(raw, maxBytes:131072, maxDepth:64)
             let seconds=actual.field("timeout");let precise=actual.field("timeout_ms")
             if(seconds.isSome() && precise.isSome()){return selectedShellArgumentError("shell.timeout_invalid")}
             var millis: Int64=if(nativeCallTimeoutMillis<10000){nativeCallTimeoutMillis}else{10000}

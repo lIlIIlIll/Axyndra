@@ -121,7 +121,7 @@ public class NativeShellContractBinding {
     }
     public func invoke(thread: SessionId, arguments: AgentValue): ProductNativeToolInvocation {
         start(thread)
-        let input=decodeStoredValue(encodeAgentValue(arguments))
+        let input=parseUnifiedJson(encodeAgentValue(arguments), maxBytes:8388608, maxDepth:64)
         // Preserve the old whole-main 60-second default under this separately
         // configured actual 60-second operator profile, never silently clamp.
         if(input.field("timeout").isNone() && input.field("timeout_ms").isNone()){input.put("timeout",integerValue(60))}
@@ -155,7 +155,7 @@ public class NativeShellContractBinding {
                 throw IllegalStateException("actual independent readonly Native worker output shape")}
             if(readArtifactDecision.isSome()){
                 throw IllegalStateException("readonly worker has no artifact descriptor to turn into a grant")}
-            let view=decodeStoredValue(encodeAgentValue(envelope))
+            let view=parseUnifiedJson(encodeAgentValue(envelope), maxBytes:8388608, maxDepth:64)
             let result=NativeShellObservedResult(view,actual.receiptId(),actual.failure().isSome(),
                 if(actual.failure().isSome()){"failed"}else{"complete"})
             actual.close().value().getOrThrow();return result
@@ -166,7 +166,7 @@ public class NativeShellContractBinding {
         let source=envelope.field("result").getOrThrow()
         let raw=encodeAgentValue(source)
         if(raw.size>1114112){throw IllegalStateException("observed Shell snapshot bound")}
-        let value=decodeStoredValue(raw)
+        let value=parseUnifiedJson(raw, maxBytes:1114112, maxDepth:64)
         match(readArtifactDecision){
             case Some(decision)=>
                 match(value.field("artifacts")){

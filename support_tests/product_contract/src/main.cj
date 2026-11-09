@@ -56,6 +56,11 @@ main(): Int64 {
     let root = Directory.createTemp("target").toString()
     try {
         runProductIdContracts()
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("native-json-frontend")) {
+            runNativeJsonFrontendContract204(root)
+            println("product Native JSON frontend contract passed")
+            return 0
+        }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("plan-process-scope")) {
             planProductRunCaseProcess204("process-scope", root)
             println("product approved BashTool process scope contract passed")

@@ -171,7 +171,7 @@ public func nativeEvalObservedCellSnapshot(result: Result<ToolInvocationResult>)
                 let raw = encodeAgentValue(value.output)
                 if (raw.size > 1048576) { return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                     "test.eval_observed_snapshot_limit", "observed Eval test result exceeds its allocation bound")) }
-                Result.Ok(ToolInvocationResult.Completed(ToolResult(value.callId, decodeStoredValue(raw),
+                Result.Ok(ToolInvocationResult.Completed(ToolResult(value.callId, parseUnifiedJson(raw, maxBytes:1048576, maxDepth:64),
                     isError: value.isError, receiptId: value.receiptId)))
             } finally { value.releasePayload() }
         case _ => observed
