@@ -1980,3 +1980,10 @@ Core 49/49 and the real two-stage initial-read approval and configuration-change
 contract pass. All conservative Context payments remain. Complete continuous
 Core still fails its original capacity assertion, and the O2 artifact predates
 this input change. Full acceptance remains incomplete.
+
+[E1031](implementation/plan-execution-reliability.md#explicit-bun-startup-under-the-original-service-limits)
+records the explicit Bun inline-import profile, an unchanged-limit failing
+file-launch control, and passing final Registry/language/complete Eval Product
+contracts. Runner validation is 23 pass plus seven unavailable Julia skips.
+Earlier intermittent Unknown outcomes remain recorded; no cause or full release
+acceptance is inferred. GC remains deferred and overall completion is partial.

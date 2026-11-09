@@ -1675,3 +1675,55 @@ boundary gates with 2,958 tracked paths. Existing open preparers and persisted
 schemas are unchanged; no database migration or plugin wire-protocol upgrade
 is required. Roll back this whole coherent input commit if needed. None of
 these results closes the original complete Core or final release requirements.
+
+
+### Explicit Bun startup under the original service limits
+
+E1031 changes the support frontend's explicitly authored Bun backend argv to
+`--eval` with a `pathToFileURL` import of the installed JavaScript runner. The
+standalone interpreter checker uses the same launch. This is an operator-profile
+correction, not an Eval-specific Host dispatcher or command rewrite. The
+installed Native endpoint and runner bytes, public tool schema, service
+configuration, approval, Root/Source, Receipt, quotas and deadlines are unchanged.
+The public example is in `plugins/eval/README.md`.
+
+`eval-bun-runner-regression-final/summary.json` retains a failing file-launch
+control under the same 512 MiB address-space, eight-process, 64-FD, file-size and
+CPU limits. Inline import passes the real persistent wait, state/reset,
+async/error recovery and timeout/retirement assertions, including an installed
+module path containing spaces, quotes, Unicode and a fragment character. The
+complete current runner suite executes 30 tests: 23 pass and seven Julia tests
+are skipped because Julia is unavailable. The initial new async assertion used
+an expression without returning from the runner's existing async wrapper; the
+corrected test explicitly returns its awaited value. No runner semantics change.
+
+`eval-bun-import-product-final/summary.json` records a fresh fixed-SDK build and
+three uninstrumented public Product contracts: `eval-registry-contention`,
+`eval-languages`, and the original complete `eval-runtime-config`. All pass with
+the original assertions and limits. The complete contract takes 59 seconds.
+Its executable SHA-256 is
+`7f3c65c48cde992a8029aa4022373ec04b892afe392be6193ebea551d9f21c38`.
+`eval-bun-import-source-readback.json` matches all tested source files; the only
+subsequent code-file difference is an explanatory comment.
+`static-gates-eval-bun-import-final.json` passes the 109 Python regressions and
+full architecture, documentation, dependency, inventory and boundary gates.
+Earlier Unknown failures
+remain in `eval-bun-import-product-current` and the physical diagnostic. A
+capacity-constructor probe observes no capacity exception in its run; it is not
+an allocation ledger. A later diagnostic build passes the complete contract and
+three additional independent fixtures. Temporary Host diagnostics are restored
+byte-for-byte before the final build. These results do not establish a cause for
+every earlier intermittent Unknown, or complete the wider performance matrix.
+
+The unrelated readonly canonical-metadata closed-marker experiment is withdrawn:
+the original complete Core still fails `input_attachment.capacity`. Its source
+and failure remain in `readonly-canonical-metadata-source` and
+`readonly-canonical-metadata-core-current`. The read-only growth stacks preserve
+real budget observations without claiming an identity ledger or a safe refund.
+No quota is raised and no Raw consumer is acknowledged by a generic flag.
+
+Existing lifecycle grants keep their exact argv. To adopt or roll back the Bun
+launch, update the explicit operator profile and start a fresh service through
+the ordinary approval path; do not replay an Unknown cell. GC remains deferred.
+The 63 MiB Memory oracle OOM, complete continuous Core, final App/release and
+remaining performance/blackbox requirements are still incomplete.

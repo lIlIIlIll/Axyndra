@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real interpreter behavior; native/Product authorization is checked separately."""
 import os
+import json
 from pathlib import Path
 import select
 import shutil
@@ -21,9 +22,17 @@ PROFILES = {
 
 
 class Runner:
-    def __init__(self, language, *, environment=None):
+    def __init__(self, language, *, environment=None, runner_path=None, command_prefix=()):
         executable, args, source = PROFILES[language]
-        self.process = subprocess.Popen([shutil.which(executable), *args, str(ROOT / 'runners' / source)],
+        runner = str(runner_path or ROOT / 'runners' / source)
+        if language == 'js':
+            # The same explicit Bun argv as the operator lifecycle profile.
+            # Import the installed module without changing import.meta.url.
+            args = ['--eval', 'await import((await import("node:url")).pathToFileURL('
+                    + json.dumps(runner) + ').href)']
+        else:
+            args = [*args, runner]
+        self.process = subprocess.Popen([*command_prefix, shutil.which(executable), *args],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         bufsize=0, start_new_session=True, env=environment)
         self.buffer = bytearray()
@@ -162,6 +171,40 @@ def optional_suite(language, set_code, read_code, check_missing, error_code):
 JavaScriptRunnerTests = optional_suite('js', 'var counter = 42', 'counter', "typeof counter === 'undefined'", "throw new Error('cell failure')")
 RubyRunnerTests = optional_suite('rb', 'counter = 42', 'counter', 'defined?(counter).nil?', "raise 'cell failure'")
 JuliaRunnerTests = optional_suite('jl', 'counter = 42', 'counter', '!isdefined(@__MODULE__, :counter)', 'error("cell failure")')
+
+
+@unittest.skipUnless(shutil.which('bun') and shutil.which('prlimit'), 'Bun and prlimit required')
+class JavaScriptBoundedRunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='eval runner # 雪 ')
+        self.addCleanup(self.temporary.cleanup)
+        runner_path = Path(self.temporary.name) / 'runner "quoted" # 雪.mjs'
+        shutil.copyfile(ROOT / 'runners' / 'javascript.mjs', runner_path)
+        # Match the original actual Product service profile. These are not
+        # enlarged to accommodate Bun's background server workers.
+        self.runner = Runner('js', runner_path=runner_path, command_prefix=[
+            shutil.which('prlimit'), '--as=536870912', '--nproc=8', '--nofile=64',
+            '--fsize=1048576', '--cpu=10', '--'])
+        self.addCleanup(self.runner.close)
+
+    def test_idle_persistence_and_reset_under_original_limits(self):
+        self.assertEqual(self.runner.cell('var counter = 41')['exit_code'], 0)
+        # The original file launch aborts after READY while stdin stays open.
+        time.sleep(2)
+        self.assertEqual(self.runner.cell('counter += 1; counter')['stdout'], '42')
+        self.assertEqual(self.runner.cell("typeof counter === 'undefined'", reset=True)['stdout'], 'true')
+
+    def test_async_error_and_subsequent_cell_under_original_limits(self):
+        self.assertEqual(self.runner.cell('return await Promise.resolve(21 * 2)')['stdout'], '42')
+        failed = self.runner.cell("console.log('started'); throw new Error('bounded failure')")
+        self.assertEqual((failed['exit_code'], failed['stdout']), (1, 'started'))
+        self.assertIn('bounded failure', failed['stderr'])
+        self.assertEqual(self.runner.cell('6 * 7')['stdout'], '42')
+
+    def test_timeout_preserves_observation_and_retires_interpreter(self):
+        result = self.runner.cell("console.log('started'); while (true) {}", timeout_ms=100)
+        self.assertEqual((result['exit_code'], result['timed_out'], result['stdout']), (124, True, 'started'))
+        self.assertEqual(self.runner.process.wait(timeout=5), 0)
 
 
 @unittest.skipUnless(shutil.which('julia'), 'jl interpreter unavailable')

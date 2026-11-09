@@ -51,7 +51,15 @@ public class NativeEvalContractBinding {
             arguments.add(textValue("--startup-file=no"))
             arguments.add(textValue("--history-file=no"))
         }
-        arguments.add(textValue(runnerPath))
+        if (language == "js") {
+            // Keep the selected absolute Bun executable and installed module.
+            // Use Bun's inline mode to load the same installed module under
+            // the unchanged finite service resource limits.
+            // pathToFileURL preserves spaces, fragments and Unicode in paths.
+            arguments.add(textValue("--eval"))
+            arguments.add(textValue("await import((await import('node:url')).pathToFileURL(" +
+                quoteUnifiedJson(runnerPath) + ").href)"))
+        } else { arguments.add(textValue(runnerPath)) }
         let service = objectValue([
             ValueField("id", textValue("stdio")), ValueField("executable", textValue(executable)),
             ValueField("arguments", listValue(arguments.toArray())), ValueField("read_only_mounts", listValue([])),

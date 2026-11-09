@@ -15,14 +15,33 @@ The native Service configuration is exactly:
 ```
 
 The corresponding approved backend argv uses an absolute interpreter and the
-fixed installed runner path: Python `-u runners/python.py`, Bun
-`runners/javascript.mjs`, Ruby `runners/ruby.rb`, or Julia
+fixed installed runner path: Python `-u runners/python.py`, Bun with the inline
+module import below, Ruby `runners/ruby.rb`, or Julia
 `--startup-file=no --history-file=no runners/julia.jl`. Each service selects one
 language. The host reads the real startup `READY|language|1` before publishing
 its directory. Interpreter paths, environment, workspace mounts, network denial
 and process budgets remain explicit host policy. A missing interpreter fails
 only that service activation. There is no ambient executable search in this
 package or eval-specific host dispatcher.
+
+For Bun 1.4.4 with the tested 512 MiB address-space and eight-process profile,
+configure the backend arguments as follows. Replace the example path with the
+absolute path of the installed package's runner:
+
+```json
+["--eval", "await import((await import('node:url')).pathToFileURL('/opt/axyndra/plugins/eval/runners/javascript.mjs').href)"]
+```
+
+The selected Bun executable imports the same module and preserves
+`import.meta.url`. `pathToFileURL` handles spaces, quotes, Unicode and `#` in the
+installed path. The host executes the operator's frozen argv unchanged; it does
+not rewrite existing grants. Reconfigure and explicitly start a new service to
+adopt this argv. Existing instances are not restarted or replayed. No package
+wire or stored-data migration is required. File-mode startup on this Bun build
+can emit READY and then abort while stdin remains open under these limits.
+`check_runners.py JavaScriptBoundedRunnerTests` covers idle persistence, reset,
+async results, cell errors, and timeout retirement with the original limits.
+Bun-specific behavior on another version still needs that version's tests.
 
 The `eval` tool retains `language`, `code`, optional `title`, `timeout` and
 `reset`. Pure preparation validates and freezes the exact hexadecimal request
