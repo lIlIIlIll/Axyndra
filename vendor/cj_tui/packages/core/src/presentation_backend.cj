@@ -94,6 +94,9 @@ public struct PresentationFrame {
 public interface TerminalFrameProvider {
     // Called before HistoryBatch, Terminal buffers, dirty snapshots, diff
     // plans, ANSI builders or backend transport copies are allocated.
+    // Whether these captures contain copied data for this provider's retained
+    // display payer. Default conservative; this never retires earlier data.
+    func headlessCapturedDataRequiresPayment(): Bool { true }
     func prepareRetainedFrameCopies(_: Rect): Bool { true }
     func prepareRetainedFrameCopies(size: Rect, _: Int64): Bool { prepareRetainedFrameCopies(size) }
     func noteInternalDisplayFrameReferencesRetired(_: RetiredInternalDisplayFrameReferences): Unit {}

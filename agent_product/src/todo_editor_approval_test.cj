@@ -40,6 +40,7 @@ class TodoEditorApprovalTests {
             @Expect(f.session.handle("/approve "+save.operationId.value).value().getOrThrow().approval.isNone())
             let completed=f.session.takeTodoEditorCompletion().getOrThrow()
             @Expect(completed.saved);@Expect(completed.markdown.contains("retained editor"))
+            @Expect(completed.savedSummary227(),"Saved 1 phase(s), 1 task(s).")
             @Expect(f.document().revision,1)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs"),2)
             @Expect(f.session.todoMarkdown().value().getOrThrow(),completed.markdown)

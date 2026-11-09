@@ -17,7 +17,7 @@ func headlessBuffersEqual(left: ?Buffer, right: ?Buffer): Bool {
     }
 }
 
-func runHeadless(screen: AgentScreen): Int64 {
+func runHeadless(screen: AgentScreen, producer180!: ?HeadlessDisplayProducer180 = None): Int64 {
     if (headlessComposerPerformance()) {
         return runHeadlessComposerPerformance(screen)
     }
@@ -41,15 +41,15 @@ func runHeadless(screen: AgentScreen): Int64 {
     if (askMode) {
         screen.seedAskSmoke()
         if (!screen.askToolTakeoverObserved()) {
-            println("headless cjtui ask tool takeover assertion failed")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui ask tool takeover assertion failed")
             return 1
         }
         if (!screen.askToolCompletionPreservesTakeoverObserved()) {
-            println("headless cjtui ask tool completion takeover assertion failed")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui ask tool completion takeover assertion failed")
             return 1
         }
         if (!screen.askWaitingSuppressesActivityObserved()) {
-            println("headless cjtui ask waiting activity assertion failed")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui ask waiting activity assertion failed")
             return 1
         }
     }
@@ -67,109 +67,109 @@ func runHeadless(screen: AgentScreen): Int64 {
     })
 
     if (!agentOverlayChromeObserved()) {
-        println("headless cjtui agent overlay assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui agent overlay assertion failed")
         return 1
     }
     if (!screen.sessionSelectorInteractionObserved()) {
-        println("headless cjtui session selector interaction assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui session selector interaction assertion failed")
         return 1
     }
     if (!screen.sessionSwitchRestoresTranscriptObserved()) {
-        println("headless cjtui session transcript restore assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui session transcript restore assertion failed")
         return 1
     }
     if (!setupMode && !cardMode && !askMode && !todoMode && !screen.composerHistoryNavigationObserved()) {
-        println("headless cjtui composer history navigation assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui composer history navigation assertion failed")
         return 1
     }
 
     if (cardMode && !screen.toolContinuationObserved()) {
-        println("headless cjtui tool continuation assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui tool continuation assertion failed")
         return 1
     }
     if (cardMode && !screen.streamingInputObserved()) {
-        println("headless cjtui streaming input assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui streaming input assertion failed")
         return 1
     }
     if (cardMode && !screen.queuedInputChronologyObserved()) {
-        println("headless cjtui queued input chronology assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui queued input chronology assertion failed")
         return 1
     }
     if (cardMode && !screen.subagentConversationContractObserved()) {
-        println("headless cjtui subagent conversation assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui subagent conversation assertion failed")
         return 1
     }
     if (cardMode && !screen.subagentEscapeInterruptContractObserved()) {
-        println("headless cjtui subagent escape interrupt assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui subagent escape interrupt assertion failed")
         return 1
     }
     if (cardMode && !screen.approvalRejectionRenderedOnce()) {
-        println("headless cjtui approval rejection dedupe assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui approval rejection dedupe assertion failed")
         return 1
     }
     if (cardMode && !screen.approvalPausesWorkingImmediately()) {
-        println("headless cjtui approval visibility assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui approval visibility assertion failed")
         return 1
     }
     if (cardMode && !screen.approvalMailboxRefreshObserved()) {
-        println("headless cjtui approval mailbox refresh assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui approval mailbox refresh assertion failed")
         return 1
     }
     if (cardMode && !screen.approvalCancellationAndFailureSettlementObserved()) {
-        println("headless cjtui approval cancellation/state settlement assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui approval cancellation/state settlement assertion failed")
         return 1
     }
     if (cardMode && !screen.unifiedCardChromeObserved()) {
-        println("headless cjtui unified card chrome assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui unified card chrome assertion failed")
         return 1
     }
     if (cardMode && !screen.cardChromeObserved()) {
-        println("headless cjtui card chrome assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui card chrome assertion failed")
         return 1
     }
     if (cardMode && !screen.toolCardPresentationObserved()) {
-        println("headless cjtui tool card presentation assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui tool card presentation assertion failed")
         return 1
     }
     if (cardMode && !screen.cardFocusNavigationObserved()) {
-        println("headless cjtui card focus navigation assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui card focus navigation assertion failed")
         return 1
     }
     if (cardMode && !screen.staleCardFocusToggleObserved()) {
-        println("headless cjtui stale card focus toggle assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui stale card focus toggle assertion failed")
         return 1
     }
     if (cardMode && !screen.markdownRenderingObserved()) {
-        println("headless cjtui markdown rendering assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui markdown rendering assertion failed")
         return 1
     }
     if (cardMode && !screen.revisionUtf8Safe()) {
-        println("headless cjtui revision utf8 assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui revision utf8 assertion failed")
         return 1
     }
     if (cardMode && !screen.markdownUtf8Safe()) {
-        println("headless cjtui markdown utf8 assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui markdown utf8 assertion failed")
         return 1
     }
     if (cardMode && !screen.utf8BoundarySamplesSafe()) {
-        println("headless cjtui utf8 boundary samples assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui utf8 boundary samples assertion failed")
         return 1
     }
 
     if (cardMode && !screen.cardClickToggleObserved()) {
-        println("headless cjtui card click toggle assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui card click toggle assertion failed")
         return 1
     }
     if (cardMode && !screen.thinkingToggleDuringStreamObserved()) {
-        println("headless cjtui thinking toggle during stream assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui thinking toggle during stream assertion failed")
         return 1
     }
     if (cardMode && !screen.streamTimerAdvancesSpinnerObserved()) {
-        println("headless cjtui stream timer spinner assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui stream timer spinner assertion failed")
         return 1
     }
     if (cardMode && !screen.streamingPlainTextObserved()) {
-        println("headless cjtui streaming plain text assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui streaming plain text assertion failed")
         return 1
     }
     if (cardMode) {
@@ -186,7 +186,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         // back on the next render, freezing the wheel. Click the header row
         // to expand, then wheel twice: the offset must advance each time.
         let run = {
-            script: HeadlessScript => AppTestRunner.run(
+            script: HeadlessScript => screen.runCapturedHeadless180(
                 script,
                 {frame => screen.render(frame)},
                 {event => screen.update(event)},
@@ -203,7 +203,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         let _ = run(HeadlessScript().mouse(MouseEvent(MouseKind.Scroll, MouseButton.WheelUp, 10, 10)).tick(count: 4))
         let wheel2 = screen.scrollOffsetValue()
         if (wheel1 <= afterExpand || wheel2 <= wheel1) {
-            println(
+            writeHeadlessPerformanceLine180(producer180,
                 "headless cjtui scroll after expand assertion failed:" + " afterExpand=" + afterExpand.toString() +
                     " wheel1=" + wheel1.toString() + " wheel2=" + wheel2.toString())
             return 1
@@ -260,13 +260,13 @@ func runHeadless(screen: AgentScreen): Int64 {
         let _ = run(HeadlessScript().key(KeyEvent(KeyCode.PageDown)).tick(count: 4))
         let backToBottom = screen.scrollOffsetValue()
         if (followOffset != 0 || followStart <= 0) {
-            println(
+            writeHeadlessPerformanceLine180(producer180,
                 "headless cjtui scroll follow assertion failed:" + " offset=" + followOffset.toString() + " start=" +
                     followStart.toString())
             return 1
         }
         if (pinned <= 0 || anchoredWheelUp <= pinned || anchoredWheelDown >= anchoredWheelUp || backToBottom != 0) {
-            println(
+            writeHeadlessPerformanceLine180(producer180,
                 "headless cjtui scroll anchor matrix assertion failed:" + " pinned=" + pinned.toString() + " wheelUp=" +
                     anchoredWheelUp.toString() + " wheelDown=" + anchoredWheelDown.toString() + " back=" +
                     backToBottom.toString())
@@ -303,6 +303,20 @@ func runHeadless(screen: AgentScreen): Int64 {
             .resize(Rect(0, 0, 120, 36))
             .resize(Rect(0, 0, 80, 24))
             .resize(Rect(0, 0, 60, 18))
+    } else if (todoMode && producer180.isSome()) {
+        let previous = [""]
+        let approve = { => screen.headlessGoldenApprovalInput227(previous, true) }
+        HeadlessScript()
+            .paste("/todo edit").key(KeyEvent(KeyCode.Enter))
+            .waitUntil({ => screen.headlessTodoEditorReady227() }, timeoutMillis:45000, input: approve, label: "Todo editor")
+            .paste("- [ ] Headless todo\n")
+            .key(KeyEvent(KeyCode.Char(r's'), modifiers: KeyModifier(ctrl: true)))
+            .waitUntil({ => screen.headlessTodoSaved227() }, timeoutMillis:45000, input: approve, label: "Todo save")
+            .paste("/todo").key(KeyEvent(KeyCode.Enter))
+            .waitUntil({ => screen.headlessGoldenTurnSettled227() }, timeoutMillis:45000, input: approve, label: "Todo view")
+            .paste("/todo copy").key(KeyEvent(KeyCode.Enter))
+            .waitUntil({ => screen.headlessTodoCopied227() }, timeoutMillis:45000, input: approve, label: "Todo copy")
+            .resize(Rect(0,0,120,36)).resize(Rect(0,0,80,24)).resize(Rect(0,0,60,18))
     } else if (todoMode) {
         HeadlessScript()
             .paste("/todo edit")
@@ -370,6 +384,12 @@ func runHeadless(screen: AgentScreen): Int64 {
             .resize(Rect(0, 0, 80, 24))
             .resize(Rect(0, 0, 60, 18))
             .tick(count: 2)
+    } else if (initialPromptMode && producer180.isSome()) {
+        let previous = [""]
+        HeadlessScript()
+            .waitUntil({ => screen.headlessGoldenTurnSettled227() }, timeoutMillis:45000,
+                input: { => screen.headlessGoldenApprovalInput227(previous, false) }, label: "initial prompt")
+            .resize(Rect(0,0,120,36)).resize(Rect(0,0,80,24)).resize(Rect(0,0,60,18)).tick(count:2)
     } else if (initialPromptMode) {
         // Initial-prompt delivery is a separate contract from editing a
         // multiline composer draft. The transcript assertion below verifies
@@ -393,7 +413,7 @@ func runHeadless(screen: AgentScreen): Int64 {
     }
     tuiGoldenStage("input_sent", "headless_script_ready")
     tuiGoldenStage("snapshot_started", "capturing_frames")
-    let result = AppTestRunner.run(
+    let result = screen.runCapturedHeadless180(
         script,
         {frame => screen.render(frame)},
         {event => screen.update(event)},
@@ -408,39 +428,39 @@ func runHeadless(screen: AgentScreen): Int64 {
         !result.passed() ||
         (!setupMode && !todoMode && (screen.transcriptSize() == 0 || !screen.initialPromptObserved()))
     ) {
-        println("headless cjtui smoke failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui smoke failed")
         return 1
     }
     if (askMode && !screen.askSubmissionContractObserved()) {
-        println("headless cjtui ask submission assertion failed: " + screen.askSubmissionContractDiagnostic())
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui ask submission assertion failed: " + screen.askSubmissionContractDiagnostic())
         return 1
     }
     if (!setupMode && !todoMode && !askMode && !cardMode && !screen.ompShortcutContractObserved()) {
-        println("headless cjtui omp shortcut assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui omp shortcut assertion failed")
         return 1
     }
     if (!screen.themeAwareUserMessageObserved()) {
-        println("headless cjtui user message theme assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui user message theme assertion failed")
         return 1
     }
     if (!screen.transcriptPagingObserved()) {
-        println("headless cjtui transcript paging assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui transcript paging assertion failed")
         return 1
     }
     if (!screen.todoEditorMouseCaptureObserved()) {
-        println("headless cjtui todo editor mouse capture assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui todo editor mouse capture assertion failed")
         return 1
     }
     if (!screen.askEditorIsolationObserved()) {
-        println("headless cjtui ask editor isolation assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui ask editor isolation assertion failed")
         return 1
     }
     if (!setupMode && !todoMode && !askMode && !cardMode && !screen.inputAreaContractObserved()) {
-        println("headless cjtui input area assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui input area assertion failed")
         return 1
     }
     if (!setupMode && !screen.todoStripContractObserved()) {
-        println("headless cjtui todo strip assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui todo strip assertion failed")
         return 1
     }
     if (!setupMode && !todoMode && !askMode && !cardMode) {
@@ -449,7 +469,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         let _ = screen.update(Event.KeyDown(KeyEvent(KeyCode.Backspace)))
         let shrank = screen.update(Event.KeyDown(KeyEvent(KeyCode.Backspace)))
         if (!updateInvalidates(grew, viewport) || !updateIntersects(shrank, viewport)) {
-            println("headless cjtui composer resize invalidation failed")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui composer resize invalidation failed")
             return 1
         }
     }
@@ -482,7 +502,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         }
     }
     if (!sawColoredHeader) {
-        println("headless cjtui colored header assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui colored header assertion failed")
         return 1
     }
     let toolPreview = compactToolPreview(
@@ -490,7 +510,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         24
     )
     if (displayWidth(toolPreview) > 24 || toolPreview.contains("tail-sentinel.cj")) {
-        println("headless cjtui tool preview assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui tool preview assertion failed")
         return 1
     }
     let failedToolDetail = productCardDetail(
@@ -504,7 +524,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         100
     )
     if (!failedToolDetail.contains("batch task requires non-empty context")) {
-        println("headless cjtui failed tool detail assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui failed tool detail assertion failed")
         return 1
     }
     var sawSmallChinese = false
@@ -538,15 +558,15 @@ func runHeadless(screen: AgentScreen): Int64 {
     var sawInlineAgentHub = false
     for (snapshot in result.snapshots) {
         if (cardMode && snapshot.contains("The tool completed; summarize its result.")) {
-            println("headless cjtui collapsed reasoning assertion failed")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui collapsed reasoning assertion failed")
             return 1
         }
         if (cardMode && snapshot.contains("Permission · edit")) {
-            println("headless cjtui compatibility approval overlay assertion failed")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui compatibility approval overlay assertion failed")
             return 1
         }
         if (snapshot.contains("headless-secret-contract")) {
-            println("headless cjtui leaked a setup credential")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui leaked a setup credential")
             return 1
         }
         if (setupMode && snapshot.contains("configuration saved")) {
@@ -591,7 +611,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         }
         if (askMode && snapshot.contains("Awaiting your decision") &&
             (snapshot.contains("Generic tool view") || snapshot.contains(" Working…"))) {
-            println("headless cjtui ask waiting state leaked generic activity")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui ask waiting state leaked generic activity")
             return 1
         }
         if (snapshot.contains("[x] Export")) {
@@ -604,7 +624,7 @@ func runHeadless(screen: AgentScreen): Int64 {
             sawAskSingleSelected = true
         }
         if (askMode && snapshot.contains("( ) ")) {
-            println("headless cjtui ask single-choice marker assertion failed")
+            writeHeadlessPerformanceLine180(producer180, "headless cjtui ask single-choice marker assertion failed")
             return 1
         }
         if (snapshot.contains("Prefer the portable path")) {
@@ -685,7 +705,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         (cardMode && (!sawCards || !sawInlineApprovalChoices || !sawMarkdown)) ||
         (!setupMode && !todoMode && !askMode && !cardMode && !initialPromptMode && !sawMultilineComposer) ||
         !sawComposer || !saw120x36 || !saw80x24 || !saw60x18) {
-        println(
+        writeHeadlessPerformanceLine180(producer180,
             "headless cjtui snapshot assertion failed:" + " chinese=" + sawSmallChinese.toString() + " status=" +
                 sawLargeStatus.toString() + " cards=" + sawCards.toString() + " tool-card=" + sawToolCard.toString() +
                 " approval-risk=" + sawApprovalRisk.toString() + " branch=" + sawBranch.toString() + " diagnostics=" +
@@ -700,12 +720,12 @@ func runHeadless(screen: AgentScreen): Int64 {
                 " sizes=" + saw120x36.toString() + "/" + saw80x24.toString() + "/" + saw60x18.toString() +
                 " final-status=" + screen.statusText())
         if (!initialPromptMode && !sawMultilineComposer && !result.snapshots.isEmpty()) {
-            println("headless composer final snapshot:\n" + result.snapshots[result.snapshots.size - 1])
+            writeHeadlessPerformanceLine180(producer180, "headless composer final snapshot:\n" + result.snapshots[result.snapshots.size - 1])
         }
         return 1
     }
     if (result.frames.isEmpty()) {
-        println("headless cjtui prompt style assertion failed: no frame")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui prompt style assertion failed: no frame")
         return 1
     }
     let expectedPromptBorder = if (screen.unicodeMode()) {
@@ -730,7 +750,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         let promptBorder = lastFrame.getCell(lastFrame.area.x, promptY)
         let promptEnd = lastFrame.getCell(lastFrame.area.right - 1, promptY)
         let promptSide = lastFrame.getCell(lastFrame.area.x, promptY - 1)
-        println(
+        writeHeadlessPerformanceLine180(producer180,
             "headless cjtui prompt frame assertion failed: border=" + promptBorder.symbol + " end=" + promptEnd
                 .symbol + " side=" + promptSide.symbol)
         return 1
@@ -746,11 +766,11 @@ func runHeadless(screen: AgentScreen): Int64 {
     if (!approvalCard.contains("MEDIUM RISK · workspace.write") || !approvalCard.contains("Target  workspace/note.txt") ||
         !approvalCard.contains("workspace/note.txt") || approvalCard.contains("operation:") || approvalCard.contains(
         "call:") || approvalCard.contains("arguments:")) {
-        println("headless cjtui approval card assertion failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui approval card assertion failed")
         return 1
     }
     tuiGoldenStage("expected_state_reached", "golden_contract_satisfied")
-    println("tui golden ok sizes=120x36,80x24,60x18 " + "semantics=welcome,user-strip,composer,status,wide-char")
+    writeHeadlessPerformanceLine180(producer180, "tui golden ok sizes=120x36,80x24,60x18 " + "semantics=welcome,user-strip,composer,status,wide-char")
     0
 }
 

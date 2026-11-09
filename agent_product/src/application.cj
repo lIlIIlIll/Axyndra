@@ -1555,7 +1555,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
 
     public func replaceTodoPhases(phases: Array<ProductTodoPhase>): Result<ApplicationResponse> {
         let target=todoSessionId()
-        let selection=match(selectProductTodo(product,target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let selection=match(readyTodoSelection227(target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         let digest=match(product.todoDocumentDigest(target,selection)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         invokeTodoInput(selection,objectValue([ValueField("frontend_action",textValue("replace_phases")),
             ValueField("phases",encodeTodoPhases(phases)),ValueField("expected_digest",textValue(digest))]))
@@ -2068,9 +2068,24 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func frontendSlashDefinitions():Array<SlashCommandDefinition>{
-        match(selectProductTodo(product,todoSessionId())){
-            case Result.Ok(_)=>[productTodoSlashDefinition()]
-            case Result.Err(_)=>[]}
+        if(configuredTodoFrontend227(product)){[productTodoSlashDefinition()]}else{[]}
+    }
+
+    private func readyTodoSelection227(target: SessionId): Result<ProductTodoSelection> {
+        // An explicit Todo action uses the original shared startup and frozen
+        // Catalog. Display hints never enter this path. The same frontend
+        // cancellation remains live across startup and selection.
+        match(frontendCancellation180){case Some(token)=>match(token.check()){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()};case None=>()}
+        // Missing/malformed operator selection retains its original error and
+        // cannot start unrelated contributions merely to fail configuration.
+        if(!configuredTodoFrontend227(product)){return selectProductTodo(product,target)}
+        match(product.ensureExecutionReady(cancellation:frontendCancellation180)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        match(frontendCancellation180){case Some(token)=>match(token.check()){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()};case None=>()}
+        if(todoSessionId().value!=target.value){return productTodoFrontendError("todo.session_changed")}
+        selectProductTodo(product,target)
     }
 
     public func todoMarkdown(): Result<String> {
@@ -2088,7 +2103,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     private func readTodoMarkdown(forEditor: Bool): Result<String> {
-        let selection=match(selectProductTodo(product,todoSessionId())){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let selection=match(readyTodoSelection227(todoSessionId())){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         let response=match(invokeTodoInput(selection,objectValue([ValueField("frontend_action",textValue("view"))]),editorAction:if(forEditor){"view"}else{""})){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         if(response.approval.isSome()){return productTodoFrontendError("todo.view_approval_pending")}
@@ -2113,7 +2128,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         let result=match(parseProductTodoFrontend(response.text,"replace_markdown")){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         lock.lock();try{todoEditorSnapshot=Some(ProductTodoEditorSnapshot(shown.selection,httpIntentText(result,"document_digest")))}finally{lock.unlock()}
         let _=takeTodoEditorCompletion()
-        Result.Ok("Saved the selected native Todo document.")
+        Result.Ok(productTodoSavedSummary227(result.field("phases").getOrThrow()))
     }
 
     public func takeTodoEditorCompletion(): ?ProductTodoEditorCompletion {
@@ -2213,7 +2228,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                         activeTodoInvocation=None<ProductTodoInvocation>;activeTodoSelection=None<ProductTodoSelection>
                         todoEditorInvocation=None<ProductTodoInvocation>;todoEditorAction=""
                         todoEditorSnapshot=Some(ProductTodoEditorSnapshot(invocation.selection,httpIntentText(shown,"document_digest")))
-                        todoEditorCompletion=Some(ProductTodoEditorCompletion(invocation,editor=="replace_markdown",httpIntentText(shown,"markdown"),httpIntentText(shown,"document_digest")))
+                        todoEditorCompletion=Some(ProductTodoEditorCompletion(invocation,editor=="replace_markdown",httpIntentText(shown,"markdown"),httpIntentText(shown,"document_digest"),shown.field("phases").getOrThrow()))
                     }finally{lock.unlock()}
                     case None=>match(clearTodoDocument(invocation)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}}
                 Result.Ok(ApplicationResponse(false,text:value))}
@@ -2222,7 +2237,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     private func todoCommand(arguments: Array<String>): Result<ApplicationResponse> {
         if(arguments.size==1 && arguments[0]=="resource"){return startTodoResource()}
         if(arguments.size==1 && arguments[0]=="commit"){return commitTodoImport()}
-        let selection=match(selectProductTodo(product,todoSessionId())){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let selection=match(readyTodoSelection227(todoSessionId())){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         if(!arguments.isEmpty() && ["import","export"].contains(arguments[0])){
             if(arguments.size>2){return productTodoFrontendError("todo.resource_arguments")}
             let target=if(arguments.size==1){"TODO.md"}else{arguments[1]}

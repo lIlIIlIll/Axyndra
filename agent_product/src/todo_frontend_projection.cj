@@ -32,10 +32,35 @@ public class ProductTodoEditorCompletion {
     public let markdown: String
     private let invocation:ProductTodoInvocation
     private let digest:String
-    init(invocation:ProductTodoInvocation,saved:Bool,markdown:String,digest:String){
-        this.invocation=invocation;this.saved=saved;this.markdown=markdown;this.digest=digest}
+    private let phaseCount227:Int64
+    private let taskCount227:Int64
+    init(invocation:ProductTodoInvocation,saved:Bool,markdown:String,digest:String,phases:AgentValue){
+        this.invocation=invocation;this.saved=saved;this.markdown=markdown;this.digest=digest
+        let counts=productTodoFrontendCounts227(phases)
+        phaseCount227=counts[0];taskCount227=counts[1]
+    }
+    public func savedSummary227():String {
+        if(!saved){throw IllegalStateException("todo.editor_completion_not_saved")}
+        productTodoSavedCounts227(phaseCount227,taskCount227)
+    }
     func current(session:SessionId):Result<Unit>{
         if(session.value!=invocation.selection.session.value){return productTodoFrontendError("todo.session_changed")}
         invocation.selection.current()
     }
+}
+
+
+// Count the already validated Native result; no parser, normalization, write,
+// source selection or copied task/phase array is introduced for presentation.
+private func productTodoFrontendCounts227(phases:AgentValue):(Int64,Int64) {
+    var tasks:Int64=0
+    for(phase in phases.items){tasks+=phase.field("tasks").getOrThrow().items.size}
+    (phases.items.size,tasks)
+}
+private func productTodoSavedCounts227(phases:Int64,tasks:Int64):String {
+    "Saved "+phases.toString()+" phase(s), "+tasks.toString()+" task(s)."
+}
+func productTodoSavedSummary227(phases:AgentValue):String {
+    let counts=productTodoFrontendCounts227(phases)
+    productTodoSavedCounts227(counts[0],counts[1])
 }

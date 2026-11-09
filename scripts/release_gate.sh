@@ -155,6 +155,7 @@ AXYNDRA_BINARY="$candidate" \
   | tee "$package_root/diagnostics/plugin-performance.jsonl"
 python3 scripts/tui_golden_gate.py \
   --candidate "$candidate --fixture" \
+  --workflow-package "$AXYNDRA_WORKFLOW_PLUGIN_PACKAGE" \
   --scenario cards \
   --scenario default \
   --scenario initial-prompt \

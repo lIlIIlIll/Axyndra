@@ -73,16 +73,28 @@ func productTodoSelectionText(settingsRoot: String): Result<String> {
     }catch(_:Exception){productTodoFrontendError("todo.selection_unprovided")}
 }
 
+// A descriptive hint for the operator's configured route, not an active
+// contribution or authority. Help/completion never start plugin processes.
+func configuredTodoFrontend227(runtime: ProductRuntime): Bool {
+    let encoded=match(productTodoSelectionText(runtime.settingsRoot)){
+        case Result.Err(_)=>return false;case Result.Ok(value)=>value}
+    try { productTodoSelectionShape227(parseUnifiedJson(encoded,maxBytes:16384,maxDepth:8)) }
+    catch(_:Exception){ false }
+}
+private func productTodoSelectionShape227(config: AgentValue): Bool {
+    httpIntentExactFields(config,["schema","namespace","package_digest","tool","command"]) &&
+        httpIntentText(config,"schema")=="axyndra.todo-tools/v1" &&
+        httpServicePluginNamespace(httpIntentText(config,"namespace")) &&
+        httpServicePackageDigest(httpIntentText(config,"package_digest")) &&
+        httpIntentText(config,"tool")=="todo" && httpIntentText(config,"command")=="todo"
+}
+
 func selectProductTodo(runtime: ProductRuntime, session: SessionId): Result<ProductTodoSelection> {
     let encoded=match(productTodoSelectionText(runtime.settingsRoot)){
         case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
     try{
         let config=parseUnifiedJson(encoded,maxBytes:16384,maxDepth:8)
-        if(!httpIntentExactFields(config,["schema","namespace","package_digest","tool","command"]) ||
-            httpIntentText(config,"schema")!="axyndra.todo-tools/v1" ||
-            !httpServicePluginNamespace(httpIntentText(config,"namespace")) ||
-            !httpServicePackageDigest(httpIntentText(config,"package_digest")) ||
-            httpIntentText(config,"tool")!="todo" || httpIntentText(config,"command")!="todo"){
+        if(!productTodoSelectionShape227(config)){
             return productTodoFrontendError("todo.selection_invalid")}
         let namespace=httpIntentText(config,"namespace");let digest=httpIntentText(config,"package_digest")
         let enabled=productRegistryHasEnabledRecord139(runtime.pluginSnapshots(),namespace,digest)

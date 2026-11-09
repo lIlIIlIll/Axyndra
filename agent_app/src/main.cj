@@ -3134,7 +3134,7 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
                 if(result.isOk()){
                     match(session.takeTodoEditorCompletion()){
                         case Some(completed)=>return if(completed.saved){
-                            TuiTurnResult("","todo saved",action:TuiTurnAction.TodoSaved(TuiTodoSaveResult(true,"Saved the selected native Todo document.")))
+                            TuiTurnResult("","todo saved",action:TuiTurnAction.TodoSaved(TuiTodoSaveResult(true,completed.savedSummary227())))
                         }else{
                             TuiTurnResult("","todo loaded",action:TuiTurnAction.TodoLoaded(TuiTodoLoadResult(true,completed.markdown,"todo loaded")))}
                         case None=>()}}

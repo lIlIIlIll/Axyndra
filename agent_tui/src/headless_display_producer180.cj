@@ -2,24 +2,34 @@ package agent_tui
 
 import core.*
 
-// Concrete final performance producer. Its renderer/result helper and exact
+// Concrete final headless producer. Its renderer/result helper and exact
 // stdout writer must return before this Screen can clear any copied data.
 class HeadlessDisplayProducer180 {
     private let screen: AgentScreen
     private let output = DirectStdOutDisplayOutput.open()
+    private let capturedFrames: HeadlessCapturedFrameScope
     private var wholeHelperReturned = false
     private var outputRetired: ?RetiredDirectStdOutDisplayReferences = None
-    private init(screen: AgentScreen) { this.screen = screen }
-    static func run(screen: AgentScreen, events: ExternalPort<Event>): Int64 {
+    private init(screen: AgentScreen) {
+        this.screen = screen; capturedFrames = HeadlessCapturedFrameScope(screen)
+    }
+    static func run(screen: AgentScreen, events: ExternalPort<Event>, captured!: Bool = false): Int64 {
         let actual = HeadlessDisplayProducer180(screen)
         screen.bindHeadlessDisplayProducer180(actual)
-        let result = try { actual.runWholePerformanceHelper180() }
+        let result = try {
+            if (captured) { actual.runWholeCapturedHelper180() } else { actual.runWholePerformanceHelper180() }
+        }
             finally { events.close() }
         // No HeadlessRunResult, Buffer, snapshot, render/update closure or
         // metrics-line String from the original helper remains in this frame.
         actual.wholeHelperReturned = true
         actual.retireAfterWholeHelper180()
         result
+    }
+    private func runWholeCapturedHelper180(): Int64 { runHeadless(screen, producer180: Some(this)) }
+    func runCaptured180(script: HeadlessScript, render: (Frame) -> Unit, update: (Event) -> UpdateResult,
+        options!: HeadlessRunOptions = HeadlessRunOptions()): HeadlessRunResult {
+        AppTestRunner.runWithCaptureCustody(script, render, update, capturedFrames, options: options)
     }
     private func runWholePerformanceHelper180(): Int64 {
         runHeadlessPerformance(screen, producer180: Some(this))
@@ -35,6 +45,7 @@ class HeadlessDisplayProducer180 {
             case None => false }
     }
     private func retireAfterWholeHelper180(): Unit {
+        capturedFrames.retireInternalFrames()
         outputRetired = RetiredDirectStdOutDisplayReferences.retire(output)
         match (RetiredOwnedTuiScreenReferences.retireHeadless180(screen, this)) {
             case Some(retired) => screen.retireCopiedRegistry(retired)

@@ -9,8 +9,8 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "43116cb6adc02fd34fdabf01bb4cde8a9c183865ae86293470a41ae56e419b3b",
-  "vendored_files": 77,
+  "vendored_manifest_sha256": "4e6286973ac8827e4b0ea0d699bdf1167f43517ffe4509ea285f894fb6a0acc0",
+  "vendored_files": 78,
   "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
   "alignment_target": {
     "project": "oh-my-pi",
@@ -35,7 +35,8 @@
       "packages/core/tests/terminal_signal/src/main.cj",
       "packages/core/tests/terminal_signal/check.py",
       "packages/core/tests/terminal_signal/native_guard_test.c",
-      "packages/core/src/headless_owned_frames_test.cj"
+      "packages/core/src/headless_owned_frames_test.cj",
+      "packages/core/src/headless_captured_frames.cj"
     ],
     "contracts": [
       "primary presentation writes history to native terminal scrollback",
@@ -48,7 +49,9 @@
       "native terminal smoke evidence covers Linux PTY only; Windows retains its console fallback and macOS is not execution-validated",
       "bracketed paste scanning preserves a split terminator, the next paste and following controls without rescanning the complete prefix",
       "monotonic grapheme traversal and viewport-clipped cursor measurement preserve the complete Unicode document and byte cursor",
-      "plain undecorated editor lines retain their original source span instead of rebuilding every grapheme"
+      "plain undecorated editor lines retain their original source span instead of rebuilding every grapheme",
+      "captured headless scopes retire actual runner internals only; exported captures and concrete product output retain separate custody",
+      "headless bounded waits drive ordinary input/update/async completion and do not acknowledge retained consumers"
     ],
     "consumer_files": [
       "agent_tui/src/tui.cj",

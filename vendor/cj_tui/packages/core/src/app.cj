@@ -1164,6 +1164,7 @@ public enum HeadlessStep {
     | Input(Event)
     | Tick(Int64)
     | WaitMillis(Int64)
+    | Await(() -> Bool, () -> ?Event, Int64, String)
     | Resize(Rect)
     | Render
     | ExpectSnapshot(String)
@@ -1193,6 +1194,13 @@ public class HeadlessScript {
     public func tick(count!: Int64 = 1): HeadlessScript { add(HeadlessStep.Tick(count)) }
     public func waitMillis(milliseconds: Int64): HeadlessScript {
         add(HeadlessStep.WaitMillis(max(0, milliseconds)))
+    }
+    // Pump the normal update/command loop until an observable condition and
+    // delivered async results settle. This grants no task/transport DATA ACK.
+    public func waitUntil(condition: () -> Bool, timeoutMillis!: Int64 = 5000,
+        input!: () -> ?Event = { => None<Event> }, label!: String = "condition"): HeadlessScript {
+        if (timeoutMillis <= 0) { throw IllegalArgumentException("headless.await_timeout_invalid") }
+        add(HeadlessStep.Await(condition, input, timeoutMillis, label))
     }
     public func render(): HeadlessScript { add(HeadlessStep.Render) }
     public func expectSnapshot(snapshot: String): HeadlessScript { add(HeadlessStep.ExpectSnapshot(snapshot)) }
@@ -1258,7 +1266,16 @@ public class AppTestRunner {
         runWithFrameLifetime(script, render, update, Some(provider), options: options)
     }
 
-    private static func runWithFrameLifetime(script: HeadlessScript, render: (Frame) -> Unit, update: (Event) -> UpdateResult, frameProvider: ?TerminalFrameProvider, options!: HeadlessRunOptions): HeadlessRunResult {
+    // Captured results retain their original caller custody. This scope only
+    // registers real Terminal/runtime internals for a later complete helper.
+    public static func runWithCaptureCustody(script: HeadlessScript, render: (Frame) -> Unit,
+        update: (Event) -> UpdateResult, scope: HeadlessCapturedFrameScope,
+        options!: HeadlessRunOptions = HeadlessRunOptions()): HeadlessRunResult {
+        scope.prepareEntry(options.area)
+        runWithFrameLifetime(script, render, update, None<TerminalFrameProvider>, options: options, capturedScope: Some(scope))
+    }
+
+    private static func runWithFrameLifetime(script: HeadlessScript, render: (Frame) -> Unit, update: (Event) -> UpdateResult, frameProvider: ?TerminalFrameProvider, options!: HeadlessRunOptions, capturedScope!: ?HeadlessCapturedFrameScope = None): HeadlessRunResult {
         let backend = TestBackend(
             area: options.area,
             captureSnapshots: options.captureSnapshots
@@ -1275,21 +1292,24 @@ public class AppTestRunner {
         var droppedTicks: Int64 = 0
         var lastTickDelta: Int64 = 0
 
+        let capturedFrame = match (capturedScope) {
+            case Some(scope) => Some(scope.register(terminal, backend, commandQueue, asyncRuntime))
+            case None => None<HeadlessCapturedFrame> }
         var failed = false
         try {
-            AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+            AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
             for (step in script.steps()) {
                 match (step) {
                     case HeadlessStep.Input(event) =>
                         flow = AppTestRunner.dispatch(event, update, commandQueue, asyncRuntime, flow)
                         frameIndex++
-                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
                     case HeadlessStep.Tick(count) =>
                         for (_ in 0..max(0, count)) {
                             frameIndex++
                             lastTickDelta = options.tickDeltaMillis
                             flow = AppTestRunner.dispatch(Event.Tick(TickEvent(deltaMillis: options.tickDeltaMillis, elapsedMillis: frameIndex * options.tickDeltaMillis, frameIndex: frameIndex)), update, commandQueue, asyncRuntime, flow)
-                            AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                            AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
                         }
                     case HeadlessStep.WaitMillis(milliseconds) =>
                         sleep(Duration.millisecond * milliseconds)
@@ -1305,15 +1325,36 @@ public class AppTestRunner {
                             asyncRuntime,
                             flow
                         )
-                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
+                    case HeadlessStep.Await(condition, input, timeoutMillis, label) =>
+                        let deadline = MonoTime.now() + Duration.millisecond * timeoutMillis
+                        while (!condition() || asyncRuntime.pendingCount() != 0) {
+                            if (MonoTime.now() >= deadline) { throw Exception("headless.await_timeout: " + label) }
+                            match (input()) {
+                                case Some(event) => flow = AppTestRunner.dispatch(event, update, commandQueue, asyncRuntime, flow)
+                                case None => () }
+                            if (!isContinue(flow)) { throw Exception("headless.await_exited: " + label) }
+                            sleep(Duration.millisecond * options.tickDeltaMillis)
+                            frameIndex++
+                            lastTickDelta = options.tickDeltaMillis
+                            flow = AppTestRunner.dispatch(Event.Tick(TickEvent(deltaMillis: options.tickDeltaMillis,
+                                elapsedMillis: frameIndex * options.tickDeltaMillis, frameIndex: frameIndex)),
+                                update, commandQueue, asyncRuntime, flow)
+                            if (!isContinue(flow)) { throw Exception("headless.await_exited: " + label) }
+                        }
+                        // Capture the reached state, not a growing archive of
+                        // identical polling frames. No golden assertion changes.
+                        frameIndex++
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex,
+                            commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
                     case HeadlessStep.Resize(area) =>
                         backend.setSize(area)
                         frameIndex++
                         flow = AppTestRunner.dispatch(Event.Resize(area), update, commandQueue, asyncRuntime, flow)
-                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
                     case HeadlessStep.Render =>
                         frameIndex++
-                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                        AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
                     case HeadlessStep.ExpectSnapshot(expected) =>
                         let diff = SnapshotDiff.text(expected, backend.snapshot())
                         if (!diff.passed) { failures.add(diff.message) }
@@ -1327,11 +1368,14 @@ public class AppTestRunner {
                 frameIndex++
                 lastTickDelta = options.tickDeltaMillis
                 flow = AppTestRunner.dispatch(Event.Tick(TickEvent(deltaMillis: options.tickDeltaMillis, elapsedMillis: frameIndex * options.tickDeltaMillis, frameIndex: frameIndex)), update, commandQueue, asyncRuntime, flow)
-                AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider)
+                AppTestRunner.capture(terminal, backend, render, options, frames, snapshots, metrics, frameIndex, commandQueue.size, droppedTicks, lastTickDelta, frameProvider, capturedScope)
             }
             HeadlessRunResult(flow, frames.toArray(), snapshots.toArray(), metrics, failures.toArray())
         } catch (error: Exception) { failed = true; throw error }
         finally {
+            match ((capturedScope, capturedFrame)) {
+                case (Some(scope), Some(frame)) => scope.frameReturned(frame)
+                case _ => () }
             match (frameProvider) {
                 case Some(provider) =>
                     if (failed) {
@@ -1377,7 +1421,8 @@ public class AppTestRunner {
         eventQueueLength: Int64,
         droppedTicks: Int64,
         tickDeltaMillis: Int64,
-        frameProvider: ?TerminalFrameProvider
+        frameProvider: ?TerminalFrameProvider,
+        capturedScope: ?HeadlessCapturedFrameScope
     ): Unit {
         match (frameProvider) {
             case Some(provider) =>
@@ -1388,8 +1433,14 @@ public class AppTestRunner {
                 if (!provider.prepareRetainedFrameCopies(backend.size(), previous)) {
                     throw Exception("display.raster_payment_required") }
             case None => () }
+        match (capturedScope) {
+            case Some(scope) => scope.prepareDraw(backend.size(), terminal.retainedFrameCopiesInvoice())
+            case None => () }
         let renderMetrics = terminal.draw(render)
         metrics.record(renderMetrics, frameIndex: frameIndex, eventQueueLength: eventQueueLength, droppedTicks: droppedTicks, tickDeltaMillis: tickDeltaMillis)
+        match ((capturedScope, backend.lastBuffer())) {
+            case (Some(scope), Some(buffer)) => scope.prepareCapture(buffer, options, terminal.retainedFrameCopiesInvoice())
+            case _ => () }
         if (options.captureBuffers) {
             match (backend.lastBuffer()) {
                 case Some(buffer) => frames.add(buffer.copy())

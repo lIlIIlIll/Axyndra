@@ -1729,6 +1729,11 @@ public class TestBackend <: Backend {
         frames.toArray()
     }
 
+    // Runner-private clear; exported snapshots/Buffers keep their own custody.
+    func clearRetainedHeadlessReferences(): Unit {
+        latest = None; frames.clear(); bytes.clear(); mediaFrames.clear()
+    }
+
     public func snapshotAt(index: Int64): String {
         if (index < 0 || index >= frames.size) { return "" }
         frames[index]

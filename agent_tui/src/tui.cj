@@ -302,6 +302,9 @@ public func runAgentTui(
     if (headless()) {
         if (headlessPerformance() && screen.wantsRetainedDisplayProducerRetirement()) {
             return HeadlessDisplayProducer180.run(screen, externalPort) }
+        if (screen.wantsRetainedDisplayProducerRetirement() && !headlessComposerPerformance() &&
+            !headlessDocumentPerformance() && !headlessLongPerformance()) {
+            return HeadlessDisplayProducer180.run(screen, externalPort, captured: true) }
         let result = runHeadless(screen)
         externalPort.close()
         return result
@@ -6060,6 +6063,51 @@ class AgentScreen <: TerminalFrameProvider {
         actualNativeOutput = Some(output)
     }
     private var headlessDisplayProducer180: ?HeadlessDisplayProducer180 = None
+    private var headlessAwaitMask227:Int64 = -1
+    private func headlessAwaitTrace227(kind:Int64,mask:Int64):Unit {
+        let value=kind*256+mask
+        if(value!=headlessAwaitMask227){headlessAwaitMask227=value
+            tuiGoldenStage("await_state","kind="+kind.toString()+",flags="+mask.toString())}
+    }
+    func headlessTodoEditorReady227(): Bool { todos.editorVisible(ui.approvalId.isSome()) }
+    func headlessGoldenTurnSettled227(): Bool {
+        let mask=(if(initialSubmitted){1}else{0})+(if(working){2}else{0})+
+            (if(mainWorking){4}else{0})+(if(ui.approvalId.isSome()){8}else{0})
+        headlessAwaitTrace227(1,mask)
+        initialSubmitted && !working && !mainWorking && ui.approvalId.isNone()
+    }
+    func headlessTodoSaved227(): Bool {
+        let mask=(if(todos.isEditing()){1}else{0})+(if(ui.approvalId.isSome()){2}else{0})+
+            (if(status.contains("phase(s)")){4}else{0})+(if(status.contains("task(s)")){8}else{0})
+        headlessAwaitTrace227(2,mask)
+        !todos.isEditing() && ui.approvalId.isNone() && status.contains("phase(s)") && status.contains("task(s)")
+    }
+    func headlessTodoCopied227(): Bool { status.contains("Clipboard payload encoded") }
+    func headlessGoldenApprovalInput227(previous: Array<String>, todo: Bool): ?Event {
+        if (working) { return None<Event> }
+        let id = match (ui.approvalId) { case None => return None<Event>; case Some(value) => value }
+        if (id == previous[0]) { return None<Event> }
+        let readTitle = "Approval · " + approvalOperationTitle("host.context.read", "")
+        let todoTitle = "Approval · " + approvalOperationTitle("plugin.axyndra:workflow.todo", "")
+        var matched = false
+        for (card in ui.cards where card.id == id) {
+            if (card.title != readTitle && (!todo || card.title != todoTitle)) {
+                throw Exception("headless.unexpected_approval") }
+            matched = true
+        }
+        if (!matched) { throw Exception("headless.approval_card_missing") }
+        // Use the ordinary selection keys too; no private approval choice or
+        // backend decision is written by this fixture.
+        if (approvalSelected > 0) { return Some(Event.KeyDown(KeyEvent(KeyCode.Left))) }
+        previous[0] = id
+        Some(Event.KeyDown(KeyEvent(KeyCode.Enter)))
+    }
+    func runCapturedHeadless180(script: HeadlessScript, render: (Frame) -> Unit, update: (Event) -> UpdateResult,
+        options!: HeadlessRunOptions = HeadlessRunOptions()): HeadlessRunResult {
+        match (headlessDisplayProducer180) {
+            case Some(actual) => actual.runCaptured180(script, render, update, options: options)
+            case None => AppTestRunner.run(script, render, update, options: options) }
+    }
     func bindHeadlessDisplayProducer180(actual: HeadlessDisplayProducer180): Unit {
         if (actualNativeOutput.isSome() || headlessDisplayProducer180.isSome()) {
             throw Exception("display.headless_producer_already_bound") }
@@ -6225,6 +6273,9 @@ class AgentScreen <: TerminalFrameProvider {
         // transport ACK is deliberately false. Neither this internal witness
         // nor clearing a raster closes mailbox/cards/source/history/renderer
         // or App registration owners. They remain actually paid.
+    }
+    public func headlessCapturedDataRequiresPayment(): Bool {
+        !retainedCopiedToolDisplays.isEmpty() || !retainedCopiedFailureDisplays113.isEmpty() || !retainedRegistryDisplays167.isEmpty()
     }
     public func prepareRetainedFrameCopies(size: Rect): Bool { prepareRetainedFrameCopies(size, 0) }
     public func prepareRetainedFrameCopies(size: Rect, previousCopies: Int64): Bool {
@@ -8691,7 +8742,7 @@ class AgentScreen <: TerminalFrameProvider {
             if (composer.area.value != r.toString()) { return false }
         }
         composer.area.setValue("")
-        let _ = AppTestRunner.run(
+        let _ = runCapturedHeadless180(
             HeadlessScript().tick(count: 2),
             {frame => render(frame)},
             {event => update(event)},
@@ -8738,7 +8789,7 @@ class AgentScreen <: TerminalFrameProvider {
     }
 
     func staleCardFocusToggleObserved(): Bool {
-        let _ = AppTestRunner.run(
+        let _ = runCapturedHeadless180(
             HeadlessScript().tick(count: 1),
             {frame => render(frame)},
             {event => update(event)},
@@ -8772,7 +8823,7 @@ class AgentScreen <: TerminalFrameProvider {
         // rounded border: a top title row (╭── ... ╮) and a bottom row
         // (╰── ... ╯). Rendering goes through the real VirtualTranscriptView
         // so cardChrome must be enabled for the border to appear.
-        let result = AppTestRunner.run(
+        let result = runCapturedHeadless180(
             HeadlessScript().tick(count: 2),
             {frame => render(frame)},
             {event => update(event)},
@@ -8810,7 +8861,7 @@ class AgentScreen <: TerminalFrameProvider {
         )
         var ok = false
         try {
-            let result = AppTestRunner.run(
+            let result = runCapturedHeadless180(
                 HeadlessScript().tick(count: 2),
                 {frame => render(frame)},
                 {event => update(event)},
@@ -8858,7 +8909,7 @@ class AgentScreen <: TerminalFrameProvider {
         )
         var ok = false
         try {
-            let result = AppTestRunner.run(
+            let result = runCapturedHeadless180(
                 HeadlessScript().tick(count: 2),
                 {frame => render(frame)},
                 {event => update(event)},
@@ -8916,7 +8967,7 @@ class AgentScreen <: TerminalFrameProvider {
             )
             var ok = false
             try {
-                let result = AppTestRunner.run(
+                let result = runCapturedHeadless180(
                     HeadlessScript().tick(count: 2),
                     {frame => render(frame)},
                     {event => update(event)},

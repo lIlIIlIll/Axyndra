@@ -103,6 +103,8 @@ def main() -> int:
         choices=tuple(SCENARIOS),
         help="run only the named scenario; repeat to select several",
     )
+    parser.add_argument("--workflow-package", type=pathlib.Path,
+                        help="explicitly install and select the real Native Workflow in the private golden home")
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--diagnostics", type=pathlib.Path)
     args = parser.parse_args()
@@ -150,6 +152,15 @@ def main() -> int:
             themes = isolated_home / "themes"
             if themes.is_dir():
                 shutil.copytree(themes, pathlib.Path(environment["AXYNDRA_HOME"]) / "themes")
+        if args.workflow_package is not None and name in {"default", "initial-prompt", "todo"}:
+            sys.path.insert(0, str(root / "support_tests"))
+            from tui_workflow_operator import prepare_todo
+            home = pathlib.Path(environment["AXYNDRA_HOME"])
+            record = prepare_todo(pathlib.Path(command[0]), home, root,
+                                  args.workflow_package.resolve(strict=True))
+            target = diagnostics / name
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "workflow-operator.json").write_text(json.dumps(record, indent=2) + "\n")
         environment["AGENT_TUI_GOLDEN_TRACE"] = "1"
         emit_stage(name, "fixture_ready", started, 0, expected, "environment_ready", byte_count)
         process = subprocess.Popen(
