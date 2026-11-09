@@ -1727,3 +1727,33 @@ launch, update the explicit operator profile and start a fresh service through
 the ordinary approval path; do not replay an Unknown cell. GC remains deferred.
 The 63 MiB Memory oracle OOM, complete continuous Core, final App/release and
 remaining performance/blackbox requirements are still incomplete.
+
+
+### Relocated Minimal uses its public CLI
+
+E1032 corrects the shared clean-environment check for Minimal. The original
+check passes App-only `--fixture --print /help` arguments to every distribution;
+the real Minimal executable rejects them with `minimal.option_invalid`.
+Minimal now uses its documented `--help` entry and must expose both plugin
+management and canonical tool invocation. Coding and Full keep their original
+fixture help entry. The 20-second command deadline, isolated runtime PATH,
+relocation, provenance hashes, credential-free environment and actual process
+custody checks remain unchanged.
+
+`current-clean-environment-regression/summary.json` passes the actual relocated
+Minimal, Coding and Full packages. The failing Minimal control is retained in
+`current-release-artifacts/minimal-clean.log`; it is a test-entry error, not a
+reason to add fixture options to the production Minimal CLI. The original
+Minimal empty/offline matrix also passes all six actual cases in
+`current-release-artifacts/minimal-empty-offline.log`.
+
+The current uninstrumented App rebuild has SHA-256
+`0306a939bff8d46fe6b634acdcf0774418218bf1f732d0c29114b272e227093b`,
+identical to the earlier clean build at `0766ca0`. Minimal's source executable is
+`73a17be083c507f87a96f659e8e7e938bff72b3cbd136cdf05efc16957ed06b2`
+and its relocated executable is
+`93c2472466ef4b11a9a8f9bdaa4c7f02c550aebbe9edcb0dd79219933bae31a5`.
+The named Coding and Full host executable is
+`c9e5f6b7d835943b8ba211798b41ef8f66a555a669a6cf12aa977e57150c9ae2`.
+These are entry and artifact checks, not complete Core, model, TUI, performance
+or release acceptance. No production API, persisted schema or migration changes.

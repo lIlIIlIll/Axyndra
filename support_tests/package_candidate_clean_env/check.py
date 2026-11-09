@@ -56,9 +56,14 @@ def main() -> None:
             "AXYNDRA_HOME": str(home / ".axyndra"),
             "LANG": "C.UTF-8",
         }
+        # Minimal exposes its own public CLI. It has no fixture/chat options;
+        # exercise its documented help while retaining the same relocation,
+        # isolated environment, original timeout and artifact checks.
+        minimal = provenance["distribution"] == "minimal"
+        help_arguments = ["--help"] if minimal else ["--fixture", "--print", "/help"]
         try:
             completed = subprocess.run(
-                [str(relocated / "bin" / "axyndra"), "--fixture", "--print", "/help"],
+                [str(relocated / "bin" / "axyndra"), *help_arguments],
                 cwd=work,
                 env=environment,
                 text=True,
@@ -78,7 +83,12 @@ def main() -> None:
         assert shutil.which("node", path=environment["PATH"]) is None
         assert shutil.which("bun", path=environment["PATH"]) is None
         assert shutil.which("cjc", path=environment["PATH"]) is None
-        assert "/help" in completed.stdout, evidence
+        if minimal:
+            assert "axyndra-minimal:" in completed.stdout, evidence
+            assert "plugin list|doctor|gc" in completed.stdout, evidence
+            assert "invoke <thread> <tool> <arguments-json>" in completed.stdout, evidence
+        else:
+            assert "/help" in completed.stdout, evidence
         forbidden = ("learn_agent_cj", "cangjie_sdk", "CANGJIE_HOME", "LD_LIBRARY_PATH")
         assert not any(value in evidence for value in forbidden), evidence
         for member, expected in provenance["host_files"].items():

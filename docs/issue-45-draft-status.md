@@ -1987,3 +1987,12 @@ file-launch control, and passing final Registry/language/complete Eval Product
 contracts. Runner validation is 23 pass plus seven unavailable Julia skips.
 Earlier intermittent Unknown outcomes remain recorded; no cause or full release
 acceptance is inferred. GC remains deferred and overall completion is partial.
+
+
+[E1032](implementation/plan-execution-reliability.md#relocated-minimal-uses-its-public-cli)
+repairs the shared clean-environment check's unsupported Minimal arguments.
+Actual relocated Minimal, Coding and Full help checks pass with their original
+deadlines and isolation; the six-case Minimal empty/offline matrix also passes.
+Current uninstrumented App and Minimal artifacts are identified there. This is
+entry/artifact evidence; complete Core, model, TUI, performance and release
+acceptance remain incomplete, and PR #49 stays Draft.
