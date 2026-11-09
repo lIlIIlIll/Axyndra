@@ -1435,3 +1435,67 @@ capacity check is independent of that incomplete acquire/close trace.
 These are diagnostic observations, not a passing Core contract. The existing
 E1019 raw failure and all open requirements remain. Only documentation and a
 source comment change after the tested E1019 production code.
+
+
+## Native JSON codecs and complete Product case diagnosis
+
+E1021 retains the unsuccessful read-view DATA experiment in
+`readview-input-experiment-preserved/disposition.json`. The fresh Core contract
+still fails at the original stale-precondition attachment refusal. Its numeric
+charge does not decrease. All experimental adapter APIs and source changes are
+withdrawn. No cleanup observation becomes a DATA acknowledgment.
+
+E1022 qualifies every original Product test identity on the preserved unit
+executable `83409b853a851fcdb2da7aec1d6d83557f6173d3e8715b8a40f5d0e78ce9d137`
+from `b5787b62`. `product-full-readback-current.json` records 1,077 independent
+cases: 489 pass, 581 have collector or runtime GC signatures, two crash without
+a proved GC classification, and five fail by assertion or exception. Every
+case has closed physical custody. These are individual original cases with
+unchanged limits. The formal gate stops at case 11 and does not pass. The first
+900-second compilation timeout and a later 509-second cached compilation both
+remain recorded. A missing Shell fixture variable and a rejected zero-case
+diagnostic are retained separately, with no Product acceptance credit.
+
+E1023 fixes a deterministic codec mismatch. `encodeAgentValue` produces JSON;
+`decodeStoredValue` reads the internal tagged Store format. The selected Shell
+frontend and four Shell/Eval bridge copies now use bounded JSON parsing, with
+the original duplicate-key rejection, depth, argument and observation limits.
+`native-json-final-current/summary.json` passes a real public Product contract
+on executable `fd3109ebcd5738d462fe31b988f906f2e2b018e1ed72bf3a496a28b48ac30309`. It installs and starts the
+Native package, tests the direct missing-timeout frontend and explicit seconds
+and milliseconds, preserves caller arguments and UTF-8 output, rejects the exact
+original invalid or over-profile timeout codes before any Operation, and checks
+one startup plus three root/child pairs: seven completed canonical Receipts.
+The new entry is `AXYNDRA_PRODUCT_CONTRACT_SCOPE=native-json-frontend` in the
+existing `support_tests/product_contract` executable. This is local real-process
+proof, without an external provider or a final App release build.
+
+E1024 corrects original fixture premises. The three context-update paths use
+the installed Native Workspace read rather than the removed bare name. They
+require one actual ordinary root and its exact read-view child on the same Run.
+The queued Pi cancellation fixture waits for the actual abort signal instead
+of racing its first result against a 500-millisecond completion delay. Task
+schema checks cover both exported single/batch branches and the original
+one-through-eight bound. No original test identity, permission, assertion goal
+or production deadline is removed. Fresh Product test compilation passes in
+787 seconds. Of ten affected unit cases, one passes and nine fail with explicit
+GC stacks in `shell-json-context-regressions-current/summary.json`. Their
+behavioral acceptance remains incomplete.
+
+E1025 preserves the broader Native baseline failures. After the Task schema
+correction, `eval-runtime-config` passes its earlier Python execution,
+persistence, cell-timeout and post-timeout assertions, then fails at reset with
+`tool.not_found`. The actual original Python service reports `released` and
+`cleanup_acknowledged=true` after the separate cancellation fixture. This is an
+observation, not a proved cause or authority to restart it automatically. See
+`native-baseline-status-diagnostic-current/summary.json`. The full Core,
+unknown crashes, 63 MiB oracle allocation, Native resource-bound startup,
+Coding/ACP, captured TUI, performance comparison and final release requirements
+remain open. GC work stays deferred by the user.
+
+The final static batch passes all 109 Python regressions and the original
+architecture, documentation, dependency and inventory gates. The architecture
+gate also passes with the new regression source staged (2,956 tracked paths).
+See `static-gates-native-json-final.json` and
+`architecture-native-json-tracked.json`. These checks do not replace the open
+Product, performance or release acceptance.

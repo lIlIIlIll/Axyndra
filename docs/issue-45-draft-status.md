@@ -1948,3 +1948,13 @@ fail before the fix and pass after it; the original full Host gate passes
 274/274. A rebuilt complete Core contract still fails at the same capacity
 boundary, now with the correct nested `budget_exceeded` error. This is a
 failure-semantics fix, not closure of the Core or final release requirements.
+
+
+The [E1021–E1025 follow-up](implementation/plan-execution-reliability.md#native-json-codecs-and-complete-product-case-diagnosis)
+qualifies all 1,077 original Product identities on one preserved executable:
+489 pass, 581 have collector/runtime GC signatures, two are unclassified
+crashes and five fail by assertion or exception. The formal Product gate still
+fails. A real public selected-Shell JSON contract passes after the frontend and
+Native baseline codec corrections. Corrected context and cancellation fixtures
+compile; nine affected unit cases remain GC-blocked. The broader Eval baseline
+now reaches a released-service reset failure. Full acceptance remains incomplete.
