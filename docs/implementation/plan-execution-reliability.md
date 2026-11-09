@@ -1856,3 +1856,107 @@ The current GC-bound attempts stay incomplete under the user's deferral. The
 separate complete Core `input_attachment.capacity` failure and unclassified
 historical failures remain distinct; no GC observation releases a DATA payment,
 changes a quota or supplies a consumer acknowledgment. PR #49 remains Draft.
+
+
+### Reconciled current Core accounting remains diagnostic evidence
+
+E1035 records `core-stable-ledger/validation.json`. A temporary numeric probe
+uses lock-protected physical allocation IDs and the existing derived lease IDs
+at the actual mutation sites. All **167,294** recorded counter and lease SUM/
+count checks reconcile. The four instrumented source files are restored
+byte-for-byte, with their hashes in `core-stable-ledger/source/manifest.json`.
+No probe code enters the release build.
+
+At the refusal, the actual Native bank has capacity 150,994,944 bytes, charged
+101,022,976 bytes, and requested growth 50,331,648 bytes. Growth would exceed
+the limit by 359,680 bytes. Its Registry root costs 67,263,744 bytes with 482
+live leases whose invoices sum to 62,488,944 bytes. Two other logical groups
+each cost 16,777,216 bytes. There are 25 fixed groups totaling 204,800 bytes.
+Of the tagged Prepared metadata children, 43 remain live with total invoices
+of 12,080,944 bytes. These are accounting observations, not proof that any
+consumer returned or that any payment may safely retire.
+
+The earlier fixed-buffer trace with 104 tracked entries versus an actual count
+of 25 remains `INVALID_AS_LIVE_LEDGER`. This new trace does not validate those
+old records or replace the original capacity failure. It does not authorize
+larger quotas, guessed acknowledgments or refunds. Original three matched
+PTC/Native samples, deadlines and Source contracts remain unchanged.
+
+
+### Public HTTP configuration retires its temporary descriptor copy
+
+E1036 corrects the public owned-descriptor overload of
+`loadHostPluginHttpConfiguration` in
+`agent_host_runtime/src/registry_metadata_copy.cj`. It now uses the existing
+private `hostReadonlyConfiguration159` frame. The concrete loader compares the
+Registry arguments with a separately parsed operator document; the returned
+configuration uses that document's name and package digest. It exports no
+Registry descriptor alias. Unknown exceptions still retain the original
+payment conservatively.
+
+This narrows the earlier E84 analysis: the public HTTP loader is a verified
+exception to its blanket description of the four legacy descriptor consumers.
+The remaining raw descriptor, launch and lifecycle consumers retain their
+original conservative payments. No generic close flag, Source replacement,
+quota change or inferred consumer acknowledgment is introduced.
+
+The new public API regression executes 16 valid and 16 malformed operator
+configuration loads. It checks the exact namespace, digest, Unicode payload,
+current-configuration validation, malformed error code, and actual retained
+SUM/lease count after every call. Returned configuration remains readable after
+the original record and Registry scopes end, under the independent fixture
+payment. The complete fixture also refunds its own original bank allocation.
+
+`public-configuration-red/summary.json` records the unchanged loader failing:
+each call retains another 330,880 bytes and one lease. The same case passes in
+`public-configuration-green/summary.json` after the fix. The initial missing
+receiver import and stale enumeration attempts are retained as failures, not
+acceptance. The stale executable was rejected before executing the new case.
+
+`public-configuration-full-host-cached/summary.json` passes the unmodified full
+Host isolation gate: **275/275**, no failures, errors or skipped cases. Its
+unit executable is
+`2ba154930c04175ba632af7d5617d33b312a8a9b3b9d68dc5bb9e90c4c86a332`.
+Original 900-second module, 60-second case and physical process limits remain.
+A preceding attempt spent much of that same module budget rebuilding and timed
+out at case 198. It remains failed, despite that case's body reporting success.
+The passing run reuses the exact freshly built unit artifact through a
+namespace-only target-directory bind; source and compiled inputs are unchanged.
+
+`public-configuration-complete-core/summary.json` then rebuilds and runs the
+original complete Core/recovery contract with the fix. Compilation passes, but
+the original stale-precondition assertion still receives
+`input_attachment.capacity` instead of `application_plan.precondition_conflict`.
+The actual uninstrumented contract executable is
+`b2d687bb743bde165413635e1c16a9c8a96d7b22306a973cd661aed5b5695e46`.
+This correction therefore does not close the complete Core capacity gap.
+Public signatures, persisted data and wire protocols remain unchanged; no
+migration is needed. PR #49 remains Draft and overall acceptance is incomplete.
+
+
+`public-configuration-app-staged/summary.json` records all nine normal O2
+production build stages passing within their original 900-second caps. The
+preceding monolithic Host build timeout remains in
+`public-configuration-app-build`. New uninstrumented source App bytes are
+`39e14bee51847ce4798d3466276bc65964635e5271d51ccfc2e0bd735bee20b1`;
+Minimal bytes are
+`07f4433aec3f73eea9558ac40e29b73d839d2e9c4f6aa7ab87537c60b9d92e30`.
+These supersede the earlier E1032 App/Minimal artifacts for this loader fix.
+
+`public-configuration-release/summary.json` passes fresh actual Minimal, Coding
+and Full assembly and their original relocated clean-environment checks.
+Minimal's six-case empty/offline matrix and Coding/Full operator setup pass.
+Both Coding and Full also pass the complete 172-case Workflow protocol. Their
+other 15 tested Native endpoints exactly match the binaries of the existing
+429 passing protocol cases. This preserves the bounded 601-case protocol
+evidence without claiming complete Product or Memory application acceptance.
+The packaged Coding/Full App is
+`ca3b0d8cbebdf509c39a63fad95e0e047ef35dab20c7c5e8b8a890350d4a9033`;
+packaged Minimal is
+`adae1cae29bbd68c2b1c105766821219165763563c9a7669beb3be846217b78c`.
+No provider calls or SDK component builds occur in these checks.
+
+`public-configuration-static/static-gates-release-final.json` passes the original
+109 Python regressions and complete architecture gate on this final source and
+regression. Generated dependency locks are preserved with hashes before
+restoring their approved bytes. No dependency version changes are committed.

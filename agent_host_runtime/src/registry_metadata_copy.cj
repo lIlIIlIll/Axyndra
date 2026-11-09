@@ -324,9 +324,10 @@ private func hostRegistryDecodeDescriptor81(value: AgentValue): PluginPackageDes
 // implementations. No decoded descriptor crosses back through these APIs.
 public func loadHostPluginHttpConfiguration(settingsRoot: String,
     descriptor: OwnedPluginPackageDescriptor): Result<HostPluginHttpConfiguration> {
-    let actual = match (hostRegistryDescriptorCopy81(descriptor)) {
-        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-    loadHostPluginHttpConfiguration(settingsRoot, actual.namespace, actual.contentDigest)
+    // The concrete loader returns fields from its separately parsed operator
+    // document. Its complete private frame exports no descriptor aliases;
+    // unknown exceptions keep the existing original payment held.
+    hostReadonlyConfiguration159(descriptor, settingsRoot)
 }
 public func hostLoadPluginLifecycleConfiguration(settingsRoot: String,
     descriptor: OwnedPluginPackageDescriptor): Result<HostPluginLifecycleConfiguration> {

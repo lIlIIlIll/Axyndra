@@ -5,6 +5,8 @@ import tool_runtime.*
 import agent_extension_runtime.{JavaScriptToolDescriptor, reserveNativeControlMetadata, nativeControlMetadataUsage113}
 import agent_plugin_registry.*
 import std.fs.*
+import yjson.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -319,5 +321,83 @@ class HostReadonlyConfigurationView159Tests {
         @Expect(configuration.packageDigest.startsWith("sha256:"), true)
         let after = nativeControlMetadataUsage113()
         @Expect(after[0], before[0]); @Expect(after[1], before[1])
+    }
+}
+
+
+// Exercise the public owned-descriptor overload. Operator configuration is
+// separately parsed caller DATA; it must outlive the temporary Registry copy.
+private func publicHttpConfigurationDigestFrame226(bytes: OwnedRegistryUtf8,
+    fixture: LogicalJsonOwnerReservation): String {
+    let count=bytes.byteCount
+    fixture.ensureRetainedPeak(1048576+count*32)
+    let copied=Array<UInt8>(count,repeat:0)
+    for(index in 0..count){copied[index]=bytes.byteAt(index)}
+    String.fromUtf8(copied)
+}
+private func publicHttpConfigurationLoadBody226(fixture: LogicalJsonOwnerReservation): Unit {
+    if(!exists(Path("target"))){Directory.create("target",recursive:true)}
+    let root=Directory.createTemp("target").toString()
+    var registry:?PluginRegistry=None
+    var saved:?HostPluginHttpConfiguration=None
+    try {
+        Directory.create(root+"/source/extensions",recursive:true)
+        File.writeTo(root+"/source/package.json",
+            "{\"name\":\"http-copy226\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"extensions/index.js\"]}}".toArray())
+        File.writeTo(root+"/source/extensions/index.js","throw new Error('DATA_ONLY_MUST_NOT_EXECUTE');".toArray())
+        let actual=PluginRegistry(root+"/settings",root);registry=Some(actual)
+        let record=match(actual.importLocal(root+"/source")){
+            case PluginRegistryResult.Ok(value)=>value
+            case PluginRegistryResult.Err(error)=>try{throw IllegalStateException("public configuration import failed")}finally{error.close()}}
+        try {
+            let bytes=match(record.descriptor.copyText(PluginDescriptorText.ContentDigest)){
+                case PluginRegistryResult.Ok(value)=>value
+                case PluginRegistryResult.Err(error)=>try{throw IllegalStateException("public configuration digest copy failed")}finally{error.close()}}
+            let digest=try{publicHttpConfigurationDigestFrame226(bytes,fixture)}finally{bytes.close()}
+            let settings=root+"/settings"
+            File.writeTo(settings+"/plugins/services.json",("{\"version\":1,\"plugins\":[{\"namespace\":\"pi:http-copy226\",\"package_digest\":"+
+                quoteUnifiedJson(digest)+",\"configuration\":{\"note\":\"配置雪\"},\"requests\":[],\"credentials\":[]}]}").toArray())
+            let probe=record.descriptor.deriveCopiedDataPayment(4096)
+            try {
+                let before=probe.retainedCustodyUsage113()
+                for(index in 0..32){
+                    if(index==16){File.writeTo(settings+"/plugins/services.json","{".toArray())}
+                    let result=loadHostPluginHttpConfiguration(settings,record.descriptor)
+                    if(index<16){
+                        let value=result.value().getOrThrow()
+                        @Expect(value.namespace,"pi:http-copy226")
+                        @Expect(value.packageDigest,digest)
+                        @Expect(value.configuration.field("note").getOrThrow().text,"配置雪")
+                        @Expect(value.stillCurrent().isOk())
+                        saved=Some(value)
+                    }else{
+                        @Expect(result.error().getOrThrow().code,"plugin.http_configuration_invalid")
+                    }
+                    let after=probe.retainedCustodyUsage113()
+                    @Expect(after[0],before[0])
+                    @Expect(after[2],before[2])
+                }
+            }finally{probe.close()}
+        }finally{record.close()}
+        actual.close();registry=None
+        // The complete public loader and original Registry scopes have ended.
+        // Only separately parsed operator DATA survives, paid by the fixture.
+        @Expect(saved.getOrThrow().namespace,"pi:http-copy226")
+        @Expect(saved.getOrThrow().configuration.field("note").getOrThrow().text,"配置雪")
+    }finally{
+        try{match(registry){case Some(value)=>value.close();case None=>()}}
+        finally{remove(root,recursive:true)}
+    }
+}
+@Test
+class HostPublicHttpConfigurationCopy226Tests {
+    @TestCase
+    func publicHttpConfigurationLoadsRetireOnlyTheTemporaryDescriptorCopies226(): Unit {
+        let before=nativeControlMetadataUsage113()
+        let fixture=reserveNativeControlMetadata(1048576)
+        try{publicHttpConfigurationLoadBody226(fixture)}finally{fixture.close()}
+        let after=nativeControlMetadataUsage113()
+        @Expect(after[0],before[0])
+        @Expect(after[1],before[1])
     }
 }

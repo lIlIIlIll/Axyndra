@@ -2014,3 +2014,18 @@ stack have specific collector evidence; historical timeouts are not all
 reclassified. SDK/runtime changes remain deferred. Complete Core capacity,
 unclassified failures, capturing TUI, broader performance and complete release
 acceptance remain incomplete. PR #49 stays Draft.
+
+
+[E1035](implementation/plan-execution-reliability.md#reconciled-current-core-accounting-remains-diagnostic-evidence)
+records a new actual numeric ledger with every recorded counter and lease
+SUM/count reconciled. It identifies current paid owners without inferring
+consumer return or refund permission. The older fixed-buffer trace stays
+invalid.
+
+[E1036](implementation/plan-execution-reliability.md#public-http-configuration-retires-its-temporary-descriptor-copy)
+fixes the public HTTP configuration loader's unnecessary descriptor debt using
+an existing private frame. The public regression fails before and passes after
+the fix; the complete unchanged Host gate passes 275/275. Complete Core still
+fails the same original capacity assertion after rebuilding with the fix.
+Other descriptor consumers retain their payments, GC remains deferred and
+PR #49 remains Draft.
