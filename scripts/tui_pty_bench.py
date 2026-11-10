@@ -63,6 +63,40 @@ def set_winsize(fd: int, width: int, height: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
 
 
+FRAME_INPUT_EVENTS = frozenset({"key_down", "paste", "mouse", "resize", "timer"})
+
+
+def matched_frame_input(record: dict[str, Any], event_names: set[str] | None) -> dict[str, Any] | None:
+    """Select actual inputs in this completed frame, preserving old trace support."""
+    if event_names is None:
+        return record
+    inputs = record.get("frame_inputs")
+    if inputs is None:
+        return record if record.get("event") in event_names else None
+    if not isinstance(inputs, list) or len(inputs) > len(FRAME_INPUT_EVENTS):
+        raise ValueError("invalid bounded frame input record")
+    seen: set[str] = set()
+    selected = []
+    for item in inputs:
+        if not isinstance(item, dict):
+            raise ValueError("invalid frame input entry")
+        name, count, first = item.get("event"), item.get("count"), item.get("first_received_ns")
+        if (not isinstance(name, str) or name not in FRAME_INPUT_EVENTS or name in seen or
+                type(count) is not int or count < 1 or type(first) is not int or first < 0 or
+                first > record["terminal_flush_completed_ns"]):
+            raise ValueError("invalid frame input identity, count or timestamp")
+        seen.add(name)
+        if name in event_names:
+            selected.append(item)
+    if not selected:
+        return None
+    result = dict(record)
+    result["last_input_received_ns"] = record["input_received_ns"]
+    result["input_received_ns"] = min(item["first_received_ns"] for item in selected)
+    result["matched_input_count"] = sum(item["count"] for item in selected)
+    return result
+
+
 class PtyRun:
     def __init__(
         self,
@@ -213,7 +247,8 @@ class PtyRun:
             self.pump()
             selected = self.operations[start:]
             if event_names is not None:
-                selected = [item for item in selected if item.get("event") in event_names]
+                selected = [matched for item in selected
+                            if (matched := matched_frame_input(item, event_names)) is not None]
             if len(selected) >= target_count - start:
                 return selected[: target_count - start]
             if self.process is not None and self.process.poll() is not None:
@@ -242,14 +277,15 @@ class PtyRun:
         while time.monotonic() < deadline:
             self.pump()
             new_operations = self.operations[before_index:]
-            if new_operations and int(new_operations[-1].get("seq", 0)) >= target_sequence:
-                selected = new_operations
-                if event_names is not None:
-                    selected = [
-                        item for item in selected if item.get("event") in event_names
-                    ]
-                if selected:
+            selected = [matched for item in new_operations
+                        if (matched := matched_frame_input(item, event_names)) is not None]
+            if new_operations and all("frame_inputs" in item for item in new_operations) and event_names is not None:
+                # Actual matching input counts, rather than async/global sequence
+                # increments, prove that every requested input was processed.
+                if sum(item.get("matched_input_count", 0) for item in selected) >= expected_events:
                     return selected
+            elif new_operations and int(new_operations[-1].get("seq", 0)) >= target_sequence and selected:
+                return selected
             if self.process is not None and self.process.poll() is not None:
                 raise RuntimeError(
                     f"TUI exited early with status {self.process.returncode}"
@@ -270,6 +306,14 @@ class PtyRun:
         assert self.process is not None
         os.killpg(self.process.pid, signal.SIGWINCH)
         return self.wait_for_operations(before + 1, {"resize"}, timeout=max(self.timeout, 1.0))
+
+    def drain_for(self, duration: float) -> None:
+        """Keep consuming terminal output during the unchanged setup interval."""
+        deadline = time.monotonic() + duration
+        while (remaining := deadline - time.monotonic()) > 0:
+            self.pump(remaining)
+            if self.process is not None and self.process.poll() is not None:
+                raise RuntimeError(f"TUI exited during setup with status {self.process.returncode}")
 
     def wait_for_silence(self, quiet: float, timeout: float) -> None:
         deadline = time.monotonic() + timeout
@@ -348,9 +392,8 @@ def run_scenario(run: PtyRun, scenario: str) -> list[dict[str, Any]]:
         return measured
     if scenario == "search":
         run.send(b"\x1b[200~/session\x1b[201~", event_names={"paste"})
-        os.write(run.master_fd, b"\r")
-        time.sleep(0.2)
-        run.pump()
+        run.send(b"\r", event_names={"key_down"})
+        run.drain_for(0.2)
         run.send(b"/", event_names={"key_down"})
         text = "连续搜索中文🧭wide界ANSI".encode()
         measured.extend(
@@ -470,8 +513,7 @@ def main() -> int:
                 try:
                     session.start()
                     if scenario != "cold_start":
-                        time.sleep(0.3)
-                        session.pump(0.05)
+                        session.drain_for(0.3)
                     selected = [enrich(item) for item in run_scenario(session, scenario)]
                 finally:
                     session.finish()

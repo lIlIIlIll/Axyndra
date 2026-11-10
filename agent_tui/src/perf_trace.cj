@@ -39,6 +39,7 @@ class TuiPerformanceTrace <: AppTraceSink {
     private let output: OutputStream
     private var sequence: Int64 = 0
     private var eventName = "startup"
+    private let frameInputs240 = TuiFrameInputs240()
     private var queueLength: Int64 = 0
     private var inputNanos: Int64 = 0
     private var dispatchNanos: Int64 = 0
@@ -168,6 +169,7 @@ class TuiPerformanceTrace <: AppTraceSink {
         eventName = performanceEventName(event)
         queueLength = max(0, eventQueueLength)
         inputNanos = nowNanos()
+        frameInputs240.received240(eventName, inputNanos)
         dispatchNanos = 0
         stateNanos = 0
         layoutNanos = 0
@@ -518,6 +520,7 @@ class TuiPerformanceTrace <: AppTraceSink {
         emit(
             "{\"kind\":\"operation\",\"seq\":" + sequence.toString() +
                 ",\"event\":\"" + eventName + "\",\"input_received_ns\":" + inputNanos.toString() +
+                ",\"frame_inputs\":" + frameInputs240.value240() +
                 ",\"event_dispatch_completed_ns\":" + dispatchNanos.toString() +
                 ",\"state_update_completed_ns\":" + stateNanos.toString() +
                 ",\"render_started_ns\":" + renderStartedNanos.toString() +
@@ -655,6 +658,7 @@ class TuiPerformanceTrace <: AppTraceSink {
                 ",\"burst_wake_signals\":" + burstWakeSignals.toString() + "}"
         )
         frameEmitted = true
+        frameInputs240.clear240()
     }
 
     public func eventLoopStall(task: String, durationNanos: Int64): Unit {
