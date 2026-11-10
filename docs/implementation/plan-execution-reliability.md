@@ -2348,3 +2348,146 @@ not used for release acceptance. Original samples, assertions, error behavior,
 The next Core investigation must connect actual retained snapshot payments to
 their concrete enclosing consumers and complete return witnesses. The failed
 candidate and these inventories do not close that requirement.
+
+
+### Scoped initial Context and private Run view returns
+
+Acceptance remains **incomplete**. E1050–E1056 extend the same requirement and
+evidence record. They do not replace the unresolved Core capacity, intermittent
+Todo, performance, resource-limit, provider, or release requirements. GC remains
+explicitly deferred. No SDK component is built and no additional provider call
+is sent.
+
+| Evidence | Implementation and observed result | Status and remaining gap |
+| --- | --- | --- |
+| E1050 | `snapshot-first-hold-stacks`, `core-return-gate-diagnostic`, and `live-snapshot-share-origins-corrected` inspect actual return gates and live snapshot shares. | Diagnostic only. No counter, helper return, or terminal state authorizes a refund. |
+| E1051 | `4d461522` uses `activeRunControl159` in Product context-update and approval-binding queries. `control-only-product-complete-core` advances past the original stale-file-precondition assertion. | Implemented. The next existing-create case still fails at attachment capacity. |
+| E1052 | `85cec1f8` adds opt-in scoped Context sequences and four public lifecycle regressions. Core passes 53/53 and Tool Runtime passes 72/72. | Focused contracts pass. Legacy open callbacks and historical exports remain paid. |
+| E1053 | The same Core commit returns private recovery views, unused failure-start views, and unused successful failure settlements. Context-boundary resume uses the existing private Context collector. | Implemented and compiled. Original validation, pending consumers, and task-return witnesses remain. |
+| E1054 | Current Product compilation enumerates 1,081 tests within 821.85 seconds. One early-cancel control and 12 of 36 affected Context cases pass. Complete Host passes 275/275. | Full Product acceptance remains open. The other selected cases crash in GC. Complete Core still fails at capacity. |
+| E1055 | The current Coding package passes assembly, clean environment, setup, cards, and ask. Existing-installation initial-prompt and Todo checks pass with canonical facts. | Upgrade checks pass. Fresh operator preparation for those two scenarios crashes in GC before TUI entry. Whole release remains failed. |
+| E1056 | Fixed SDK archives and missing independent-checkout Git objects are restored without changing versions or source. Generated lock files are saved and restored. | Environment recovery only. It does not turn a previous failed gate into a pass. |
+
+E1050 records no first-held snapshot transition in the complete diagnostic run.
+The original control predicate eventually reports 27 ready controls and three
+active controls. Neither observation proves that a private Context producer or
+its original task witness returned. The later inventory copies references from
+the existing intrusive snapshot registry, releases its lock, then reads each
+state under its own lock. It records six live snapshot states, nine outstanding
+shares, no active snapshot loans, and no held flag in those states. Share origins
+include Core approval continuation, request Context creation, and Runtime lane
+creation. All six readings refer to the same charged custody group; its totals
+must not be added once per snapshot. This is not a per-graph payment ledger.
+The diagnostic source files are restored byte for byte. An initial temporary
+string-escaping compile error is retained separately and has no test credit.
+
+E1051 removes allocations that those Product queries never consume. The queries
+still compare the original Run, epoch, cancellation token, Context digest,
+waiting-approval state, and durable owner rows. They publish no tool graph or new
+authority. The complete Core comparison first passes
+`e5-02-stale-precondition`, then fails `e5-02-existing-create` with
+`input_attachment.capacity` rather than `application_plan.create_target_exists`.
+The final `core-private-views-complete-core` build takes 422.37 seconds and its
+original execution fails in 34.24 seconds at that same later case. Capacity,
+samples, expected errors, assertions, and the 900-second bounds are unchanged.
+
+E1052 introduces `ToolInvocationContext.withScopedInvocation240` and
+`ContextReadSequence.scoped240`. A callback receives a revocable invocation view.
+A callback that needs a later reader must call `retainInvocationContext159` and
+return that independent consumer through its existing API. A raw historical
+snapshot export keeps the original snapshot debt. The legacy sequence
+constructor keeps its open callback behavior. Product initial, composed, window,
+and journal sequences opt into the new scoped mode. Core tracks the private
+Context for the narrow initial-preparation port, while legacy ports and open
+sequences keep conservative retention.
+
+`scoped-context-core-red` deliberately substitutes the open callback and fails
+two of the four public lifecycle assertions. The correct implementation passes
+all 53 Core tests in `scoped-context-core-green`. After the recovery-view changes,
+`core-private-views-unit` again passes 53/53. The actual owned parent, retained
+child, historical graph, and throwing callback have separate assertions.
+`scoped-context-tool-runtime-unit` passes 72/72. These are DATA lifetime tests;
+they manufacture no Source, approval, canonical receipt, or task-return witness.
+
+E1053 validates a recovered Run through a private helper that returns only its
+epoch. The independent view returns after that helper. The same mismatch and
+missing-snapshot errors remain. Context-boundary recovery forks its Context's
+own snapshot share before returning the outer Run view; the existing control
+still governs that Context. Failure setup reuses `startTurnWithPrivateLane159`
+and returns its unused outward view. A successful settlement whose only caller
+is failed initial snapshot persistence also returns its unused view. Unknown
+exceptions and failed settlements receive no invented return acknowledgment.
+
+E1054 uses the complete Product O2 executable from
+`scoped-context-product-focused`. The cancellation-before-preparation case
+passes. The configured hint/help case crashes in the collector. The 36 affected
+public Context cases in `scoped-context-product-affected` produce 12 passes and
+24 GC crashes, with no ordinary assertion failure. Every case retains its
+original 60-second case bound, 90-second physical bound, and exact compiled
+identity. The full 1,081-case suite is not reported as passing. The original
+complete Host gate passes 275/275 in `scoped-context-full-host` with unchanged
+Source, cancellation, recovery, and custody checks.
+
+E1055 binds `scoped-context-normal-app-staged` to implementation commits
+`4d461522` and `85cec1f8`. All nine production stages pass their original
+900-second per-stage limits. The uninstrumented App ELF SHA-256 is
+`2ccf3a35d50c855d8d0330b2d10fad87526092b4c7248c052bb17cfad74ee403`;
+Minimal is `854f29ca78bd46ae1924de86a0ff836c09a1a82c1575a9b6f5020d7523a6a7aa`.
+The assembled Coding ELF is
+`f7dd368993d21add4b8bede4c4979d84f481a9f0bb8ef40cf237e41177e54496`.
+The fresh-home initial-prompt and Todo checks lose their actual operator child.
+The exact reaped child, executable, and core agree on collector failures:
+`GCTib::ForEachBitmapWord` with root walking for one, and concurrent
+`WCollector::MarkObject` for the other. Sanitized classification records contain
+no process lease tokens or command lines. Neither is retried. The earlier
+confirmed default GC occurrence also remains deferred.
+
+`scoped-context-existing-installation-initial` uses the same current Coding ELF
+with a previously inspected, imported, enabled, and configured actual operator
+installation. It copies no Registry, replaces no grant, deletes no fact, and
+uses no trusted-mode bypass. The original three-size golden passes in 10.87
+seconds. Its readonly completion check finds exactly one new completed Run,
+one completed model Attempt, one committed ContextRead, and one completed
+Receipt. Existing older Run rows are excluded from the new-run oracle, not
+rewritten or counted as this invocation's success.
+
+`scoped-context-existing-installation-todo` then passes in 9.59 seconds under the
+original 45-second TUI limit. It adds two completed Runs, six committed
+Operations with six completed Receipts, and the first Todo document at revision
+1. Both checks are real local fixture execution on an existing installation.
+They prove neither clean operator installation nor external provider behavior,
+and they do not erase the earlier intermittent Todo timeout.
+
+E1056 retains an interrupted Core build whose final `llvm-objcopy` executable
+is absent, followed by a dependency-fetch failure after the dependency cache is
+found empty. The same approved SDK and StdX archives pass their recorded SHA-256
+checks before extraction. Their versions and bytes remain fixed; no runtime,
+compiler, std, or stdx component is built. Public dependencies return at the
+same locked revisions. A per-command Git configuration permits public HTTPS
+reads without changing the global SSH rewrite or SSH configuration. The
+complete build then passes in 809.65 seconds and its original Core execution
+still fails at the existing-create capacity assertion. The cause of the
+external file disappearance is unknown.
+
+Missing historical Git objects in the independent checkout are restored from
+the immutable published blob and existing local ancestry objects. No original
+worktree source, index, branch, or configuration is written. Its 82 original
+status records retain the same digest. `scoped-context-lock-restoration` saves
+ten generated lock files with their bytes, diffs, and hashes before restoring
+the reviewed versions.
+
+The new APIs are opt-in additions at source level. Existing constructor and
+method signatures remain. An old-binary ABI check has not run; consumers of the
+changed class layout must be rebuilt for this candidate. No database schema or
+durable recovery version changes. A source rollback must revert both code
+commits together so Product no longer selects the scoped sequence API.
+Unknown Prepared and Catalog consumers still require concrete ownership and
+return evidence. The next capacity change must supply that evidence rather
+than waive a getter, increase the 144 MiB bank, or refund on a terminal state.
+
+The final code and these records pass 117 Python regressions and the complete
+architecture gate in `scoped-context-final-static`: 2,966 tracked paths, 72
+Markdown files, 39 workspace packages, 178 local dependency edges, and zero
+remaining baseline boundary violations. Pin, vendored contract, public package,
+and SDK compatibility checks pass. These static results do not replace the
+failed runtime, full Product, or release gates.

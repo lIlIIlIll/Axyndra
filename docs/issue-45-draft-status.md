@@ -2097,3 +2097,29 @@ first raw-alias transitions are observed separately. Neither inventory proves
 consumer retirement or authorizes refunds. All diagnostic source bytes are
 restored. Core capacity remains an implementation gap, while the separate
 900-second Product compilation limit still prevents current full acceptance.
+
+
+[E1050–E1056](implementation/plan-execution-reliability.md#scoped-initial-context-and-private-run-view-returns)
+record implementation commits `4d461522` and `85cec1f8`. Product control queries
+avoid unused tool-graph views; opt-in Context sequences revoke only their own
+views; private recovery and failure views return after their consuming helpers.
+Legacy open callbacks, retained children, historical exports, original task
+witnesses, and unknown consumers keep their existing payment obligations.
+
+Current Core and Tool Runtime unit modules pass 53/53 and 72/72; complete Host
+passes 275/275. Full Product compilation now finishes in 821.85 seconds within
+the original 900-second limit and enumerates 1,081 identities. The early-cancel
+control passes; hint/help crashes in GC. The 36 affected Context cases yield 12
+passes and 24 GC crashes. These results do not constitute a full Product pass.
+Complete Core advances past stale-file validation but still fails
+`e5-02-existing-create` at `input_attachment.capacity`.
+
+All nine normal production stages pass. Current Coding assembly, clean-env,
+setup, cards, and ask pass. Initial-prompt and Todo pass on an existing actual
+operator installation with new canonical Run/Attempt/ContextRead and Receipt
+proof. Fresh operator setup for both scenarios has matched GC cores before TUI
+entry and is not retried. The earlier intermittent Todo timeout remains open.
+Fixed SDK/cache and independent Git-object restoration changes no version,
+source, original worktree, or authorization. Final static gates and 117 Python
+regressions pass. GC stays deferred; all other unmet requirements remain open.
+PR #49 remains Draft and acceptance remains **incomplete**.
