@@ -937,10 +937,15 @@ public class AgentCore <: AgentRunner {
                 finishControl(request.runId)
                 return Result.Err(error)
         }
-        // An open initial-context preparer may retain the actual root. Keep
-        // that compatibility path conservative; only this private Core-only
-        // context path has a complete concrete producer frame below.
-        let contextFrame = if (request.initializeContext) { None<CoreContextFrame159> }
+        // The legacy preparer receives the actual Context and remains open.
+        // The narrow port receives no Context/ModelLane. Its private producer
+        // can be tracked here; an open sequence below still keeps it Held.
+        // Actual task/caller/retained-child witnesses remain mandatory.
+        let inputOnly159 = match (initialContext) {
+            case Some(value) => (value as InitialContextPreparationInputPort159).isSome()
+            case None => false
+        }
+        let contextFrame = if (request.initializeContext && !inputOnly159) { None<CoreContextFrame159> }
             else { match (catalog.reserveRegistryData180(16384)) {
                 case Some(payment) =>
                     let frame = CoreContextFrame159(payment); control.retainCoreContextFrame159(frame); Some(frame)
@@ -1004,11 +1009,12 @@ public class AgentCore <: AgentRunner {
         match (runs.save(initial)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
-                let _ = runtime.finish(
-                    RunState.Failed,
-                    1000,
-                    reason: "initial run snapshot persistence failed"
-                )
+                let settled = runtime.finish(RunState.Failed, 1000,
+                    reason: "initial run snapshot persistence failed")
+                match (settled) {
+                    case Result.Ok(value) => value.run.returnOwnedLaneView159()
+                    case Result.Err(_) => ()
+                }
                 finishControl(request.runId)
                 return Result.Err(error)
         }
@@ -1065,6 +1071,15 @@ public class AgentCore <: AgentRunner {
             let preparation = match (captured) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return fail(request, context, control, error, sink) }
+            // ToolPreparationRead already invokes its callbacks through scoped
+            // views. The legacy sequence API can expose this whole Context;
+            // its existing conservative payment must therefore stay Held.
+            match (preparation.sequence) {
+                case Some(sequence) => if (!sequence.usesScopedContext240()) {
+                    match (contextFrame) { case Some(frame) => frame.holdUnknown159(); case None => () }
+                }
+                case None => ()
+            }
             match (runs.bindAcceptedContextRequest(request.runId, request.sessionId, active.epoch,
                 if (continuation.isSome()) { ThreadItemContent.SystemNote("Host continuation") } else { coreUserContent(user) },
                 initialContextRequestValue(request, active.epoch), agentUtcMillis())) {
@@ -1137,7 +1152,18 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         try { control.restoreContextBoundaryControl(contextBoundaryField(data, "control")) }
             catch (error: Exception) { finishControl(durable.runId); return Result.Err(coreContextBoundaryError(error.message)) }
-        let active = control.runtime.activeRun().getOrThrow()
+        let owner = control.runtime.activeRunOwned159().getOrThrow()
+        let result = withPrivateCoreContextFrame159(control, { contextFrame =>
+            resumeContextBoundaryFrame240(durable, boundary, data, snapshot, counter, state,
+                control, owner.snapshot159(), sink, contextFrame)
+        })
+        owner.returnActiveRunFrame159()
+        result
+    }
+    private func resumeContextBoundaryFrame240(durable: AgentRunRequest,
+        boundary: RunContextBoundary, data: AgentValue, snapshot: RunSnapshot,
+        counter: BudgetCounter, state: CoreToolLoopState, control: CoreRunControl,
+        active: ActiveRunSnapshot, sink: AgentEventSink, contextFrame: ?CoreContextFrame159): Result<AgentRunOutcome> {
         if (active.epoch != contextBoundaryInteger(data, "epoch") || active.executionLaneId.value != boundary.continuation.laneId.value ||
             contextReadProjectionDigest(active.contextSnapshot) != contextBoundaryText(data, "context_digest") ||
             contextReadProjectionDigest(durable.contextSnapshot) != contextBoundaryText(data, "context_digest") ||
@@ -1156,6 +1182,7 @@ public class AgentCore <: AgentRunner {
             budgetModeFn: Some({ => control.budgetMode() }), contextProjection: active.contextSnapshot,
             toolSetSnapshot: active.lane.legacyToolSetSnapshot159(),
             ownedToolSetSnapshot159: active.lane.forkOwnedToolSetSnapshot159())
+        match (contextFrame) { case Some(frame) => frame.capture159(context); case None => () }
         bindToolOutputSink(context, control, sink, output)
         bindBudgetChargeHandler(context, control, sink)
         continueRun(durable, context, control, counter, sink, toolLoopState: Some(state),
@@ -7113,31 +7140,10 @@ public class AgentCore <: AgentRunner {
                     case Result.Ok(value) => value
                     case Result.Err(error) => return Result.Err(error)
                 }
-                let restoredOwner = runtime.activeRun()
-                match (restoredOwner) {
-                    case Some(active) =>
-                        if (active.runId.value != request.runId.value ||
-                            (!modelRecovery && active.state != RunState.WaitingApproval) ||
-                            (modelRecovery && active.state != RunState.Running &&
-                                active.state != RunState.RecoveryRequired)) {
-                            return Result.Err(AgentError(
-                                AgentErrorKind.RecoveryRequired,
-                                "run.resume_owner_mismatch",
-                                "canonical Thread owner does not match the durable continuation"
-                            ))
-                        }
-                        match (validateCoreModelLane159(active.lane, ThreadId(request.sessionId.value))) {
-                            case Result.Ok(_) => ()
-                            case Result.Err(error) => return Result.Err(error)
-                        }
-                    case None =>
-                        if (!internalNoToolsRecovery) {
-                            return Result.Err(AgentError(
-                                AgentErrorKind.RecoveryRequired,
-                                "run.model_lane_snapshot_missing",
-                                "canonical Thread has no active Run snapshot to restore"
-                            ))
-                        }
+                let restoredEpoch = match (restoredRunEpoch240(runtime, request,
+                    modelRecovery, internalNoToolsRecovery)) {
+                    case Result.Ok(value) => value
+                    case Result.Err(error) => return Result.Err(error)
                 }
                 let restoredModelRequests = match (initialUsage) {
                     case Some(value) => value.modelRequests + value.drainModelRequests
@@ -7176,9 +7182,9 @@ public class AgentCore <: AgentRunner {
                 // to bind. The None branch above remains exclusive to that
                 // no-tools accounting path; real resume/Attempt owners still
                 // require the exact admitted Run and epoch below.
-                match (restoredOwner) {
-                    case Some(owner) =>
-                        match (control.bindRuntimeCancellation(owner.epoch)) {
+                match (restoredEpoch) {
+                    case Some(epoch) =>
+                        match (control.bindRuntimeCancellation(epoch)) {
                             case Result.Err(error) => control.close(); return Result.Err(error)
                             case Result.Ok(_) => ()
                         }
@@ -7191,6 +7197,35 @@ public class AgentCore <: AgentRunner {
                 }
                 control.bindCancellation(model, tools)
                 Result.Ok(control)
+        }
+    }
+
+    // Validation consumes an independently paid view but publishes only its
+    // epoch. The private helper must return before this view can be revoked;
+    // the Runtime owner and any other snapshots keep their own paid shares.
+    private func restoredRunEpoch240(runtime: AgentThreadRuntime, request: AgentRunRequest,
+        modelRecovery: Bool, internalNoToolsRecovery: Bool): Result<?Int64> {
+        match (runtime.activeRunOwned159()) {
+            case Some(owner) =>
+                let result = validateRestoredRunEpochFrame240(owner.snapshot159(), request, modelRecovery)
+                owner.returnActiveRunFrame159()
+                result
+            case None => if (internalNoToolsRecovery) { Result.Ok(None<Int64>) }
+                else { Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "run.model_lane_snapshot_missing", "canonical Thread has no active Run snapshot to restore")) }
+        }
+    }
+    private func validateRestoredRunEpochFrame240(active: ActiveRunSnapshot,
+        request: AgentRunRequest, modelRecovery: Bool): Result<?Int64> {
+        if (active.runId.value != request.runId.value ||
+            (!modelRecovery && active.state != RunState.WaitingApproval) ||
+            (modelRecovery && active.state != RunState.Running && active.state != RunState.RecoveryRequired)) {
+            return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "run.resume_owner_mismatch", "canonical Thread owner does not match the durable continuation"))
+        }
+        match (validateCoreModelLane159(active.lane, ThreadId(request.sessionId.value))) {
+            case Result.Ok(_) => Result.Ok(Some(active.epoch))
+            case Result.Err(error) => Result.Err(error)
         }
     }
 
@@ -7977,22 +8012,11 @@ public class AgentCore <: AgentRunner {
                     for (item in runtime.threadSnapshot().items where isContinuationInitiatorDescription(item)) {
                         if (item.provenance.runId.getOrThrow().value == request.runId.value) { control.close(); return Result.Err(error) }
                     }
-                    match (runtime.startTurn(
-                        SemanticTurnId("turn-" + request.runId.value), request.runId,
-                        match (request.queuedInitiator113) { case Some(value) => ItemId(value.entryId.value); case None => ItemId("user-" + request.runId.value) },
-                        coreUserContent(ModelMessage(
-                            ModelRole.User,
-                            [ModelBlock(ModelBlockKind.Text, text: request.prompt)]
-                        )),
-                        coreModelLane(request, catalog), request.contextSnapshot,
-                        executionLaneId: request.executionLaneId,
-                        createdAtMillis: agentUtcMillis(),
-                        deadlineMillis: request.budget.deadlineMillis,
-                        parentCancellation: Some(control.source.token),
-                        runBudgetSnapshot: coreBudgetSnapshot(request.budget),
-                        queuedInitiator113: request.queuedInitiator113, queuedInputPayment113: request.queuedInputPayment113
-                    )) {
-                        case Result.Ok(_) => ()
+                    let started = startTurnWithPrivateLane159(runtime, request,
+                        SemanticTurnId("turn-" + request.runId.value),
+                        ModelMessage(ModelRole.User, [ModelBlock(ModelBlockKind.Text, text: request.prompt)]), control)
+                    match (started) {
+                        case Result.Ok(value) => value.returnOwnedLaneView159()
                         case Result.Err(_) => control.close(); return Result.Err(error)
                     }
                 }

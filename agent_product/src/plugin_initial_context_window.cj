@@ -77,7 +77,7 @@ func productInitialDocumentWindowPreparation(host:ProductJavaScriptPluginHost,op
     let read=match(first){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
     match(sequence.validate()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
     Result.Ok(InitialContextPreparation(read,validity:{=>sequence.validate()},
-        sequence:Some(ContextReadSequence(8,{actual,facts=>sequence.advance(actual,facts)},
+        sequence:Some(ContextReadSequence.scoped240(8,{actual,facts=>sequence.advance(actual,facts)},
             transition:Some({old,next=>sequence.validateTransition(old,next)})))))
 }
 

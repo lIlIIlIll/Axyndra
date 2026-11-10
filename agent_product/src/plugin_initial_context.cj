@@ -185,7 +185,7 @@ class ProductInitialContextPreparation <: InitialContextPreparationInputPort159 
         }
         let multiple = ProductInitialContextMultipleSequence(host, selections, plans.toArray(), active, context.cancellation)
         return Result.Ok(InitialContextPreparation(multiple.first(), validity: { => multiple.validate() },
-            sequence: Some(ContextReadSequence(multiple.maximumReads, { current, facts => multiple.advance(current, facts) },
+            sequence: Some(ContextReadSequence.scoped240(multiple.maximumReads, { current, facts => multiple.advance(current, facts) },
                 transition: Some({ old, next => multiple.validateTransition(old, next) })))))
     }
     private func prepareOne(selection: ProductInitialContextSelection, prompt: String,
@@ -212,7 +212,7 @@ class ProductInitialContextPreparation <: InitialContextPreparationInputPort159 
                 case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
             let sequence = ProductInitialContextSequence(host, selection, actual, active, prompt, context.cancellation, ids, inputs)
             return Result.Ok(InitialContextPreparation(sequence.first(), validity: { => sequence.validate() },
-                sequence: Some(ContextReadSequence(if (selection.componentSources.isSome()) { 3 } else { 2 }, { current, facts => sequence.advance(current, facts) }))))
+                sequence: Some(ContextReadSequence.scoped240(if (selection.componentSources.isSome()) { 3 } else { 2 }, { current, facts => sequence.advance(current, facts) }))))
         }
         let prepared = match (productContextProviderReadInput159(host, selection.namespace, selection.provider,
             active, selection.resources(), selection.query(prompt), context.cancellation, [], ids.nextInvocationId(),

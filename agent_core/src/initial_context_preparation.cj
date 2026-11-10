@@ -38,9 +38,11 @@ public class InitialContextPreparationInput159 {
     }
 }
 // An optional narrower host composition port. Avoiding an unnecessary lane
-// copy is not a retirement witness. Core keeps the original conservative
-// Context payments for open preparation/continuation callbacks. The legacy
-// port still receives its independent paid snapshot.
+// copy is not a retirement witness. Open preparation/continuation callbacks
+// keep the original conservative Context payments. An opt-in scoped sequence
+// returns only its own actual views; parent retirement still requires the
+// complete private Core producer and original task/consumer witnesses. The
+// legacy port still receives its independent paid snapshot.
 public interface InitialContextPreparationInputPort159 <: InitialContextPreparationPort {
     func prepareInput159(prompt: String, input: InitialContextPreparationInput159): Result<InitialContextPreparation>
 }

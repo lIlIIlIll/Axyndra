@@ -122,7 +122,7 @@ func productInitialJournalContextPreparation(host:ProductJavaScriptPluginHost,op
     let selected=try{continuation.select(response.value,context)}finally{response.close()}
     let read=match(selected){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
     Result.Ok(InitialContextPreparation(read,validity:{=>continuation.validate()},
-        sequence:Some(ContextReadSequence(1,{actual,facts=>continuation.advance(actual,facts)}))))
+        sequence:Some(ContextReadSequence.scoped240(1,{actual,facts=>continuation.advance(actual,facts)}))))
 }
 
 class ProductInitialJournalContextSequence {

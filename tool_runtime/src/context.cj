@@ -612,6 +612,15 @@ public class ToolInvocationContext {
     // Revocation is not a consumer ACK. A saved Context shell has no private
     // graph after this scope is revoked; exported raw graphs stay Held in the
     // original Shared state, and explicitly forked shares remain independent.
+    // The callback receives only this actual scoped view. Saved raw views are
+    // revoked when its complete helper returns. Explicit retained copies and
+    // historical graph exports keep their original independent DATA debts.
+    // Returning this loan never acknowledges the parent or any owned task.
+    public func withScopedInvocation240<T>(body: (ToolInvocationContext) -> T): T {
+        let view = beginInvocationView159()
+        try { body(view) } finally { view.endInvocationView159() }
+    }
+
     public func requireLiveInvocationView159(): Unit {
         toolSnapshotLock159.lock()
         try { requireToolSnapshotFrame159() } finally { toolSnapshotLock159.unlock() }

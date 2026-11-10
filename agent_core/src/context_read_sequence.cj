@@ -14,6 +14,7 @@ public enum ContextReadNext {
 public class ContextReadSequence {
     public let maximumReads: Int64
     private let advanceFn: (ToolInvocationContext, Array<ContextReadFact>) -> Result<ContextReadNext>
+    private var scopedContext240 = false
     private let transitionFn: ?(ToolPreparationRead, ToolPreparationRead) -> Result<Unit>
     public init(maximumReads: Int64,
         advance: (ToolInvocationContext, Array<ContextReadFact>) -> Result<ContextReadNext>,
@@ -21,7 +22,21 @@ public class ContextReadSequence {
         if (maximumReads < 1 || maximumReads > 8) { throw IllegalArgumentException("context read sequence requires 1..8 stages") }
         this.maximumReads = maximumReads; this.advanceFn = advance; this.transitionFn = transition
     }
+    // Opt-in callback lifetime. The legacy constructor remains open. A
+    // retained asynchronous reader must take its own actual paid Context;
+    // a raw schema export remains Held by the original snapshot owner.
+    public static func scoped240(maximumReads: Int64,
+        advance: (ToolInvocationContext, Array<ContextReadFact>) -> Result<ContextReadNext>,
+        transition!: ?(ToolPreparationRead, ToolPreparationRead) -> Result<Unit> = None): ContextReadSequence {
+        let value = ContextReadSequence(maximumReads, advance, transition: transition)
+        value.scopedContext240 = true
+        value
+    }
+    public func usesScopedContext240(): Bool { scopedContext240 }
     public func advance(context: ToolInvocationContext, facts: Array<ContextReadFact>): Result<ContextReadNext> {
+        if (scopedContext240) {
+            return context.withScopedInvocation240<Result<ContextReadNext>>({ view => advanceFn(view, facts.clone()) })
+        }
         advanceFn(context, facts.clone())
     }
     // Trusted composition may select the next exact frozen provider. Every
