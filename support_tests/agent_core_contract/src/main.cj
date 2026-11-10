@@ -22,6 +22,9 @@ func preparedToolCall(prepared: PreparedToolInvocation): ToolCall {
 }
 
 main(): Int64 {
+    if (getCommandLine().contains("--scoped-core-hook-context-contract")) {
+        scopedCoreHookContextContract240(); return 0
+    }
     if (getCommandLine().contains("--controlled-internal-model-contract")) {
         controlledInternalModelCallContract()
         return 0
@@ -52,6 +55,7 @@ main(): Int64 {
         case Some(code) => return code
         case None => ()
     }
+    scopedCoreHookContextContract240()
     coreStartRestrictionContract111()
     coreStartNotificationContract111()
     let conversations = MemoryConversations()

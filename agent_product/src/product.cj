@@ -5179,7 +5179,7 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
         operationRuntime: Some(operations),
         modelDecisionRuntime: Some(SqliteModelDecisionStore(vnextDatabase)),
         contextManifestRuntime: Some(ProductContextManifestRuntime(vnextDatabase)),
-        toolHooks: codexHookRuntime,
+        toolHooks: ProductScopedCoreToolHooks240(codexHookRuntime),
         initialContext: Some(ProductInitialContextPreparation(config.settingsRoot, javascriptPlugins, ids, pluginRuntime, operations)),
         modelAttemptRecovery: config.modelAttemptRecovery
     )

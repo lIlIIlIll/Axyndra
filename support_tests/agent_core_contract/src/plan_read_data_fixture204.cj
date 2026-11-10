@@ -17,6 +17,7 @@ class PlanBatchReadPayment204 <: ToolCatalogDataPayment159 & ToolCatalogSnapshot
         let paid = original.acquire(4096)
         this.bank = original; this.ancestor = paid
     }
+    func currentInvoice240(): Int64 { ancestor.retainedCustodyUsage113()[0] }
     public func reserveCatalogData159(bytes: Int64): Unit { ancestor.ensureRetainedPeak(bytes) }
     public func reserveTemporaryCatalogData159(bytes: Int64): ToolCatalogTemporaryData159 {
         PlanBatchReadTemporary204(child204(bytes))

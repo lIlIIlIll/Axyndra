@@ -186,7 +186,7 @@ class CoreToolBatchCoordinator {
             let cachedInput = preparationInput(committed.canonicalItemId)
             let hookDecision = match (cachedInput) {
                 case Some(value) => value.hookDecision()
-                case None => try { toolHooks.beforeTool(context, committed, block.arguments) }
+                case None => try { coreBeforeToolHookScope240(toolHooks, context, committed, block.arguments) }
                     catch (_: Exception) { CoreToolHookDecision.Deny("PreToolUse handler failed; tool call denied") }
             }
             match (hookDecision) {

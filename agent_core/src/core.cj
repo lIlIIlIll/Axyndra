@@ -712,7 +712,7 @@ public interface CoreToolHookRuntime {
     ): Unit
 }
 
-class NoopCoreToolHookRuntime <: CoreToolHookRuntime & OwnedCoreToolHookRuntime {
+class NoopCoreToolHookRuntime <: ScopedCoreToolHookRuntime240 & OwnedCoreToolHookRuntime {
     public func afterOwnedTool(context: ToolInvocationContext, committed: CommittedToolCallRef,
         eventFactory: (ThreadItem) -> CoreToolHookPostEvent,
         held: OwnedCanonicalThreadItemAliasCustody): Result<Unit> {
@@ -948,12 +948,17 @@ public class AgentCore <: AgentRunner {
         let contextFrame = if (request.initializeContext && !inputOnly159) { None<CoreContextFrame159> }
             else { match (catalog.reserveRegistryData180(16384)) {
                 case Some(payment) =>
-                    let frame = CoreContextFrame159(payment); control.retainCoreContextFrame159(frame); Some(frame)
+                    let frame = CoreContextFrame159(payment); control.retainCoreContextFrame159(frame)
+                    if ((toolHooks as ScopedCoreToolHookRuntime240).isNone()) { frame.holdUnknown159() }
+                    Some(frame)
                 case None => None<CoreContextFrame159> } }
         try {
             let result = startAcceptedRunFrame159(request, sink, continuation, restriction,
                 contextProjection, user, runtime, control, active, startRevalidationError, contextFrame)
             match (contextFrame) { case Some(frame) =>
+                // Scoped hook return ends only that callback's loan. Other
+                // Pipeline interfaces can still retain this private Context;
+                // typed failures keep their original conservative payment.
                 if (result.isOk()) { frame.returnedPrivateHelper159() } else { frame.holdUnknown159() }
                 case None => () }
             control.collectReturnedModelInputs159()
@@ -975,11 +980,16 @@ public class AgentCore <: AgentRunner {
         let contextFrame = match (catalog.reserveRegistryData180(16384)) {
             case Some(payment) =>
                 let frame = CoreContextFrame159(payment)
-                control.retainCoreContextFrame159(frame); Some(frame)
+                control.retainCoreContextFrame159(frame)
+                if ((toolHooks as ScopedCoreToolHookRuntime240).isNone()) { frame.holdUnknown159() }
+                Some(frame)
             case None => None<CoreContextFrame159> }
         try {
             let result = action(contextFrame)
             match (contextFrame) { case Some(frame) =>
+                // Scoped hook return ends only that callback's loan. Other
+                // Pipeline interfaces can still retain this private Context;
+                // typed failures keep their original conservative payment.
                 if (result.isOk()) { frame.returnedPrivateHelper159() } else { frame.holdUnknown159() }
                 case None => () }
             control.collectReturnedModelInputs159()
@@ -3604,7 +3614,7 @@ public class AgentCore <: AgentRunner {
             var owner = control.preparationInput(committed.canonicalItemId)
             if (owner.isNone()) {
                 if (!tools.hasPreparationRead(context, call)) { continue }
-                let hook = try { toolHooks.beforeTool(context, committed, call.arguments) }
+                let hook = try { coreBeforeToolHookScope240(toolHooks, context, committed, call.arguments) }
                     catch (_: Exception) { CoreToolHookDecision.Deny("PreToolUse handler failed; tool call denied") }
                 let input = match (hook) { case CoreToolHookDecision.Modify(value) => value; case _ => call.arguments }
                 match(tools.retainPreparationInput340(context,Some(OperationRootSource.Committed(committed)),
@@ -4595,7 +4605,7 @@ public class AgentCore <: AgentRunner {
         let guard: () -> Result<Unit> = { => context.cancellation.check() }
         let post = CoreOwnedPostToolFactory(work)
         let postDelivery = CoreOwnedCanonicalObserverDelivery(record, guard,
-            { held => hooks.afterOwnedTool(context, work.committed, { item => post.value(item) }, held) })
+            { held => coreAfterOwnedToolHookScope240(hooks, toolHooks, context, work.committed, { item => post.value(item) }, held) })
         control.retainCanonicalDelivery(postDelivery)
         // Keep old post-hook-before-event order. Typed ownership failure stops
         // the next compute; it never changes the already canonical receipt.
@@ -4912,7 +4922,7 @@ public class AgentCore <: AgentRunner {
             result: resultValue
         )
         try {
-            toolHooks.afterTool(context, outcome.committed, event)
+            coreAfterToolHookScope240(toolHooks, context, outcome.committed, event)
         } catch (_: Exception) {
             // Observer failure cannot alter a committed result or its receipt.
         }
