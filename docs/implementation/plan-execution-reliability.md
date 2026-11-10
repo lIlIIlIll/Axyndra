@@ -2491,3 +2491,106 @@ Markdown files, 39 workspace packages, 178 local dependency edges, and zero
 remaining baseline boundary violations. Pin, vendored contract, public package,
 and SDK compatibility checks pass. These static results do not replace the
 failed runtime, full Product, or release gates.
+
+
+## Scoped Core tool-hook inputs preserve opaque consumer debt
+
+Implementation `980f1dfd` adds the opt-in `ScopedCoreToolHookRuntime240` interface.
+Core creates and revokes a separate invocation view around each before, after,
+and owned-after hook. A reader that outlives its callback must retain its own
+paid Context consumer. Legacy hook runtimes keep their open input contract.
+Product selects a private adapter around the same `ProductCodexHookRuntime`;
+the public runtime keeps its existing inheritance and direct-call behavior.
+
+| Evidence | Executed scope | Actual result and boundary |
+| --- | --- | --- |
+| E1057 | Public Core callback, retained child, thrown hook, finite typed failure, and opaque CapabilityPolicy contracts | The open-callback comparison fails view revocation. The final safe complete Core contract passes in 49.80 seconds. These are DATA contracts, not Native or provider acceptance. |
+| E1058 | Actual opaque policy retains its original Context during a typed failure | A candidate that refunds every failed private Context fails this counterexample. It is withdrawn. The shipped code retains the original failed-Context debt even when the hook itself opts into scoped inputs. |
+| E1059 | Final safe test-profile preparation and original module gates | Runtime 42/42, Tool Runtime 72/72, Core 53/53, and complete Host 275/275 pass without skips. Product O2 compilation finishes in 791.29 seconds and enumerates 1,081 cases; the early-cancel control and 20 affected public hook cases pass. Full Product acceptance remains open. |
+| E1060 | Final safe normal production build, Coding package and actual installed-operator upgrade | All nine production stages pass. Coding assembly, clean-env, setup, cards and ask pass. Initial-prompt and Todo complete with new canonical facts under the original TUI limit. Fresh operator GC paths stay deferred. |
+| E1061 | Same-bank attachment working-lease candidate and exact safe-code complete Native Core comparison | Tool DATA checks pass 74/74, but the candidate fails the original Native gate earlier at invalid-path. It is entirely withdrawn. Safe code builds in 482.57 seconds and still fails existing-create capacity in 38.93 seconds. |
+| E1062 | Final static gates and generated dependency lock restoration | All 117 Python regressions and the complete architecture gate pass. Eleven generated locks are saved and restored to reviewed bytes. No dependency pin changes. |
+
+The E1058 counterexample uses a real public Core entry and a legacy
+`CapabilityPolicy` that retains its actual input and delegates to the original
+policy. A scoped hook return cannot acknowledge that policy, an owned canonical
+resolver, or an executor handoff consumer. The unsafe candidate revoked the
+retained policy input. The final code restores conservative `Result.Err` handling;
+both finite-provider comparisons retain the same 958,656-byte declared invoice.
+No reduction of that invoice is claimed. Public hook inheritance is unchanged.
+
+`scoped-core-hooks-green-safe-full` records the full aggregate and policy
+counterexample. `scoped-core-hooks-safe-units`,
+`scoped-core-hooks-safe-product-build`,
+`scoped-core-hooks-safe-product-affected`, and
+`scoped-core-hooks-safe-full-host` identify the final safe source hashes and
+artifacts. Test-profile preparation is build evidence only. It does not count
+as test execution. An earlier monolithic Product compilation timeout, a missing
+adapter import, and a contract working-directory setup failure remain recorded;
+none is reported as passing. The earlier HTTP/Pi collector crash is not rerun
+or counted among the 20 passing hook cases.
+
+An automatic approval review rejected an attempt to move unit cache artifacts
+in an older potentially shared target. That command did not execute. Subsequent
+builds use separate, uniquely created production, unit, and standalone targets
+owned by this continuation. Their old seed directories are read-only mounts;
+no older cache is moved or cleaned. Temporary storage is disk-backed. The
+fixed official SDK, StdX and dependency revisions remain unchanged.
+
+The E1060 normal App SHA-256 is
+`65303f56ff2990cf2d976aa1f61fdc20dd70d814246934413f2f3ba965d146a5`;
+Minimal is `13babf168524d41f03846591581c728690f73e45bf5d617968a7f071f80b9aa2`.
+The assembled Coding ELF is
+`848f0659f03574a8dfc613857460ec5337dcb8a54424c15ddd918b4efa873594`.
+`scoped-core-hooks-safe-normal-app-staged` and
+`scoped-core-hooks-safe-coding-entrypoints` retain build, package provenance,
+process custody and hashes. Earlier pre-withdrawal App and Minimal artifacts
+are ineligible for delivery.
+
+`scoped-core-hooks-safe-existing-installation-initial` completes the original
+three-size golden in 11.12 seconds on an actual existing operator installation.
+The readonly oracle finds exactly one new completed Run, one completed model
+Attempt, one committed ContextRead and one completed Receipt.
+`scoped-core-hooks-safe-existing-installation-todo` uses another actual existing
+installation whose Todo document does not yet exist. It passes in 10.16 seconds,
+adding two completed Runs, six committed Operations with six completed Receipts,
+and the first Todo document at revision 1. No Registry, grant or durable fact is
+copied, replaced or deleted. These are local fixture upgrade checks, not clean
+installation, external provider or full release proof. The earlier intermittent
+Todo timeout remains unexplained.
+
+E1061 tried deriving an attachment's unchanged 64 MiB working invoice from the
+same actual Native budget group, verified by original-bank reservation identity.
+The public DATA tests prove foreign-bank refusal, SUM plus the original lease
+header, and independent child lifetime. Those properties do not establish a
+useful production lifetime: the long-lived group's high-water charge survives
+the short attachment's acknowledgment. The original complete Native gate then
+fails at `e5-02-invalid-path`, earlier than the safe version. All four candidate
+files, the additive API, and its tests are restored byte for byte; the patch and
+failed results remain in `attachment-working-lease-withdrawal`. A first test
+compile using the reserved word `foreign` and a later assertion missing the
+original 1,024-byte lease header are retained as failed test-development records.
+Neither changes production accounting or earns acceptance credit.
+
+`scoped-core-hooks-safe-complete-core` verifies the restored safe code through
+the actual original Native and SQLite entry. It reaches
+`e5-02-existing-create`, then reports `input_attachment.capacity` instead of
+`application_plan.create_target_exists`. The 144 MiB bank, working invoice,
+canonical Source, samples, expected errors and original 900-second bounds are
+unchanged. This is an open implementation gap, not GC and not a passing gate.
+
+No schema, durable recovery version, dependency pin or Native protocol changes.
+The opt-in interface adds source API; existing consumers retain their behavior.
+Changed classes require a consistent rebuild, and old-binary ABI is unverified.
+Rollback must revert the Core hooks and Product adapter together and preserve
+all durable facts and unpaid consumer obligations. GC remains deferred;
+all other unmet requirements remain required. PR #49 remains Draft and
+acceptance is **incomplete**.
+
+
+E1062 records `scoped-core-hooks-safe-final-static`: 2,969 tracked paths,
+72 Markdown files, 39 workspace packages, 178 dependency edges and zero remaining
+baseline boundary violations. Dependency pins, SDK compatibility baselines,
+vendor contract and package inventory pass. The 11 saved generated locks and
+their diffs are retained in `scoped-core-hooks-safe-lock-restoration`. These
+checks do not supersede the failed runtime or outstanding release gates.

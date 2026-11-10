@@ -2123,3 +2123,33 @@ Fixed SDK/cache and independent Git-object restoration changes no version,
 source, original worktree, or authorization. Final static gates and 117 Python
 regressions pass. GC stays deferred; all other unmet requirements remain open.
 PR #49 remains Draft and acceptance remains **incomplete**.
+
+
+[E1057–E1062](implementation/plan-execution-reliability.md#scoped-core-tool-hook-inputs-preserve-opaque-consumer-debt)
+record implementation `980f1dfd`. Core enforces opt-in hook view lifetimes and
+Product uses a private adapter, preserving its public hook runtime contract.
+A real opaque-policy counterexample rejects an unsafe failed-Context refund;
+that refund and a separate attachment-budget-sharing candidate are withdrawn.
+No arbitrary callback return or terminal state becomes a DATA acknowledgment.
+
+The safe code passes the complete public Core aggregate, Runtime 42/42,
+Tool Runtime 72/72, Core 53/53 and Host 275/275. Full Product O2 compilation
+finishes in 791.29 seconds with 1,081 cases; early cancellation and 20 affected
+hook contracts pass. Full Product is still unaccepted. All nine normal production
+stages, Coding assembly, clean-env, setup, cards and ask pass. Actual existing
+operator upgrade checks complete initial-prompt and Todo with new canonical
+Runs, Attempts, ContextRead and Receipts; clean operator GC paths stay deferred.
+
+The exact safe code also runs the original complete Native Core/recovery gate:
+build passes in 482.57 seconds; execution fails in 38.93 seconds at
+`e5-02-existing-create` with `input_attachment.capacity`. No quota, invoice,
+Source, task witness, sample, assertion or time limit changes. The earlier
+intermittent Todo timeout and every other unmet requirement remain open.
+These focused passes do not establish full release or hosted CI acceptance.
+PR #49 remains Draft; the task is **not complete**.
+
+Final static validation passes all 117 Python regressions and the complete
+architecture gate over 2,969 tracked paths. Eleven generated lock files are
+saved with their exact diffs and restored to reviewed bytes; dependency pins
+and the original worktree are unchanged. Static validation does not clear the
+outstanding runtime, complete Product, provider, performance or release checks.
