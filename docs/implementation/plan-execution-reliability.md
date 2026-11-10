@@ -2594,3 +2594,151 @@ baseline boundary violations. Dependency pins, SDK compatibility baselines,
 vendor contract and package inventory pass. The 11 saved generated locks and
 their diffs are retained in `scoped-core-hooks-safe-lock-restoration`. These
 checks do not supersede the failed runtime or outstanding release gates.
+
+
+## Manual display retirement and coalesced PTY input evidence
+
+This continuation fixes three independent TUI defects without changing the
+original performance limits. The final code is `c195e14c`, comprising manual
+producer retirement `e85e4d2f`, coalesced input evidence and runner consumption
+`aaf17c7b`, and ANSI history batching `c195e14c`.
+
+| Evidence | Executed scope | Actual result and boundary |
+| --- | --- | --- |
+| E1063 | Original safe Coding package, release cold-start and headless/manual performance entries | Cold start 100/100 and headless 40/40 pass; document and composer print metrics but exit 1. These are failed lifecycle entries, not performance passes. |
+| E1064 | Manual producer implementation, public lifetime/refusal/error tests, complete vendored Core and Agent TUI units | Vendored Core 562/562 and Agent TUI 98/98 pass. The actual Coding document, composer and long-transcript entries exit zero. The first test compile rejects mutable local lambda captures; the corrected test uses its own observation object. |
+| E1065 | Original complete PTY gate and one unchanged-input search diagnostic | The gate times out on the second search sample. The diagnostic shows a completed Sessions frame containing the input together with later async messages, while the old trace retains only the last message label. Neither attempt is a PTY pass. |
+| E1066 | Bounded frame-input evidence and a same-binary runner-consumption control | All 15 samples execute. Eight parser, count, timeout and setup regressions pass. Draining the unchanged setup interval removes artificial active stalls on the same pre-batching binary; its resize still fails the original one-write limit with three writes. |
+| E1067 | Original one-write public regression, exact byte/cursor comparison, generic backend compatibility | Before the ANSI fix, complete Core is 563/564 with the one-write case failing. Afterward all 564 cases pass. Original output bytes, cursor behavior and generic backend semantics stay unchanged. |
+| E1068 | Final normal App, actual Coding package and complete original performance entries | TUI 98/98, packaging, clean-env, setup, cards, ask, 100 cold starts, 40 headless samples, all three manual journeys and all 15 PTY samples pass. This is not the whole baseline, activation, memory or cancellation performance matrix. |
+| E1069 | Final Coding on actual existing operator installations, including the installation with the earlier Todo timeout | Initial-prompt passes in 11.34 seconds with one new completed Run/Attempt/ContextRead. Todo passes in 9.62 seconds with two completed Runs, six completed canonical Receipts and first document revision 1. Original history and operator configuration remain unchanged. |
+| E1070 | Final source/static and lock restoration | All 125 Python regressions and the complete architecture gate pass over 2,974 tracked paths. Nine generated locks are saved and restored to reviewed bytes. No dependency pin changes. |
+
+E1063 is retained in `scoped-core-hooks-safe-tui-performance`. The document and
+composer loops previously bypassed the concrete headless producer and created
+Terminal/TestBackend objects outside its return protocol. Their numerical
+assertions passed, but the actual Product display lifetime could not retire.
+E1064 routes document, composer and long-transcript loops through that same
+concrete producer and `HeadlessCapturedFrameScope.withManualFrame240`.
+`HeadlessManualFrame240` uses the actual Terminal, command queue and AsyncRuntime.
+It prepays real raster copies before drawing, preserves dirty rectangles and
+executes commands through the existing App pipeline. It creates no unused
+snapshot archive. The facade revokes its update callback only after the complete
+manual helper returns; live or reentrant actions cannot acknowledge the scope.
+
+The existing enclosing scope clears the actual backend, retires the actual
+runtime and Terminal fields, and then allows the concrete producer's bound
+stdout flush and Screen return checks. No transport or external capture debt
+is inferred from internal retirement. The original 120+120 scroll events,
+120 typing events, 180 composer insertions, 90 deletions and every threshold
+remain. Public tests assert command delivery, payment refusal before rendering,
+primary error preservation, facade revocation and rejection of early retirement.
+
+`manual-headless-frame-core-fixed`, `manual-headless-frame-product`,
+`manual-headless-frame-coding` and `manual-headless-frame-performance` retain
+that first passing source and artifact scope. Later evidence below binds the
+final binary rather than treating the first package as final acceptance.
+
+E1065 is retained in `manual-headless-frame-pty` and
+`manual-headless-search-diagnostic`. The old gate expected a completed frame's
+single last-event label to be `key_down`. A frame can legitimately combine the
+actual key input and async completion. Its final label then loses the input's
+provenance. The actual diagnostic child remains alive at the deadline and is subsequently
+terminated by diagnostic cleanup; this is not classified as a GC crash. The first whole gate additionally requires
+owned-process cleanup. That cleanup is not a DATA acknowledgment or a pass.
+
+E1066 adds `frame_inputs`, bounded to five known input kinds, with actual counts
+and each kind's first receipt timestamp. It contains no user text or authority.
+Existing trace fields remain. The runner matches actual inputs in a completed
+frame and measures from the first relevant input, so later async activity cannot
+shorten the measured latency. Batched input waits require the actual matching
+input count; unrelated sequence increments cannot satisfy the wait. New-format
+empty or malformed evidence fails closed, while old trace records retain their
+original compatibility path. A missing second input still times out in the
+regression. Session setup waits for its actual Enter frame.
+
+The next full gate completes all samples but reports active stalls near the
+runner's 300 ms setup sleep. Its separate search diagnostic records 194.88 ms in
+actual output writing during the runner's 200 ms pause. The consumer had stopped
+reading the PTY, creating backpressure. `drain_for` preserves both original
+setup durations while continuing to consume output. A same-binary control in
+`coalesced-frame-input-drain-control` then has zero active stalls and still
+rejects resize's three writes. No stall is filtered or reclassified as passing.
+A fixed-SDK minimal FastNative probe returns `count=0 elapsed_ms=0` before input;
+that negative result does not prove the entire application or SDK correct.
+The first probe collector missed buffered stdout; the corrected complete output
+is in `stdin-read-probe-fixed`. No SDK component is built.
+
+E1067 fixes the remaining actual output behavior. The raw-history branch had
+separate cursor-move, line-clear and frame writes despite its batching contract.
+`Backend.drawHistoryFrame240` preserves the original generic operations by
+default. PresentationBackend forwards the same pending prefix; AnsiBackend
+appends origin, clear, history, viewport and cursor to its existing builder and
+makes one OutputStream write. No additional full history copy is constructed.
+`history-frame-batch-red` retains the failing original test;
+`history-frame-batch-green` passes the complete 564-case O2 vendored Core module.
+The Core module here is the vendored cjtui package, distinct from Agent Core's
+53-case module. ANSI bytes and cursor sequence match the old public operations
+exactly; the generic backend's output and snapshot also match.
+
+E1068 is bound to `c195e14c`. `history-frame-batch-product` passes all 98 TUI cases
+and the normal App build. App SHA-256 is
+`99c4bde94c56d1ba718c6d16361179b5a17e5b68982a49a3da936093634f1c16`.
+`history-frame-batch-coding` assembles the real Coding distribution and passes
+clean-env, setup, cards and ask. Coding ELF SHA-256 is
+`c00d1856b20955e730d30615db73e20f0f28bec65fd90244888f440da9a5c47c`.
+
+`history-frame-batch-performance` passes the original 100 cold starts and all
+40 headless runs, with p50 413.8 ms and p95 413.9 ms under the unchanged 500 ms
+limit. Document keeps 361 frames, composer keeps 270 measured frames, and the
+long transcript keeps 241 frames, all 502 expected entries and exact content.
+It materializes 93 documents under the original 200-document ceiling.
+`history-frame-batch-pty` passes all five 10,000-row scenarios with three samples
+each and 100 stream chunks. Every active-stall count is zero and resize makes
+one output write. The original `--timeout 12` setting, the existing 60-second stream-collection
+bound and every threshold remain.
+
+| Final PTY scenario | p95 | Original p95 limit |
+| --- | --- | --- |
+| First frame | 165.45 ms | 650 ms |
+| Key repeat | 13.09 ms | 30 ms |
+| Stream | 8.34 ms | 80 ms |
+| Search | 1.63 ms | 30 ms |
+| Resize | 11.95 ms | 80 ms |
+
+These are measured local fixture gates. They do not establish immutable-base
+performance comparison, external provider success, all platforms, memory limits,
+full Product or full release acceptance. The vendored upstream identity remains
+fixed; explicit local overlays, API inventory and content manifest record the
+additions. Existing backend implementations keep source behavior through the
+default method. Consistent consumer rebuilds are required; old-binary ABI is
+unverified. Rollback must revert the related TUI consumer, local overlay and
+API hashes together. No database, Source, quota, dependency pin or Native wire
+protocol changes. Agent Core capacity and all other unmet requirements remain
+open; GC is still deferred and PR #49 remains Draft.
+
+
+E1069 is retained in `history-frame-existing-initial` and
+`history-frame-existing-todo`, using the same final Coding ELF. Both run the
+original three-size golden under its original 45-second TUI limit. The initial
+oracle finds exactly one new completed Run, one completed model Attempt, one
+committed ContextRead and one completed Receipt. Todo reuses the actual
+previously configured operator installation that retained the earlier
+save-approval timeout. Before this run it has cancelled/completed historical
+Runs and no Todo document; those facts are preserved. This invocation adds two
+completed Runs, six committed Operations with six completed Receipts and the
+first Todo document at revision 1. All operator JSON hashes remain unchanged.
+No Registry or grant is copied, reimported or replaced. This successful upgrade
+run does not explain or erase the older intermittent timeout or prove a fresh
+operator installation. Confirmed fresh-operator GC paths remain deferred.
+
+E1070 records `history-frame-final-static`: all 125 selected Python regressions,
+including eight new input-evidence and setup tests, pass. The full architecture
+gate passes over 2,974 tracked paths, 72 Markdown files, 39 workspace packages
+and 178 dependency edges, with zero remaining baseline boundary violations.
+The local cjtui API inventory hash is
+`284bb45c3537d8e11e30e9d6a5cfce0d4f275415af4500bb358fae645ae94735`.
+Nine generated locks, their diffs and hashes are saved in
+`history-frame-final-lock-restoration` before exact restoration. Static checks
+and these TUI passes do not clear the remaining Agent Core, full Product,
+external provider, baseline or release requirements.

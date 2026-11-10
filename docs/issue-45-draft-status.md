@@ -2153,3 +2153,44 @@ architecture gate over 2,969 tracked paths. Eleven generated lock files are
 saved with their exact diffs and restored to reviewed bytes; dependency pins
 and the original worktree are unchanged. Static validation does not clear the
 outstanding runtime, complete Product, provider, performance or release checks.
+
+
+[E1063–E1070](implementation/plan-execution-reliability.md#manual-display-retirement-and-coalesced-pty-input-evidence)
+record three TUI fixes at `e85e4d2f`, `aaf17c7b` and `c195e14c`. Manual document,
+composer and transcript producers now use the actual paid Terminal/runtime
+return path. Bounded frame-input evidence preserves real keys across async
+coalescing and requires actual input counts. The benchmark consumes output
+during its unchanged setup intervals. ANSI history, viewport and cursor now
+use one OutputStream write with exact original bytes and generic behavior.
+
+Original failing exits, search timeout, induced-backpressure control and
+one-write RED are retained. Final vendored Core passes 564/564 and Agent TUI
+passes 98/98. The current normal App and actual Coding package pass build,
+assembly, clean-env, setup, cards and ask. The original 100 cold starts, all 40
+headless samples (p95 413.9 ms), document/composer/long-transcript journeys and
+all 15 original PTY samples pass. PTY active stalls are zero and resize meets
+the original one-write bound. No threshold, data size, sample or time limit is
+reduced. These results close the named manual-lifecycle and original PTY gates,
+not the complete baseline, activation, memory or cancellation comparison.
+
+The final Coding ELF is
+`c00d1856b20955e730d30615db73e20f0f28bec65fd90244888f440da9a5c47c`.
+Current UI changes do not change the separate Agent Core, Tool Runtime, Store
+or Host sources, whose earlier evidence retains its recorded scope. The exact
+current Core capacity failure remains required work, not GC. Full Product,
+remaining distribution/provider paths, baseline matrix and hosted release
+acceptance remain open. PR #49 stays Draft; the task is **not complete**.
+
+The same final Coding binary also passes the original initial-prompt golden
+in 11.34 seconds with one new completed Run/Attempt/ContextRead and Receipt.
+The actual existing operator installation with the earlier Todo timeout passes
+in 9.62 seconds with two completed Runs, six completed canonical Receipts and
+its first document at revision 1. Existing failed/cancelled facts and all
+operator JSON hashes are preserved. This does not explain the earlier
+intermittent failure or validate a fresh operator installation.
+
+Final static validation passes all 125 selected Python regressions and the
+complete architecture gate over 2,974 tracked paths. Nine generated locks are
+saved with their bytes, hashes and diffs, then restored to reviewed versions.
+No SDK build, external provider call, quota change, requirement reduction,
+Ready transition or Issue closure occurs in this continuation.
