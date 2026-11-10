@@ -1169,10 +1169,11 @@ public class ProductRuntime {
         cancellation!: domain.CancellationToken, selectedIds!: Array<String> = []): Result<RunContextUpdate> {
         let runtime = match (threadRuntimes.acquire(threadId, workspace.rootPath())) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-        let before = match (runtime.activeRun()) { case Some(value) => value
+        let before = match (runtime.activeRunControl159()) { case Some(value) => value
             case None => return pluginProcessError("context.update_stale", "target Thread has no active Run") }
-        if (before.runId.value != runId.value || before.epoch != epoch ||
-            contextReadProjectionDigest(before.contextSnapshot) != expectedDigest || cancellation.isCancelled()) {
+        let (_, _, beforeRun, beforeEpoch, _, beforeContext, _) = before
+        if (beforeRun.value != runId.value || beforeEpoch != epoch ||
+            contextReadProjectionDigest(beforeContext) != expectedDigest || cancellation.isCancelled()) {
             return pluginProcessError("context.update_stale", "context update does not match the active Run") }
         let binding = match (vnext.javascriptPlugins.contentProviderBinding(namespace, provider, false)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
@@ -1181,7 +1182,7 @@ public class ProductRuntime {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         let owner = namespace + "/context/" + provider
         let contributions = ArrayList<InvocationContextContribution>()
-        for (item in before.contextSnapshot.contributions() where item.owner != owner) { contributions.add(item) }
+        for (item in beforeContext.contributions() where item.owner != owner) { contributions.add(item) }
         for (item in replacement.contributions()) {
             if (item.owner != owner) { return pluginProcessError("context.update_owner_invalid", "content contribution has a foreign owner") }
             contributions.add(item)
@@ -1205,13 +1206,14 @@ public class ProductRuntime {
         cancellation!: domain.CancellationToken, selectedIds!: Array<String> = []): Result<ContextReadUpdate> {
         let runtime = match (threadRuntimes.acquire(threadId, workspace.rootPath())) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-        let before = match (runtime.activeRun()) { case Some(value) => value
+        let before = match (runtime.activeRunControl159()) { case Some(value) => value
             case None => return pluginProcessError("context.update_stale", "target Thread has no active Run") }
-        if (before.runId.value != runId.value || before.epoch != epoch ||
-            contextReadProjectionDigest(before.contextSnapshot) != expectedDigest || cancellation.isCancelled()) {
+        let (beforeThread, _, beforeRun, beforeEpoch, _, beforeContext, _) = before
+        if (beforeRun.value != runId.value || beforeEpoch != epoch ||
+            contextReadProjectionDigest(beforeContext) != expectedDigest || cancellation.isCancelled()) {
             return pluginProcessError("context.update_stale", "context resource request lost its active Run") }
-        let prepared = match (productContextProviderRead(vnext.javascriptPlugins, namespace, provider,
-            before, resources, query, cancellation, selectedIds, ids.nextInvocationId())) {
+        let prepared = match (productContextProviderReadInput159(vnext.javascriptPlugins, namespace, provider,
+            InitialContextPreparationInput159(beforeThread, beforeRun, beforeEpoch, beforeContext, cancellation), resources, query, cancellation, selectedIds, ids.nextInvocationId())) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         contextReadCore.queueContextReadUpdate(runId, epoch, expectedDigest, prepared.read, validity: prepared.validity)
     }
@@ -2961,12 +2963,13 @@ public class ProductRuntime {
             return pluginProcessError("application.approval_request_stale", "approval no longer belongs to this request") }
         let runtime = match (threadRuntimes.acquire(ThreadId(previous.sessionId.value), workspace.rootPath())) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-        let active = match (runtime.activeRun()) { case Some(value) => value
+        let active = match (runtime.activeRunControl159()) { case Some(value) => value
             case None => return pluginProcessError("application.approval_request_stale", "approval Run is no longer active") }
-        if (active.runId.value != previous.runId.value || active.threadId.value != previous.sessionId.value ||
-            active.state != RunState.WaitingApproval) {
+        let (activeThread, activeTurn, activeRun, activeEpoch, activeState, activeContext, _) = active
+        if (activeRun.value != previous.runId.value || activeThread.value != previous.sessionId.value ||
+            activeState != RunState.WaitingApproval) {
             return pluginProcessError("application.approval_request_stale", "approval Run is not waiting") }
-        let token = match (runtime.currentRunCancellationToken(previous.runId, active.epoch)) {
+        let token = match (runtime.currentRunCancellationToken(previous.runId, activeEpoch)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let continuation = match (runs.continuation(previous.runId)) {
@@ -2986,21 +2989,21 @@ public class ProductRuntime {
                 "AND r.finished_at_millis IS NULL AND t.active_turn_id=turn.id AND turn.active_run_id=r.id " +
                 "AND turn.state='active' AND o.id=? AND o.state='waiting_approval' AND c.phase='waiting_approval'",
                 [SqlParameter.Text(previous.runId.value), SqlParameter.Text(previous.sessionId.value),
-                    SqlParameter.Int64Value(active.epoch), SqlParameter.Text(approval.operationId.value)])
+                    SqlParameter.Int64Value(activeEpoch), SqlParameter.Text(approval.operationId.value)])
             if (rows.size != 1) { return pluginProcessError("application.approval_request_stale", "approval lost its durable owner") }
             let durable = decodeDurableRunContinuation(rows[0].required(0))
             let frozen = match (optionalRunRequestSnapshotFromDurableContinuation(durable)) { case Some(value) => value
                 case None => return pluginProcessError("application.approval_request_stale", "approval request projection is missing") }
-            if (durable.runId.value != previous.runId.value || durable.turnId.value != active.turnId.value ||
+            if (durable.runId.value != previous.runId.value || durable.turnId.value != activeTurn.value ||
                 durable.pendingOperationId.isNone() || durable.pendingOperationId.getOrThrow().value != approval.operationId.value ||
                 durable.pendingApprovalId.isNone() || durable.pendingApprovalId.getOrThrow().value != "legacy-approval-" + approval.operationId.value ||
                 canonicalAgentValue(frozen.field("skill_stack").getOrThrow()) != canonicalAgentValue(continuation.contextSnapshotPayload) ||
                 canonicalAgentValue(decodeStoredValue(rows[0].required(1))) != canonicalAgentValue(continuation.contextSnapshotPayload) ||
-                canonicalAgentValue(contextSnapshotValue(active.contextSnapshot)) != canonicalAgentValue(continuation.contextSnapshotPayload)) {
+                canonicalAgentValue(contextSnapshotValue(activeContext)) != canonicalAgentValue(continuation.contextSnapshotPayload)) {
                 return pluginProcessError("application.approval_request_stale", "approval context or epoch changed") }
         } catch (_: Exception) {
             return pluginProcessError("application.approval_request_stale", "approval durable binding is unavailable") }
-        match (runtime.currentRunCancellationToken(previous.runId, active.epoch)) {
+        match (runtime.currentRunCancellationToken(previous.runId, activeEpoch)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(current) => match (current.check()) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
