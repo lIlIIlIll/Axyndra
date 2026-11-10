@@ -7,6 +7,7 @@ import pathlib
 import json
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -161,6 +162,12 @@ def main() -> int:
             target = diagnostics / name
             target.mkdir(parents=True, exist_ok=True)
             (target / "workflow-operator.json").write_text(json.dumps(record, indent=2) + "\n")
+        native_initial_home = None
+        initial_before = set()
+        if args.workflow_package is not None and name == "initial-prompt":
+            from tui_workflow_operator import initial_run_ids
+            native_initial_home = pathlib.Path(environment["AXYNDRA_HOME"])
+            initial_before = initial_run_ids(native_initial_home)
         environment["AGENT_TUI_GOLDEN_TRACE"] = "1"
         emit_stage(name, "fixture_ready", started, 0, expected, "environment_ready", byte_count)
         process = subprocess.Popen(
@@ -217,6 +224,17 @@ def main() -> int:
             sys.stderr.write(stderr)
             sys.stderr.write(f"diagnostics: {target}\n")
             return 1
+        if native_initial_home is not None:
+            from tui_workflow_operator import verify_initial_completion
+            try:
+                evidence = verify_initial_completion(native_initial_home, initial_before)
+            except (ValueError, OSError, sqlite3.Error) as error:
+                target = save_diagnostics(diagnostics, name, process.pid, stdout, stderr, "execution_evidence_failed")
+                sys.stderr.write(f"initial prompt execution evidence failed: {error}; diagnostics: {target}\n")
+                return 1
+            target = diagnostics / name
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "native-initial-evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         emit_stage(name, "expected_state_reached", started, process.pid, expected, observed, byte_count)
         emit_stage(name, "scenario_completed", started, process.pid, expected, observed, byte_count)
     print(f"tui golden gate passed (3 sizes, {len(names)} semantic scenarios)")

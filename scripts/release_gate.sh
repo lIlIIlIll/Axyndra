@@ -105,6 +105,7 @@ fi
   > "$package_root/diagnostics/cjpm-version.txt" 2>&1
 bash scripts/architecture_gate.sh
 python3 scripts/tui_visual_showcase_test.py
+python3 scripts/tui_golden_evidence_test.py
 python3 scripts/vnext_contract_gate.py --sdk-root "$sdk_root"
 AXYNDRA_PACKAGE_TECHNICAL_ONLY=1 \
 AXYNDRA_SDK_ROOT="$sdk_root" \

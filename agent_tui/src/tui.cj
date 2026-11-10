@@ -7207,7 +7207,9 @@ class AgentScreen <: TerminalFrameProvider {
             return true
         }
         var matches: Int64 = 0
-        for (item in ui.cards where item.body.contains(initialPrompt)) {
+        // Count submissions in the user strip. A legitimate assistant reply
+        // can quote the prompt without submitting it a second time.
+        for (item in ui.cards where item.kind == UiCardKind.User && item.body.contains(initialPrompt)) {
             matches++
         }
         initialSubmitted && matches == 1
