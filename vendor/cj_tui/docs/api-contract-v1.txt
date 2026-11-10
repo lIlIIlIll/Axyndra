@@ -2448,3 +2448,10 @@ packages/terminal/src/terminal.cj:public func chunkCount(): Int64
 packages/terminal/src/terminal.cj:public class TerminalView <: Widget {
 packages/terminal/src/terminal.cj:public init(transcript: TerminalTranscript, block!: ?Block = None, search!: String = "")
 packages/terminal/src/terminal.cj:public func render(area: Rect, buffer: Buffer): Unit
+packages/core/src/headless_captured_frames.cj:public class HeadlessCapturedFrameScope {
+packages/core/src/headless_captured_frames.cj:public init(provider: TerminalFrameProvider)
+packages/core/src/headless_captured_frames.cj:public func withManualFrame240<T>(update: (Event) -> UpdateResult, body: (HeadlessManualFrame240) -> T, area!: Rect = Rect(0, 0, 100, 28)): T
+packages/core/src/headless_captured_frames.cj:public func retireInternalFrames(): Unit
+packages/core/src/headless_manual_frame240.cj:public class HeadlessManualFrame240 {
+packages/core/src/headless_manual_frame240.cj:public func draw(render: (Frame) -> Unit, dirtyRects!: ?DirtyRects = None): RenderMetrics
+packages/core/src/headless_manual_frame240.cj:public func update(event: Event): UpdateResult

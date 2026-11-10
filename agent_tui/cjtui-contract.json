@@ -3,7 +3,7 @@
   "repository": "https://github.com/lIlIIlIll/cjtui.git",
   "baseline_commit": "ab76bc1b39ed3a9261487beb71b4d1967accc2a2",
   "api_contract": "docs/api-contract-v1.txt",
-  "api_contract_sha256": "95b4cecce3d885b258b7874a4a05d8586f751af91e94b327b38edc1b41b2bd07",
+  "api_contract_sha256": "6670a5ded715e42b6c7246a6bb2dc19754a169e06fc4e63b751966fdb947f96f",
   "packages": {
     "core": "0.1.0",
     "markdown": "0.1.0",

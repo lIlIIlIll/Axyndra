@@ -31,6 +31,9 @@ class HeadlessDisplayProducer180 {
         options!: HeadlessRunOptions = HeadlessRunOptions()): HeadlessRunResult {
         AppTestRunner.runWithCaptureCustody(script, render, update, capturedFrames, options: options)
     }
+    func runManual240(body: (HeadlessManualFrame240) -> Int64): Int64 {
+        capturedFrames.withManualFrame240<Int64>({ event => screen.update(event) }, body)
+    }
     private func runWholePerformanceHelper180(): Int64 {
         runHeadlessPerformance(screen, producer180: Some(this))
     }

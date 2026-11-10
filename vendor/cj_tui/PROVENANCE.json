@@ -9,8 +9,8 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "4e6286973ac8827e4b0ea0d699bdf1167f43517ffe4509ea285f894fb6a0acc0",
-  "vendored_files": 78,
+  "vendored_manifest_sha256": "a9cbb95954e60d89fdb96d834bacb3e2deff292077d6039df7b2a41057b39b75",
+  "vendored_files": 80,
   "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
   "alignment_target": {
     "project": "oh-my-pi",
@@ -36,7 +36,10 @@
       "packages/core/tests/terminal_signal/check.py",
       "packages/core/tests/terminal_signal/native_guard_test.c",
       "packages/core/src/headless_owned_frames_test.cj",
-      "packages/core/src/headless_captured_frames.cj"
+      "packages/core/src/headless_captured_frames.cj",
+      "packages/core/src/headless_manual_frame240.cj",
+      "packages/core/src/headless_manual_frame240_test.cj",
+      "docs/api-contract-v1.txt"
     ],
     "contracts": [
       "primary presentation writes history to native terminal scrollback",
@@ -51,7 +54,8 @@
       "monotonic grapheme traversal and viewport-clipped cursor measurement preserve the complete Unicode document and byte cursor",
       "plain undecorated editor lines retain their original source span instead of rebuilding every grapheme",
       "captured headless scopes retire actual runner internals only; exported captures and concrete product output retain separate custody",
-      "headless bounded waits drive ordinary input/update/async completion and do not acknowledge retained consumers"
+      "headless bounded waits drive ordinary input/update/async completion and do not acknowledge retained consumers",
+      "manual noncapturing performance frames use actual Terminal and command runtime, preserve dirty rectangles, prepay rasters and revoke their facade before the enclosing scope retires internals"
     ],
     "consumer_files": [
       "agent_tui/src/tui.cj",

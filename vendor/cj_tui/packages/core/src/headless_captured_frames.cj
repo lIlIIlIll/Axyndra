@@ -26,6 +26,29 @@ public class HeadlessCapturedFrameScope {
         first = Some(frame); active++
         frame
     }
+    // Actual manual loops retain their original dirty rectangles and metrics.
+    // No unused snapshot archive is constructed. Commands use this exact
+    // runtime; backend, callable and Terminal fields retire with this scope.
+    public func withManualFrame240<T>(update: (Event) -> UpdateResult,
+        body: (HeadlessManualFrame240) -> T, area!: Rect = Rect(0, 0, 100, 28)): T {
+        prepareEntry(area)
+        let backend = TestBackend(area: area, captureSnapshots: false)
+        let terminal = Terminal(backend, renderMode: RenderMode.Diff)
+        let commands = ArrayList<Command>()
+        let runtime = AsyncRuntime()
+        let frame = register(terminal, backend, commands, runtime)
+        let manual = HeadlessManualFrame240(terminal, backend, this, commands, runtime, update)
+        var failed = false
+        try { body(manual) }
+        catch (error: Exception) { failed = true; throw error }
+        finally {
+            if (failed) {
+                // Keep the original failure. An unreturned facade leaves the
+                // scope active, so later cleanup cannot manufacture a receipt.
+                try { manual.returnBody240(); frameReturned(frame) } catch (_: Exception) { () }
+            } else { manual.returnBody240(); frameReturned(frame) }
+        }
+    }
     func frameReturned(frame: HeadlessCapturedFrame): Unit {
         if (frame.returned || active < 1) { throw Exception("display.headless_capture_frame_mismatch") }
         frame.returned = true; active--

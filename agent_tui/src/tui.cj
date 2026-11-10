@@ -302,8 +302,7 @@ public func runAgentTui(
     if (headless()) {
         if (headlessPerformance() && screen.wantsRetainedDisplayProducerRetirement()) {
             return HeadlessDisplayProducer180.run(screen, externalPort) }
-        if (screen.wantsRetainedDisplayProducerRetirement() && !headlessComposerPerformance() &&
-            !headlessDocumentPerformance() && !headlessLongPerformance()) {
+        if (screen.wantsRetainedDisplayProducerRetirement()) {
             return HeadlessDisplayProducer180.run(screen, externalPort, captured: true) }
         let result = runHeadless(screen)
         externalPort.close()

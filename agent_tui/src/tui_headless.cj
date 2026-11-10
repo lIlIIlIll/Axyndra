@@ -19,13 +19,13 @@ func headlessBuffersEqual(left: ?Buffer, right: ?Buffer): Bool {
 
 func runHeadless(screen: AgentScreen, producer180!: ?HeadlessDisplayProducer180 = None): Int64 {
     if (headlessComposerPerformance()) {
-        return runHeadlessComposerPerformance(screen)
+        return runHeadlessComposerPerformance(screen, producer180: producer180)
     }
     if (headlessDocumentPerformance()) {
-        return runHeadlessDocumentPerformance(screen)
+        return runHeadlessDocumentPerformance(screen, producer180: producer180)
     }
     if (headlessLongPerformance()) {
-        return runHeadlessLongPerformance(screen)
+        return runHeadlessLongPerformance(screen, producer180: producer180)
     }
     if (headlessPerformance()) {
         return runHeadlessPerformance(screen)
@@ -811,13 +811,23 @@ func runHeadlessPerformance(screen: AgentScreen, producer180!: ?HeadlessDisplayP
     0
 }
 
-func runHeadlessLongPerformance(screen: AgentScreen): Int64 {
+func runHeadlessLongPerformance(screen: AgentScreen, producer180!: ?HeadlessDisplayProducer180 = None): Int64 {
     if (!screen.selectivePaintDifferentialObserved()) {
-        println("tui selective/full differential failed")
+        writeHeadlessPerformanceLine180(producer180, "tui selective/full differential failed")
         return 1
     }
-    let backend = TestBackend(area: Rect(0, 0, 100, 28))
-    let terminal = Terminal(backend, renderMode: RenderMode.Diff)
+    match (producer180) {
+        case Some(actual) => actual.runManual240({ terminal => runHeadlessLongPerformanceFrame240(screen, terminal, producer180) })
+        case None =>
+            let scope = HeadlessCapturedFrameScope(screen)
+            try { scope.withManualFrame240<Int64>({ event => screen.update(event) },
+                { terminal => runHeadlessLongPerformanceFrame240(screen, terminal, producer180) }) }
+            finally { scope.retireInternalFrames() }
+    }
+}
+
+func runHeadlessLongPerformanceFrame240(screen: AgentScreen, terminal: HeadlessManualFrame240,
+    producer180: ?HeadlessDisplayProducer180): Int64 {
     var renderMillis: Int64 = 0
     var maximumRenderMillis: Int64 = 0
     var frames: Int64 = 0
@@ -827,7 +837,7 @@ func runHeadlessLongPerformance(screen: AgentScreen): Int64 {
     frames++
     for (direction in [MouseButton.WheelUp, MouseButton.WheelDown]) {
         for (_ in 0..120) {
-            let update = screen.update(Event.Mouse(MouseEvent(MouseKind.Scroll, direction, 40, 10)))
+            let update = terminal.update(Event.Mouse(MouseEvent(MouseKind.Scroll, direction, 40, 10)))
             if (!update.renderRequested) {
                 continue
             }
@@ -841,7 +851,7 @@ func runHeadlessLongPerformance(screen: AgentScreen): Int64 {
         }
     }
     let documentCalls = screen.transcriptDocumentCalls()
-    println(
+    writeHeadlessPerformanceLine180(producer180,
         "tui long transcript frames=${frames}" +
             " render=${renderMillis}ms max=${maximumRenderMillis}ms documents=${documentCalls}")
     let cardCount = longTranscriptPerformanceCards()
@@ -849,7 +859,7 @@ func runHeadlessLongPerformance(screen: AgentScreen): Int64 {
     let transcriptSize = screen.transcriptSize()
     let expectedFinalCount = screen.selectivePaintDifferentialExpectedFinalCount()
     let contentPreserved = screen.longTranscriptFixtureContentPreserved()
-    println(
+    writeHeadlessPerformanceLine180(producer180,
         "tui long transcript gates configured=${cardCount}" +
             " transcript_expected=${expectedFinalCount}" +
             " transcript_actual=${transcriptSize}" +
@@ -857,16 +867,26 @@ func runHeadlessLongPerformance(screen: AgentScreen): Int64 {
             " documents_expected<=${maximumDocuments}" +
             " documents_actual=${documentCalls}")
     if (transcriptSize != expectedFinalCount || !contentPreserved || documentCalls > maximumDocuments) {
-        println("headless cjtui long transcript journey failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui long transcript journey failed")
         return 1
     }
     0
 }
 
-func runHeadlessDocumentPerformance(screen: AgentScreen): Int64 {
+func runHeadlessDocumentPerformance(screen: AgentScreen, producer180!: ?HeadlessDisplayProducer180 = None): Int64 {
     screen.seedDocumentPerformance()
-    let backend = TestBackend(area: Rect(0, 0, 100, 28))
-    let terminal = Terminal(backend, renderMode: RenderMode.Diff)
+    match (producer180) {
+        case Some(actual) => actual.runManual240({ terminal => runHeadlessDocumentPerformanceFrame240(screen, terminal, producer180) })
+        case None =>
+            let scope = HeadlessCapturedFrameScope(screen)
+            try { scope.withManualFrame240<Int64>({ event => screen.update(event) },
+                { terminal => runHeadlessDocumentPerformanceFrame240(screen, terminal, producer180) }) }
+            finally { scope.retireInternalFrames() }
+    }
+}
+
+func runHeadlessDocumentPerformanceFrame240(screen: AgentScreen, terminal: HeadlessManualFrame240,
+    producer180: ?HeadlessDisplayProducer180): Int64 {
     var renderMillis: Int64 = 0
     var drawMillis: Int64 = 0
     var maximumRenderMillis: Int64 = 0
@@ -880,7 +900,7 @@ func runHeadlessDocumentPerformance(screen: AgentScreen): Int64 {
     frames++
     for (direction in [MouseButton.WheelDown, MouseButton.WheelUp]) {
         for (_ in 0..120) {
-            let update = screen.update(Event.Mouse(MouseEvent(MouseKind.Scroll, direction, 50, 14)))
+            let update = terminal.update(Event.Mouse(MouseEvent(MouseKind.Scroll, direction, 50, 14)))
             if (!update.renderRequested) {
                 continue
             }
@@ -894,7 +914,7 @@ func runHeadlessDocumentPerformance(screen: AgentScreen): Int64 {
     }
     let afterRoundTrip = screen.documentScrollPosition()
     for (_ in 0..120) {
-        let update = screen.update(Event.KeyDown(KeyEvent(KeyCode.Char(r'x'))))
+        let update = terminal.update(Event.KeyDown(KeyEvent(KeyCode.Char(r'x'))))
         let metrics = terminal.draw({frame => screen.render(frame)}, dirtyRects: update.dirtyRects)
         renderMillis += metrics.renderMillis
         typingRenderMillis += metrics.renderMillis
@@ -903,7 +923,7 @@ func runHeadlessDocumentPerformance(screen: AgentScreen): Int64 {
         frames++
     }
     let layouts = screen.documentLayoutCalls()
-    println(
+    writeHeadlessPerformanceLine180(producer180,
         "tui document performance frames=${frames}" +
             " render=${renderMillis}ms scroll=${scrollRenderMillis}ms typing=${typingRenderMillis}ms" +
             " draw=${drawMillis}ms max=${maximumRenderMillis}ms layouts=${layouts}")
@@ -911,16 +931,26 @@ func runHeadlessDocumentPerformance(screen: AgentScreen): Int64 {
     let averageTypingMillis = typingRenderMillis / 120
     if (afterRoundTrip != 0 || layouts >= 30 || averageRenderMillis > 25 || averageTypingMillis > 8 ||
         maximumRenderMillis > 250) {
-        println("headless cjtui document performance journey failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui document performance journey failed")
         return 1
     }
     0
 }
 
-func runHeadlessComposerPerformance(screen: AgentScreen): Int64 {
+func runHeadlessComposerPerformance(screen: AgentScreen, producer180!: ?HeadlessDisplayProducer180 = None): Int64 {
     screen.seedLongTranscriptPerformance()
-    let backend = TestBackend(area: Rect(0, 0, 100, 28))
-    let terminal = Terminal(backend, renderMode: RenderMode.Diff)
+    match (producer180) {
+        case Some(actual) => actual.runManual240({ terminal => runHeadlessComposerPerformanceFrame240(screen, terminal, producer180) })
+        case None =>
+            let scope = HeadlessCapturedFrameScope(screen)
+            try { scope.withManualFrame240<Int64>({ event => screen.update(event) },
+                { terminal => runHeadlessComposerPerformanceFrame240(screen, terminal, producer180) }) }
+            finally { scope.retireInternalFrames() }
+    }
+}
+
+func runHeadlessComposerPerformanceFrame240(screen: AgentScreen, terminal: HeadlessManualFrame240,
+    producer180: ?HeadlessDisplayProducer180): Int64 {
     var renderMillis: Int64 = 0
     var maximumRenderMillis: Int64 = 0
     var frames: Int64 = 0
@@ -931,7 +961,7 @@ func runHeadlessComposerPerformance(screen: AgentScreen): Int64 {
         } else {
             r'x'
         }
-        let update = screen.update(Event.KeyDown(KeyEvent(KeyCode.Char(rune))))
+        let update = terminal.update(Event.KeyDown(KeyEvent(KeyCode.Char(rune))))
         let metrics = terminal.draw({frame => screen.render(frame)}, dirtyRects: update.dirtyRects)
         renderMillis += metrics.renderMillis
         maximumRenderMillis = max(maximumRenderMillis, metrics.renderMillis)
@@ -939,18 +969,18 @@ func runHeadlessComposerPerformance(screen: AgentScreen): Int64 {
     }
     let sizeAfterTyping = screen.composerValueSize()
     for (_ in 0..90) {
-        let update = screen.update(Event.KeyDown(KeyEvent(KeyCode.Backspace)))
+        let update = terminal.update(Event.KeyDown(KeyEvent(KeyCode.Backspace)))
         let metrics = terminal.draw({frame => screen.render(frame)}, dirtyRects: update.dirtyRects)
         renderMillis += metrics.renderMillis
         maximumRenderMillis = max(maximumRenderMillis, metrics.renderMillis)
         frames++
     }
     let averageRenderMillis = renderMillis / max(1, frames)
-    println(
+    writeHeadlessPerformanceLine180(producer180,
         "tui composer performance frames=${frames} render=${renderMillis}ms" +
             " average=${averageRenderMillis}ms max=${maximumRenderMillis}ms size=${sizeAfterTyping}")
     if (sizeAfterTyping <= screen.composerValueSize() || averageRenderMillis > 12 || maximumRenderMillis > 80) {
-        println("headless cjtui composer performance journey failed")
+        writeHeadlessPerformanceLine180(producer180, "headless cjtui composer performance journey failed")
         return 1
     }
     0
