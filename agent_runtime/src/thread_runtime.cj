@@ -170,11 +170,14 @@ class OwnedActiveRun {
     let runId: RunId
     let epoch: Int64
     private var reservedViewLane159: ?ModelLane = None<ModelLane>
-    func reserveOutwardView159(): Unit {
-        if (reservedViewLane159.isNone()) {
-            reservedViewLane159 = Some(match (lane.forkOwnedLaneFrame159()) {
-                case Some(value) => value; case None => lane })
+    // Terminal settlement transfers the actual private lane to its result.
+    // Clearing this field is no refund or task/Source acknowledgment. The
+    // result keeps the same original metadata payment until its real return.
+    func detachTransferredLane159(expected: ModelLane): Unit {
+        if (laneData159.isNone() || !refEq(laneData159.getOrThrow(), expected)) {
+            throw IllegalStateException("terminal lane owner changed")
         }
+        laneData159 = None<ModelLane>
     }
     func reservedOutwardView159(): ModelLane { reservedViewLane159.getOrThrow() }
     func clearReservedOutwardView159(): Unit { reservedViewLane159 = None<ModelLane> }
@@ -182,15 +185,6 @@ class OwnedActiveRun {
     mut prop lane: ModelLane {
         get() { laneData159.getOrThrow() }
         set(value) { laneData159 = Some(value) }
-    }
-    // Only after this actual Runtime owner has detached from active and all
-    // outward snapshots already own independent shares. No Run state is ACK.
-    func returnLaneRoot159(): Unit {
-        let returned = clearLaneRootFrame159()
-        match (returned) { case Some(value) => value.returnOwnedLaneFrame159(); case None => () }
-    }
-    private func clearLaneRootFrame159(): ?ModelLane {
-        let value = laneData159; laneData159 = None<ModelLane>; value
     }
     var contextSnapshot: InvocationContextProjection
     var contextUpdate: ?RunContextUpdate = None
@@ -1775,8 +1769,7 @@ public class AgentThreadRuntime {
                 return runtimeConflict("runtime.run_stale", "Run cancellation identity or epoch is stale")
             }
             // No new payment refusal may first appear after durable terminal
-            // commit. A failed join/commit retains this same private reserve.
-            owned.reserveOutwardView159()
+            // commit. A failed join/commit retains this same paid private lane.
             let (beforeCancellation, _) = owned.lifecycle.machine.snapshot()
             if (beforeCancellation != RunState.Cancelling) {
                 match (transitionOwned(owned, RunState.Cancelling, reason: "cancel_requested")) {
@@ -1832,14 +1825,11 @@ public class AgentThreadRuntime {
             let _ = coordinator.recordRunTransition(
                 owned.turnId, owned.runId, owned.epoch, terminalProposal, finishedAtMillis
             )
-            let run = reservedActiveSnapshot159(owned)
             match (owned.contextUpdate) { case Some(update) => update.cancel(); case None => () }
             owned.contextUpdate = None
+            let run = terminalActiveSnapshot230(owned)
             active = None
             settling = false
-            // activeSnapshot constructed an independent paid lane above. The
-            // detached private owner contains no escaped reference to its lane.
-            owned.returnLaneRoot159()
             Result.Ok(RuntimeSettlement(thread, run, report, returnWitness113: Some(owned.lifecycle.scope)))
         } finally {
             lock.unlock()
@@ -1885,7 +1875,6 @@ public class AgentThreadRuntime {
                 }
                 case None => ()
             }
-            owned.reserveOutwardView159()
             settling = true
             lock.unlock()
             let report = try {
@@ -1936,14 +1925,11 @@ public class AgentThreadRuntime {
             let _ = coordinator.recordRunTransition(
                 owned.turnId, owned.runId, owned.epoch, terminalProposal, finishedAtMillis
             )
-            let run = reservedActiveSnapshot159(owned)
             match (owned.contextUpdate) { case Some(update) => update.cancel(); case None => () }
             owned.contextUpdate = None
+            let run = terminalActiveSnapshot230(owned)
             active = None
             settling = false
-            // activeSnapshot constructed an independent paid lane above. The
-            // detached private owner contains no escaped reference to its lane.
-            owned.returnLaneRoot159()
             Result.Ok(RuntimeSettlement(thread, run, report, returnWitness113: Some(owned.lifecycle.scope)))
         } finally {
             lock.unlock()
@@ -1968,6 +1954,19 @@ public class AgentThreadRuntime {
         // Keep the concrete reserve field until the complete paid carrier was
         // successfully registered; the surviving view now holds that lane.
         value.clearReservedOutwardView159()
+        owned.snapshot159()
+    }
+    private func terminalActiveSnapshot230(value: OwnedActiveRun): ActiveRunSnapshot {
+        let (state, sequence) = value.lifecycle.machine.snapshot()
+        let lane = value.lane
+        // The Runtime's original lane/header is already paid. Register the
+        // actual outward carrier before detaching its private owner field.
+        // No metadata fork is needed at an exhausted-bank failure boundary;
+        // earlier public snapshots still own their independent lane copies.
+        let owned = OwnedActiveRunFrame159(ActiveRunSnapshot(controlMetadataSnapshot().thread.id,
+            value.turnId, value.runId, value.epoch, lane, value.contextSnapshot,
+            state, sequence, executionLaneId: value.executionLaneId))
+        value.detachTransferredLane159(lane)
         owned.snapshot159()
     }
     private func activeIdentitySnapshot159(value: OwnedActiveRun): ActiveRunIdentitySnapshot159 {
