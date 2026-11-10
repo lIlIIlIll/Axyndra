@@ -9,8 +9,8 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "a9cbb95954e60d89fdb96d834bacb3e2deff292077d6039df7b2a41057b39b75",
-  "vendored_files": 80,
+  "vendored_manifest_sha256": "2d43a4580f81b7de712629c6f4d7f9be57f6527283c129a8bafba0906af6a601",
+  "vendored_files": 81,
   "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
   "alignment_target": {
     "project": "oh-my-pi",
@@ -39,7 +39,8 @@
       "packages/core/src/headless_captured_frames.cj",
       "packages/core/src/headless_manual_frame240.cj",
       "packages/core/src/headless_manual_frame240_test.cj",
-      "docs/api-contract-v1.txt"
+      "docs/api-contract-v1.txt",
+      "packages/core/src/history_frame_batch240_test.cj"
     ],
     "contracts": [
       "primary presentation writes history to native terminal scrollback",
@@ -55,7 +56,8 @@
       "plain undecorated editor lines retain their original source span instead of rebuilding every grapheme",
       "captured headless scopes retire actual runner internals only; exported captures and concrete product output retain separate custody",
       "headless bounded waits drive ordinary input/update/async completion and do not acknowledge retained consumers",
-      "manual noncapturing performance frames use actual Terminal and command runtime, preserve dirty rectangles, prepay rasters and revoke their facade before the enclosing scope retires internals"
+      "manual noncapturing performance frames use actual Terminal and command runtime, preserve dirty rectangles, prepay rasters and revoke their facade before the enclosing scope retires internals",
+      "ANSI history frame batching preserves the original byte order and cursor while issuing one OutputStream write; generic backends retain their original move/write/draw contract"
     ],
     "consumer_files": [
       "agent_tui/src/tui.cj",

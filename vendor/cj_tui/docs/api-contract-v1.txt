@@ -2455,3 +2455,6 @@ packages/core/src/headless_captured_frames.cj:public func retireInternalFrames()
 packages/core/src/headless_manual_frame240.cj:public class HeadlessManualFrame240 {
 packages/core/src/headless_manual_frame240.cj:public func draw(render: (Frame) -> Unit, dirtyRects!: ?DirtyRects = None): RenderMetrics
 packages/core/src/headless_manual_frame240.cj:public func update(event: Event): UpdateResult
+packages/core/src/terminal.cj:func drawHistoryFrame240(prefix: String, buffer: Buffer, cursor: ?Position, cursorWasVisible: Bool): Unit
+packages/core/src/terminal.cj:public func drawHistoryFrame240(prefix: String, buffer: Buffer, cursor: ?Position, cursorWasVisible: Bool): Unit
+packages/core/src/presentation_backend.cj:public func drawHistoryFrame240(prefix: String, buffer: Buffer, cursor: ?Position, cursorWasVisible: Bool): Unit

@@ -220,6 +220,10 @@ public class PresentationBackend <: Backend {
     public func drawWithPrefix(prefix: String, buffer: Buffer): Unit {
         delegate.drawWithPrefix(takeFramePrefix(prefix), buffer)
     }
+    public func drawHistoryFrame240(prefix: String, buffer: Buffer,
+        cursor: ?Position, cursorWasVisible: Bool): Unit {
+        delegate.drawHistoryFrame240(takeFramePrefix(prefix), buffer, cursor, cursorWasVisible)
+    }
     public func drawFrame(
         prefix: String,
         buffer: Buffer,

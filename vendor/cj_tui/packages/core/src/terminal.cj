@@ -149,6 +149,14 @@ public interface Backend {
         if (!prefix.isEmpty()) { write(prefix) }
         draw(buffer)
     }
+    // Preserve the original generic backend cursor operations. ANSI backends
+    // can batch the same bytes with history, viewport and cursor in one write.
+    func drawHistoryFrame240(prefix: String, buffer: Buffer,
+        cursor: ?Position, cursorWasVisible: Bool): Unit {
+        moveTo(buffer.area.x, buffer.area.y + max(0, buffer.area.height - 1))
+        write("${ESC}[2K")
+        drawFrame(prefix, buffer, cursor, cursorWasVisible)
+    }
     func drawFrame(
         prefix: String,
         buffer: Buffer,
@@ -401,9 +409,7 @@ public class Terminal {
             // one transport write so the terminal never observes a torn frame.
             // Start at the bottom-left so each CRLF advances through the
             // scroll region and every history line enters native scrollback.
-            backend.moveTo(area.x, area.y + max(0, area.height - 1))
-            backend.write("\u{1B}[2K")
-            backend.drawFrame(
+            backend.drawHistoryFrame240(
                 rawPrefix,
                 buffer,
                 frame.getCursor(),
@@ -1507,7 +1513,21 @@ public class AnsiBackend <: Backend {
         cursor: ?Position,
         cursorWasVisible: Bool
     ): Unit {
+        drawFrameBatch240(prefix, buffer, cursor, cursorWasVisible, None<Position>)
+    }
+
+    public func drawHistoryFrame240(prefix: String, buffer: Buffer,
+        cursor: ?Position, cursorWasVisible: Bool): Unit {
+        drawFrameBatch240(prefix, buffer, cursor, cursorWasVisible,
+            Some(Position(buffer.area.x, buffer.area.y + max(0, buffer.area.height - 1))))
+    }
+
+    private func drawFrameBatch240(prefix: String, buffer: Buffer,
+        cursor: ?Position, cursorWasVisible: Bool, origin: ?Position): Unit {
         let batch = StringBuilder()
+        match (origin) {
+            case Some(value) => batch.append("${ESC}[${value.y + 1};${value.x + 1}H${ESC}[2K")
+            case None => () }
         if (!prefix.isEmpty()) { batch.append(prefix) }
         var current = Style.default()
         for (y in buffer.area.y..buffer.area.bottom) {
