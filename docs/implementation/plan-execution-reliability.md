@@ -2145,3 +2145,171 @@ public contract baseline, dependency pins and shell syntax also pass. These
 static results do not replace the retained runtime failures. Complete Core capacity, broader performance, release and other
 previously recorded gaps remain open. PR #49 stays Draft and the task remains
 incomplete.
+
+
+### First Prepared export sites and a stronger initial-prompt oracle
+
+E1041 records `core-first-export-stacks/summary.json`. A temporary change logs
+only the first transition to unknown custody for each actual Prepared metadata
+owner, with function names and no argument or local values. The original full
+Core contract compiles in 482.74 seconds and fails in 58.72 seconds at the same
+`input_attachment.capacity` boundary. All modified source bytes are restored.
+The diagnostic ELF is not a production or acceptance artifact.
+
+There are 43 first transitions: 20 start at the legacy Host executor's plan
+getter; 23 start at Broker child-plan validation's call getter. Later calls are
+not mistaken for additional owners. This is a stack inventory, not a per-owner
+live ledger. Validation also calls catalog descriptor resolvers, so its private
+helper's return alone cannot prove that every callback alias has returned. No
+unknown hold, quota or payment is cleared on this evidence.
+
+E1042 corrects the initial-prompt golden's acceptance oracle. A separate readonly
+check of the actual fixture database confirms that the earlier debugger golden
+markers created no new Run, Operation, Receipt or model Attempt. Those markers
+are not successful model-execution evidence. The altered debugger launch is not
+usable to diagnose the normal timeout's cause; that cause remains UNKNOWN.
+
+When `--workflow-package` selects the actual Native initial-prompt fixture, the
+public golden gate now snapshots existing fixture Run IDs before invocation.
+After the ordinary UI checks, it additionally requires exactly one new completed
+Run, a completed model Attempt in that Run with no active Attempt, and completed
+canonical ContextRead Operations/Receipts. Maintenance DB rows and older Runs
+cannot substitute. The verifier reads the real store without creating execution
+facts or changing any production state. Evidence output contains only counts;
+all SQLite connections close explicitly. Existing process deadlines and golden
+assertions remain unchanged. The release gate also runs the regression suite.
+
+`native-initial-evidence/red.json` runs the public CLI rejection regression
+against `135fc1d1`: an empty Python candidate prints the correct UI marker and
+is incorrectly accepted. The current gate rejects it. Operator setup is mocked
+only in this validator regression, so it provides no Native or provider credit.
+Eight tests cover this CLI failure, absent/new/old Runs, another Run's model
+Attempt, running work, missing/failed Receipts, numeric success evidence and the
+maintenance/fixture database boundary. These fixture tests do not close the
+normal 45-second initial-prompt timeout or the complete release gap.
+
+
+### Terminal settlement and safe-cut copies under real capacity pressure
+
+E1043 replaces the terminal lane allocation in `AgentThreadRuntime.finish` and
+`cancel` with transfer of the same already-paid private lane to the outward
+result. The concrete result carrier is registered before the private field is
+detached. Earlier public snapshots retain their independent payments. Joining,
+cancellation, durable terminal CAS, context-update cancellation and actual
+consumer return keep their existing ordering and contracts. No terminal state,
+callback return or cleanup report becomes a DATA acknowledgment.
+
+`runtime-terminal-pressure-red` compiles the complete Runtime module and records
+both new public pressure tests failing at the original metadata-growth call.
+The tests use an actual owned lane, exhaust the actual allocation group and bank,
+reject a stale Run, and exercise Completed, Failed, RecoveryRequired and Cancelled
+settlements. The repaired module passes 39/39 in
+`runtime-terminal-pressure-final`. These ephemeral-sink tests supply no SQLite,
+Source or provider acceptance.
+
+E1044 fixes repeated decoded lane copies at a safe cut. The original public
+`previousLane()` and `nextLane()` still charge every escaping copy. A closed,
+serialized Unit-returning validator instead reuses the constructor's paid parse
+and validation scratch. It returns no graph and retains the original payment.
+The Store obtains one independently decoded, fully validated paid pair through
+`validatedModelLaneCopies232` and uses that same pair for its CAS encodings,
+continuation phase, context boundary and complete audit. All original validation
+rules, transaction fences, rollback, receipts and concrete SQL return remain.
+No allocation multiplier, bank capacity, Source, deadline or refund rule changes.
+
+`runtime-validation-scratch-red` records 41 passes and one failure: repeated
+closed validation increased the actual invoice. After the fix,
+`runtime-validation-scratch-green` passes 42/42 without skips. The new public
+regression also rejects a wrong Thread, verifies frozen-copy independence and
+confirms that public escaping getters still increase the retained invoice.
+
+`owned-store-lane-pressure-red` uses the actual SQLite adapter and public owned
+Runtime entry with all original 144 MiB bank capacity occupied by real live
+allocation groups. The old repeated getters fail the cut. The same full Store
+contract passes after the fix in `owned-store-lane-pressure-green`: build
+32.70 seconds, execution 614.34 seconds, within the original 900-second limits.
+The pressure case verifies the durable new lane, continuation and both complete
+old/new audit snapshots. The rest of the original Store contract also executes,
+including rejection fences, rollback, migrations and crash recovery.
+`runtime-sqlite-lane-integration-final` separately passes the complete original
+Thread Runtime/SQLite integration contract. The original complete Host isolation
+gate passes **275/275**, no skips, in `lane-copies-full-host`.
+
+The code is in `cbf871fd` and `ee6d5a29`; initial-prompt oracle and user-strip
+counting are in `0d592d61`. Existing public signatures and persisted codecs are
+unchanged. The new paid-pair function is additive; consumers are rebuilt together.
+Old-binary compatibility is unverified. Ordinary source rollback requires no
+schema migration and must retain the original accounting and failure evidence.
+
+### Initial prompt completes; remaining gate failures stay explicit
+
+E1045 records staged, uninstrumented production builds in
+`validation-scratch-normal-app-staged`,
+`lane-transaction-reuse-normal-app-staged` and
+`initial-prompt-user-strip-normal-app-staged`. The final source App SHA-256 is
+`cc9104ba6255dd29b018da8cdbeb10e6782de60c2b3e96c814489171b668abdb`.
+A later terminal-lane comment changes no executable behavior. Temporary Todo
+tracing restores every source byte and produces a separately labeled diagnostic
+ELF; that ELF is not substituted for the final normal artifact.
+
+The initial timeout included a real aggregate-capacity failure in the safe-cut
+copy path, followed by another lane allocation while settling the failure.
+The latter exception prevented paid failure publication and left the old
+approval visible. This diagnosis does not explain other historical timeouts.
+Removing only the terminal allocation, or only the first repeated Store copies,
+was insufficient; their failed intermediate runs remain recorded.
+
+`initial-prompt-user-strip-real-initial` passes the original three-size UI gate
+and its independent readonly canonical verifier: exactly one new completed Run,
+one completed model Attempt, one committed ContextRead Operation and one completed
+Receipt. A normal assistant response quotes the prompt; the original UI assertion
+counted that response as a second submission. It now counts matching User cards
+only and still requires exactly one submission. The canonical verifier continues
+to reject UI-marker-only output and old or unrelated execution facts.
+
+E1046 binds the real Coding package in `lane-copies-final-coding-release` to that
+normal App. Its packaged ELF SHA-256 is
+`0fb47ce2d99fbb30501394c28653b8ee0c94018d7528afee14a7972914d880af`.
+Assembly, clean-environment and setup checks pass. Cards, ask and the real Native
+initial-prompt scenario pass; the latter includes the strengthened completed
+Run/Attempt/ContextRead oracle and original 45-second process limit. This proves
+local fixture execution, not an external provider call.
+
+E1047 keeps the whole five-scenario Coding gate **failed**. Default loses its
+operator peer; its exact child has an existing SIGSEGV core with
+`MapleRuntime::GCTib::ForEachBitmapWord` and collector/root-walking frames.
+That occurrence belongs to the explicitly deferred GC work and is not retried.
+Todo times out after 45 seconds during save approval, leaving one completed and
+one cancelled Run, five committed Operations and no saved document. The failure
+is not attributed to GC without corresponding evidence.
+
+E1048 records a fresh-home diagnostic App control and one serial control of the
+same unmodified Coding package. The diagnostic returns four successful real
+approval calls. `packaged-todo-serial-control` then passes the original Todo
+journey in 37.40 seconds including actual operator setup: two completed Runs,
+six committed Operations, six completed Receipts, one document at revision 1 and
+no model Attempt. The earlier timeout is retained as an unresolved intermittent
+failure; neither this pass nor the diagnostic turns the failed whole gate green.
+
+The current complete Core/recovery entry still fails in
+`lane-copies-complete-core`: build 693.62 seconds, execution 66.26 seconds, then
+`input_attachment.capacity` instead of the required stale-file precondition
+conflict. Unknown Prepared/Catalog consumers are not refunded on that evidence.
+`lane-copies-product-focused` again reaches its original 900-second complete
+Product compilation limit and cleans its exact descendants; its two selected
+non-GC controls are not executed or counted as passing. No unchanged Native GC
+case is retried. The SDK/runtime is not rebuilt and no additional external model
+call is sent.
+
+Overall acceptance remains incomplete. Full Product, complete Core, intermittent
+Todo, broad performance, the previously recorded unknown/resource-limit cases
+and final release evidence remain open. GC stays explicitly deferred, not fixed.
+PR #49 remains Draft. The implementation matrix retains its earlier unmet
+requirements; these focused passes do not close or reduce them.
+
+The final tracked code and updated records pass 117 Python regressions and the
+full architecture gate in `lane-copies-final-static` (2,965 tracked paths,
+39 workspace packages, zero remaining boundary violations). Generated lock
+changes are preserved with their bytes, diffs and hashes in
+`lane-copies-lock-restoration`, then restored to the reviewed versions. These
+static passes do not replace any failed runtime or release gate.

@@ -2055,3 +2055,35 @@ canonical receipts. Initial prompt retains its 45-second timeout and remains
 unclassified. Final Product test compilation reaches its original 900-second
 limit; no new unit pass is claimed. All failure evidence remains recorded,
 GC stays deferred and PR #49 remains Draft.
+
+
+[E1041](implementation/plan-execution-reliability.md#first-prepared-export-sites-and-a-stronger-initial-prompt-oracle)
+locates 43 first unknown Prepared exports without treating repeated getters as
+new owners or authorizing refunds. Complete Core still fails its original
+capacity contract. E1042 rejects Native initial-prompt UI-only false passes by
+requiring this invocation's actual completed Run, model Attempt and canonical
+ContextRead Receipts. The public CLI regression fails on `135fc1d1` and passes
+after the fix; its mocked setup is not Native acceptance. Earlier debugger
+markers created no execution facts and supply no successful-run credit.
+Initial-prompt root cause stays UNKNOWN, GC stays deferred, and PR #49 remains
+Draft with the other recorded gaps open.
+
+
+[E1043–E1044](implementation/plan-execution-reliability.md#terminal-settlement-and-safe-cut-copies-under-real-capacity-pressure)
+record terminal transfer of the already-paid lane and reuse of one paid pair
+through the complete SQLite safe-cut transaction. Public pressure regressions
+fail before their fixes and pass afterward. Complete Runtime passes 42/42,
+complete Store and Runtime/SQLite integration contracts pass, and full Host
+passes 275/275. Quotas, Source, receipts, deadlines and actual DATA return stay
+unchanged; old-binary compatibility remains unverified.
+
+[E1045–E1048](implementation/plan-execution-reliability.md#initial-prompt-completes-remaining-gate-failures-stay-explicit)
+record the real initial-prompt UI and completed Run/Attempt/ContextRead success
+on the current normal App and Coding package. The complete Coding gate still
+fails: default has a matching collector-crash core, and Todo has a retained
+45-second save-approval timeout. A separate serial run of that same unmodified
+package completes Todo with two Runs and six canonical Receipts, but does not
+explain or erase the intermittent failure. Complete Core still fails capacity,
+and complete Product compilation again reaches 900 seconds before its selected
+controls execute. No additional provider call or SDK build is made. All prior
+unmet requirements remain open; GC stays deferred and PR #49 stays Draft.
