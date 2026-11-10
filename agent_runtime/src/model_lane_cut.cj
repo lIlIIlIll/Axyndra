@@ -2,12 +2,14 @@ package agent_runtime
 
 import agent_domain.*
 import std.collection.*
+import std.sync.*
 import yjson.*
 import yjson_support.*
 
 // Encoded immutable values prevent a caller from changing a lane after its CAS
 // was validated. These are ordinary data, not an executor or capability grant.
 public class RunModelLaneChange {
+    private let validationLock233 = Mutex()
     private var ownedCut159: ?OwnedModelLaneCut159 = None<OwnedModelLaneCut159>
     private let previousJson: String
     private let nextJson: String
@@ -77,7 +79,26 @@ public class RunModelLaneChange {
             case None => None }
     }
 
-    func clearOwnedCutLink159(): Unit { ownedCut159 = None<OwnedModelLaneCut159> }
+    func clearOwnedCutLink159(): Unit {
+        validationLock233.lock()
+        try { ownedCut159 = None<OwnedModelLaneCut159> }
+        finally { validationLock233.unlock() }
+    }
+
+    // The constructor prepaid and bounded one complete parse/validation working
+    // set before installing this immutable change. These closed helper frames
+    // reuse that scratch serially, retain its original payment, and return no
+    // graph. Escaping public copies still reserve their own cumulative invoice.
+    func validateFrozen233(threadId: ThreadId): Unit {
+        validationLock233.lock()
+        try { validateFrozenFrame233(threadId) }
+        finally { validationLock233.unlock() }
+    }
+    private func validateFrozenFrame233(threadId: ThreadId): Unit {
+        let before = modelLaneFromSnapshotValue(parseUnifiedJson(previousJson, maxBytes: 4194304))
+        let after = modelLaneFromSnapshotValue(parseUnifiedJson(nextJson, maxBytes: 4194304))
+        validateModelLaneCopiesFrame232(this, threadId, before, after)
+    }
 
     public func coreBoundary(): ?AgentValue { match (coreBoundaryJson) {
         case Some(value) => Some(parseUnifiedJson(value, maxBytes: 8388608)); case None => None } }
@@ -124,8 +145,22 @@ public func toolSetSnapshotContentDigest(snapshot: ToolSetSnapshot): String {
 }
 
 public func validateModelLaneChange(change: RunModelLaneChange, threadId: ThreadId): Unit {
+    change.validateFrozen233(threadId)
+}
+
+// These are the same independently decoded, prepaid copies returned by the
+// original public getters. Returning them lets a concrete consumer validate
+// and encode one pair instead of retaining a second redundant pair. No Source,
+// execution authority or implicit DATA acknowledgment is produced here.
+public func validatedModelLaneCopies232(change: RunModelLaneChange, threadId: ThreadId): (ModelLane, ModelLane) {
     let before = change.previousLane()
     let after = change.nextLane()
+    validateModelLaneCopiesFrame232(change, threadId, before, after)
+    (before, after)
+}
+
+private func validateModelLaneCopiesFrame232(change: RunModelLaneChange, threadId: ThreadId,
+    before: ModelLane, after: ModelLane): Unit {
     let snapshot = after.toolSet
     if (change.nextContext().isSome()) {
         if (canonicalAgentValue(modelLaneSnapshotValue(before)) != canonicalAgentValue(modelLaneSnapshotValue(after)) ||

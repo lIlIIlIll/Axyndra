@@ -5,6 +5,7 @@ import agent_ports.*
 import agent_runtime.*
 import agent_store.*
 import std.fs.*
+import std.collection.*
 import yjson.*
 import yjson_support.*
 
@@ -80,6 +81,7 @@ class ModelLaneCutFixture {
 }
 
 func modelLaneSafeCutContracts(): Unit {
+    ownedModelLaneSafeCutPressure234()
     modelLaneSafeCutPersistenceContract()
     modelLaneSafeCutRollbackContract()
     modelLaneSafeCutDebtContract()
@@ -229,4 +231,72 @@ func modelLaneSafeCutFenceContract(scenario: String): Unit {
             fixture.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='model_lane_safe_cut'") == 0,
             "safe cut rejects wrong Run, epoch, scope, durable lane, unfinished call or non-running state: " + scenario)
     } finally { fixture.close() }
+}
+
+// Real SQLite transaction, public owned Runtime entry and unchanged production
+// 144 MiB bank / 16 MiB allocation floor. Other actual live reservations occupy
+// the remaining groups; no fabricated SQL consumption receipt is supplied.
+func ownedLaneCutProducer234(owner: OwnedToolSetSnapshot159, thread: ThreadId, version: String): Unit {
+    let schema = objectValue([])
+    owner.installSnapshot159(ToolSetSnapshot("owned-cut-" + version,
+        [ToolSnapshotEntry("fixture.read", String.fromUtf8(Array<Byte>(4096, repeat: b'x')), schema, version, [],
+            implementationFingerprint: "fixture-" + version,
+            schemaDigest: modelPolicySha256Text(canonicalAgentValue(schema)))], threadId: Some(thread)))
+}
+func ownedLaneCutShare234(root: LogicalJsonOwnerReservation, thread: ThreadId,
+    version: String): SharedToolSetSnapshot159 {
+    let payment = root.deriveRetainedLease(); payment.ensureRetainedPeak(131072)
+    let producer = OwnedToolSetSnapshot159(payment)
+    ownedLaneCutProducer234(producer, thread, version); producer.returnedSnapshotProducer159()
+    producer.transferSharedSnapshot159()
+}
+func ownedModelLaneSafeCutPressure234(): Unit {
+    let directory = Directory.createTemp("/tmp").toString()
+    let database = SqliteDatabase(directory + "/owned-cut.db")
+    let bank = LogicalJsonOwnerBudget()
+    let root = bank.acquire(131072)
+    let enclosure = ArrayList<LogicalJsonOwnerReservation>()
+    for (_ in 0..8) { enclosure.add(bank.acquire(1)) }
+    let thread = ThreadId("owned-cut-thread"); let run = RunId("owned-cut-run")
+    let first = ownedLaneCutShare234(root, thread, "first")
+    let second = ownedLaneCutShare234(root, thread, "second")
+    let lane = modelLaneWithSharedToolSet159(ModelLaneRole.Main, "provider", "model", "responses",
+        ModelLaneCapabilitiesSnapshot(), 1000, 100, 20, "estimator", "retry", "cache", first, "system")
+    let sink = SqliteThreadCommitSink(database)
+    let runtime = AgentThreadRuntime(ThreadCoordinator(sink.createThread(thread, "workspace"), sink),
+        ContextProjector("owned-cut", StoreEstimator()), { => 20 })
+    let initial = runtime.startTurn(SemanticTurnId("owned-cut-turn"), run, ItemId("owned-cut-user"),
+        ThreadItemContent.UserMessage(textMessageParts("refresh")), lane,
+        InvocationContextProjection(), createdAtMillis: 1).value().getOrThrow()
+    let pressure = root.deriveRetainedLease()
+    var updated: ?ActiveRunSnapshot = None<ActiveRunSnapshot>
+    try {
+        let measured = root.retainedCustodyUsage113()
+        pressure.ensureRetainedPeak(measured[1] - measured[0] - 3145728)
+        expect(bank.usage()[1] == bank.capacity(), "actual live groups fill the unchanged original bank")
+        let result = runtime.replaceOwnedToolSetAtSafeCut159(run, initial.epoch, initial.lane, second)
+        expect(result.isOk(), "one complete paid lane pair must support the real safe-cut transaction under pressure")
+        updated = Some(result.value().getOrThrow())
+        expect(updated.getOrThrow().lane.toolSet.id == "owned-cut-second" &&
+            modelLaneFromSnapshotValue(decodeStoredValue(database.query(
+                "SELECT lane_snapshot FROM runs WHERE id='owned-cut-run'")[0].required(0))).toolSet.id == "owned-cut-second" &&
+            database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='model_lane_safe_cut'") == 1,
+            "the same actual SQL commit persists replacement lane and complete audit under pressure")
+        let audit = decodeStoredValue(database.query("SELECT payload FROM audit_events WHERE kind='model_lane_safe_cut'")[0].required(0))
+        expect(modelLaneFromSnapshotValue(audit.field("previous").getOrThrow()).toolSet.id == "owned-cut-first" &&
+            modelLaneFromSnapshotValue(audit.field("next").getOrThrow()).toolSet.id == "owned-cut-second",
+            "audit preserves both original complete immutable lane versions")
+        let current = SqliteSemanticStore(database).continuation(run).value().getOrThrow()
+        let compiling = match (current.phase) { case RunExecutionPhase.ContextCompiling(_) => true; case _ => false }
+        expect(compiling,
+            "safe cut retains the canonical context compilation continuation")
+    } finally {
+        pressure.close()
+        let terminal = runtime.finish(RunState.Failed, 1000)
+        match (terminal) { case Result.Ok(value) => value.run.returnOwnedLaneView159(); case Result.Err(_) => () }
+        match (updated) { case Some(value) => value.returnOwnedLaneView159(); case None => () }
+        initial.returnOwnedLaneView159(); lane.returnOwnedLaneFrame159(); first.close159(); second.close159()
+        root.close(); for (value in enclosure) { value.close() }
+        database.close(); remove(directory, recursive: true)
+    }
 }

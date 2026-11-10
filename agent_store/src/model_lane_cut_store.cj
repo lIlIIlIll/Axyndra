@@ -14,9 +14,9 @@ func commitModelLaneSafeCut(transaction: SqliteTransaction, transition: ThreadTr
     let before = transition.before
     let run = before.activeRunId.getOrThrow()
     let turn = before.thread.activeTurnId.getOrThrow()
-    validateModelLaneChange(change, before.thread.id)
-    let previous = encodeStoredValue(modelLaneSnapshotValue(change.previousLane()))
-    let next = encodeStoredValue(modelLaneSnapshotValue(change.nextLane()))
+    let (previousLane, nextLane) = validatedModelLaneCopies232(change, before.thread.id)
+    let previous = encodeStoredValue(modelLaneSnapshotValue(previousLane))
+    let next = encodeStoredValue(modelLaneSnapshotValue(nextLane))
     let ownership = transaction.query("SELECT r.lane_snapshot,r.skill_snapshot FROM runs r " +
         "JOIN turns turn ON turn.id=r.turn_id JOIN threads t ON t.id=r.thread_id " +
         "JOIN items initiator ON initiator.id=turn.user_item_id " +
@@ -153,8 +153,8 @@ func commitModelLaneSafeCut(transaction: SqliteTransaction, transition: ThreadTr
         current.runId, current.laneId, current.turnId, current.stepOrdinal,
         RunExecutionPhase.ContextCompiling(DurablePhaseState(objectValue([
             ValueField("reason", textValue(if (contextChange) { "context_snapshot_changed" } else { "tool_catalog_changed" })),
-            ValueField("previous_tool_set_id", textValue(change.previousLane().toolSet.id)),
-            ValueField("tool_set_id", textValue(change.nextLane().toolSet.id))]))),
+            ValueField("previous_tool_set_id", textValue(previousLane.toolSet.id)),
+            ValueField("tool_set_id", textValue(nextLane.toolSet.id))]))),
         composition.id, ModelLaneSnapshotId("model-lane-" + run.value + "-" + suffix),
         // Child Runs, owned tasks, deferred contexts and unclaimed inputs are
         // still obligations of this same Run, never erased by a directory cut.
@@ -180,7 +180,7 @@ func commitModelLaneSafeCut(transaction: SqliteTransaction, transition: ThreadTr
     match (change.coreBoundary()) { case Some(data) =>
         continuation = bindCoreContextBoundaryAtCut(transaction, continuation, data, before.thread.id,
             before.activeEpoch, if (contextChange) { change.nextContext().getOrThrow() } else {
-                contextSnapshotFromValue(decodeStoredValue(ownership[0].required(1))) }, change.nextLane())
+                contextSnapshotFromValue(decodeStoredValue(ownership[0].required(1))) }, nextLane)
         case None => () }
     // Check the complete new durable value before publication; transaction
     // rollback preserves the old version if the existing codec rejects it.
@@ -204,8 +204,8 @@ func commitModelLaneSafeCut(transaction: SqliteTransaction, transition: ThreadTr
                 ValueField("next_context_digest", if (contextChange) { textValue(contextReadProjectionDigest(change.nextContext().getOrThrow())) } else { nullValue() }),
                 ValueField("previous_continuation_revision", textValue(rows[0].required(0))),
                 ValueField("previous_continuation_digest", textValue(current.digest)),
-                ValueField("previous", if (contextChange) { nullValue() } else { modelLaneSnapshotValue(change.previousLane()) }),
-                ValueField("next", if (contextChange) { nullValue() } else { modelLaneSnapshotValue(change.nextLane()) }),
+                ValueField("previous", if (contextChange) { nullValue() } else { modelLaneSnapshotValue(previousLane) }),
+                ValueField("next", if (contextChange) { nullValue() } else { modelLaneSnapshotValue(nextLane) }),
                 ValueField("previous_composition", textValue(current.compositionSnapshotId.value)),
                 ValueField("composition", textValue(composition.id.value)),
                 ValueField("epoch", integerValue(before.activeEpoch)),
