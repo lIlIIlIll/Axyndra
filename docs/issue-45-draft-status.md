@@ -2087,3 +2087,13 @@ explain or erase the intermittent failure. Complete Core still fails capacity,
 and complete Product compilation again reaches 900 seconds before its selected
 controls execute. No additional provider call or SDK build is made. All prior
 unmet requirements remain open; GC stays deferred and PR #49 stays Draft.
+
+
+[E1049](implementation/plan-execution-reliability.md#further-catalog-lifetime-diagnostics-do-not-authorize-retirement)
+retains the next Core lifetime diagnostics. The readonly classification candidate
+still fails the original capacity assertion and is withdrawn, not shipped. No
+Core-scope first-held transition occurs in that diagnostic run; eight Catalog
+first raw-alias transitions are observed separately. Neither inventory proves
+consumer retirement or authorizes refunds. All diagnostic source bytes are
+restored. Core capacity remains an implementation gap, while the separate
+900-second Product compilation limit still prevents current full acceptance.

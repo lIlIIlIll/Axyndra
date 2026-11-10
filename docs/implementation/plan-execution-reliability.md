@@ -2313,3 +2313,38 @@ full architecture gate in `lane-copies-final-static` (2,965 tracked paths,
 changes are preserved with their bytes, diffs and hashes in
 `lane-copies-lock-restoration`, then restored to the reviewed versions. These
 static passes do not replace any failed runtime or release gate.
+
+
+### Further Catalog lifetime diagnostics do not authorize retirement
+
+E1049 records three additional investigations after the published lane fixes.
+`readonly-delegation-closed-core` tests a narrow classification candidate for the
+existing owned readonly canonicalizer and its pure metadata projection. The
+original complete Core still fails at the same stale-file-precondition capacity
+assertion (build 410.13 seconds, execution 52.92 seconds). The candidate is
+withdrawn byte for byte and **not shipped**; no fee reduction or acceptance is
+established by that attempt.
+
+`catalog-first-hold-stacks` instruments every original assignment to the Core
+Catalog scope's `held` flag. The complete diagnostic build passes in 500.83
+seconds; execution fails at capacity in 50.83 seconds. There are no first-held
+transitions in this run. This narrows the investigation; it does not establish
+that all scopes returned or permit any payment to close.
+
+`catalog-first-alias-stacks` instead records each Catalog object's first raw
+alias transition, preserving both original raw-alias assignments. Its build
+passes in 466.44 seconds and the original Core execution fails in 57.00 seconds.
+Eight first transitions are observed: seven start at `ToolCatalog.find` through
+Pipeline preparation in the isolated-plugin contract, and one at actual revoke
+during Native Program import. Only function names are recorded. These are first
+transition inventories, not per-owner payment or live-alias ledgers; they cannot
+be equated with the 31 earlier snapshot-payment entries or used as refund proof.
+
+Both diagnostic source files and the withdrawn candidate match the published
+source byte for byte afterward, with hashes in `catalog-diagnostic-restoration`.
+Their diagnostic ELFs remain distinct from the normal Coding artifact and are
+not used for release acceptance. Original samples, assertions, error behavior,
+144 MiB capacity, task witnesses and unknown-consumer obligations remain.
+The next Core investigation must connect actual retained snapshot payments to
+their concrete enclosing consumers and complete return witnesses. The failed
+candidate and these inventories do not close that requirement.
