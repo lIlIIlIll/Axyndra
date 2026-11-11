@@ -40,6 +40,27 @@ def _cell(raw):
     return dict(state=state, parent=parent, group=group, session=session, start=start)
 
 
+def _identity_diagnostic(raw):
+    # Diagnostic only: never classify ancestry/return or relax _cell. Task
+    # names, raw bytes, arguments and environment are deliberately omitted.
+    diagnostic = dict(tail_readable=False, raw_bytes=len(raw) if isinstance(raw, bytes) else None)
+    try:
+        cells = _stat_cells(raw)
+    except (ValueError, IndexError, UnicodeError, TypeError, AttributeError):
+        return diagnostic
+    diagnostic.update(tail_readable=True, field_count=len(cells))
+    if cells and len(cells[0]) == 1 and cells[0].isascii() and cells[0].isalpha():
+        diagnostic['state'] = cells[0]
+    for index, name in ((1, 'parent'), (2, 'group'), (3, 'session'), (6, 'flags'), (19, 'start')):
+        if index >= len(cells):
+            continue
+        text = cells[index]
+        decimal = text.isdecimal() or (text.startswith('-') and text[1:].isdecimal())
+        if text.isascii() and len(text) <= 32 and decimal:
+            diagnostic[name] = text if name == 'start' else int(text)
+    return diagnostic
+
+
 def processes():
     found, uncertain = {}, []
     try:
@@ -50,13 +71,16 @@ def processes():
         if not path.name.isdigit():
             continue
         pid = int(path.name)
+        raw = None
         try:
-            found[pid] = _cell((path / 'stat').read_bytes())
+            raw = (path / 'stat').read_bytes()
+            found[pid] = _cell(raw)
         except OSError as error:
             if error.errno not in (errno.ENOENT, errno.ESRCH):
                 uncertain.append(dict(pid=pid, reason='process_stat_unobservable', errno=error.errno))
         except (ValueError, IndexError, UnicodeError):
-            uncertain.append(dict(pid=pid, reason='process_stat_malformed', errno=None))
+            uncertain.append(dict(pid=pid, reason='process_stat_malformed', errno=None,
+                identity_diagnostic=_identity_diagnostic(raw)))
     return found, uncertain
 
 

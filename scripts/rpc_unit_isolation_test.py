@@ -1,4 +1,5 @@
 """Negative controls for exact qualified-case results from the real SDK format."""
+import json
 import unittest
 from rpc_unit_isolation import qualified_filtered_result
 
@@ -217,6 +218,34 @@ class RpcUnobservableProcessTests(unittest.TestCase):
                 self.assertTrue(actual['unknown'])
                 self.assertEqual(actual['unknown'][0]['pid'], 20)
                 self.assertIn(20, owned)
+
+    def test_malformed_identity_records_numeric_fields_without_opaque_task_name(self):
+        raw = bytes.fromhex(RpcDeadIdentity208Tests.observed_hex)
+        prefix = raw[:raw.index(b'(') + 1]
+        tail = raw[raw.rindex(b')'):].replace(b' X ', b' Z ')
+        raw = prefix + b'private-task-\xff' + tail
+        with patch.object(process_watch, 'Path', return_value=self.Proc(self.Entry(raw))):
+            found, uncertain = process_watch.processes()
+        self.assertEqual(found, {})
+        self.assertEqual(uncertain[0]['reason'], 'process_stat_malformed')
+        diagnostic = uncertain[0]['identity_diagnostic']
+        self.assertEqual(diagnostic['state'], 'Z')
+        self.assertEqual(diagnostic['parent'], 0)
+        self.assertEqual(diagnostic['group'], -1)
+        self.assertEqual(diagnostic['session'], -1)
+        self.assertEqual(diagnostic['start'], '28749')
+        self.assertNotIn('private-task', json.dumps(uncertain))
+        self.assertNotIn('comm', diagnostic)
+
+    def test_unparseable_stat_stays_unknown_and_diagnostic_never_copies_raw_text(self):
+        for raw in [b'private-task-without-closing-parenthesis', b'20 (private-task) R \xff']:
+            with self.subTest(raw_kind=raw.rfind(b')')):
+                with patch.object(process_watch, 'Path', return_value=self.Proc(self.Entry(raw))):
+                    found, uncertain = process_watch.processes()
+                self.assertEqual(found, {})
+                self.assertEqual(uncertain[0]['reason'], 'process_stat_malformed')
+                self.assertFalse(uncertain[0]['identity_diagnostic']['tail_readable'])
+                self.assertNotIn('private-task', json.dumps(uncertain))
 
     def test_real_missing_identity_is_distinct_from_an_unreadable_one(self):
         owned = {20: dict(state='S', parent=1, group=20, session=20, start='123')}
