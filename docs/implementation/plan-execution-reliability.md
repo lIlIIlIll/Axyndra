@@ -2955,3 +2955,57 @@ the fault fixture to own cleanup only after its directory creation succeeds,
 the final build passes in 398.58 seconds. The original Core runs 47.81 seconds,
 passes the exact artifact-failure checks and again fails at the later
 model-selected Program with capacity. No new quota or return rule is used.
+
+
+## Product inventory and serialized Pi cancellation
+
+The checks below retain the fixed official November 4 SDK and original quotas,
+assertions and deadlines. Evidence names refer to private run directories.
+The complete Product gate remains failed. A diagnostic continuation can expose
+independent defects after a crash, but cannot turn that crash into acceptance.
+
+| Evidence | Executed scope | Actual result |
+| --- | --- | --- |
+| E1108 | `attachment-metadata-after-settlement-reapply`; `attachment-metadata-after-settlement-complete-core` | The previously approved same-Prepared metadata/output-ACK candidate is retested after `01e8005d`. Build 390.06 s; original Core 47.36 s, failing at later capacity. All nine candidate sources restore exactly. No candidate is shipped. |
+| E1109 | `paid-policy-name-copy-tool-rerun`; `paid-policy-name-copy-full-tool`; `paid-policy-name-copy-complete-core`; `paid-policy-name-copy-withdrawal` | Five focused Tool cases and all 74 Tool cases pass. A paid scalar-name candidate builds in 615.74 s, then original Core fails later capacity after 45.29 s. Its new consumer API and all four candidate sources are withdrawn. Raw getters and high-water accounting remain unchanged. |
+| E1110 | `combined-metadata-name-candidate`; `combined-metadata-name-complete-core` | The combined thirteen-file candidate builds in 398.32 s; original Core fails later capacity after 51.67 s. Every candidate source restores. No quota, legacy getter or consumer-return rule changes. |
+| E1111 | `retained-settlement-final-unit-dag` | All eight original unit-profile compilation stages pass on retained `01e8005d` Cangjie inputs: Runtime, Tool, Store, Core, Host, Product, RPC and App. Each retains the original 900 s limit and O2 profile. Compilation alone provides no test or release acceptance. |
+| E1112 | `retained-settlement-product-fresh-fixtures`; `retained-settlement-product-resume-stat-diagnostic` | All seventeen plugin fixture packages are built through the original gate preparation functions and checked against current manifests, executable hashes and provenance. The first memory fixture run fails on an unobservable malformed process identity. Its owned processes are cleaned up. The raw malformed bytes were not captured, so its cause remains unknown. The later original memory recipe passes; this does not erase the earlier failure. |
+| E1113 | `proc-stat-structured-diagnostic-red`; `proc-stat-structured-diagnostic-static` | Two Python regressions fail before numeric-only diagnostics are added. All 45 watcher cases, 129 selected Python cases and the complete architecture gate then pass. Malformed identity still fails closed. Diagnostic fields omit task names, raw bytes, arguments and environment. This adds evidence for a recurrence; it does not claim to fix the unknown earlier identity. |
+| E1114 | `boundary-startup-correct-default-target`; `retained-settlement-product-correct-target-continuation` | A self-spawned startup test initially inherits an empty default target, despite its parent using an explicit unit target. The runtime test environment now resolves both to the exact current Product ELF. The original case 71 passes with its original assertions and limits. All 43 earlier passes obtained with the wrong nested default are rechecked. This is a private verification-driver correction, not a production-source fix. |
+| E1115 | `retained-settlement-product-cursor1075` and its linked predecessor summaries | The exact 1081-case inventory is exhausted on Product ELF `923add9644b847dd9178a1412644e094e4be57ea07aece58b9d9219aad31d90a`: 498 pass, 575 observed Runtime GC-stack failures remain user-deferred, seven physical crashes remain unclassified, and one actual cancellation regression fails. There are zero unrun cases in this diagnostic traversal and zero whole-module acceptance credit. |
+| E1116 | `pi-queued-cancellation-unit-build`; `pi-queued-cancellation-focused`; `pi-queued-cancellation-neighbors` | The original case 794 fails before the fix with lost cancellation code and `plugin.worker_cleanup_pending`. Host and Product rebuild in 300.93 s and 891.66 s. On rebuilt ELF `1d8e96f76b0fa5cf7812f02f424a1f569928a9026aa7da9b399b5bcffcaec365`, original case 794 and fifteen adjacent public cancellation, revocation, capability and isolation cases pass. Case 792 now has an actual Runtime GC stack and is retained as deferred, never retried for a pass. These sixteen passes do not replace full Product acceptance. |
+| E1117 | `pi-cancellation-final-static`; `pi-cancellation-generated-lock-restoration` | All 129 selected Python regressions and the complete architecture gate pass after the cancellation and diagnostic changes. Generated locks are saved with full bytes, hashes and differences, then restored. Dependency pins, SDK baselines, package inventory and TUI API remain unchanged. |
+
+The seven unclassified crashes are inventory cases 89, 695, 771, 871, 880,
+895 and 1074. Their logs contain `BaseObject::GetSize`, a libc signal, or a
+region-index assertion without enough GC frames to satisfy the diagnostic
+classification. A GC thread name alone does not move them into the deferred
+set. All seven remain failed and receive no pass credit. Process custody is
+closed in each recorded run. This does not establish their root cause.
+
+The Pi fix binds the cancellation callback to the actual worker captured for
+that invocation. It copies the caller's cancellation kind, code, message and
+timestamp into the process cancellation source. After invocation return, the
+Host disposes the registration and keeps the serial slot while running the
+existing bounded cleanup wait. Incomplete cleanup retains that same owner;
+replacement still fails closed. A late callback cannot target a replacement
+stored in the mutable thread entry. The original public queued-call test
+checks the cancelled result, the independent next call and peak concurrency.
+Its assertions and deadlines are unchanged.
+
+This change adds no public Cangjie signature, storage schema, wire protocol,
+permission or capacity migration. Rollback pairs the Host lifecycle change
+with the original public regression evidence. Numeric process diagnostics and
+their Python tests can roll back independently. Neither rollback deletes
+Receipts, clears unknown effects, acknowledges an unreturned consumer or
+releases an uncollected physical process.
+
+The diagnostic inventory applies to `01e8005d` Cangjie inputs. The sixteen
+post-fix Product passes apply to the recorded rebuilt ELF and Host source
+SHA-256 `744d70d08873b3164d4ac03decf7d93f790555bc03cc952632cfb493b3c61735`.
+Earlier unit and production binaries do not prove the changed Host. Full
+Core capacity, full Product and remaining production/distribution, baseline
+and release acceptance remain open. GC stays explicitly deferred. No SDK
+component is built, no additional external provider call is made, and PR #49
+remains Draft. The task is **not complete**.

@@ -1842,12 +1842,23 @@ public open class HostJavaScriptPluginHost {
             case Result.Err(error) => entry.invokeLock.unlock(); processCancellation.close(); return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         match (inputAttachmentCurrent) { case Some(current) => match (current()) {
             case Result.Err(error) => entry.invokeLock.unlock(); processCancellation.close(); return Result.Err(error); case Result.Ok(_) => () }; case None => () }
-        let registration = cancellation.onCancel({ _ =>
-            let _ = processCancellation.cancel()
-            entry.host.close()
+        // Bind cancellation to this invocation's physical worker. A late
+        // callback must never close a replacement stored in the same entry.
+        let actualHost = entry.host
+        let registration = cancellation.onCancel({ reason =>
+            let _ = processCancellation.cancel(cause: Some(process.CancellationCause(
+                match (reason.kind) {
+                    case CancellationReasonKind.User => process.CancellationKind.Explicit
+                    case CancellationReasonKind.Deadline => process.CancellationKind.Deadline
+                    case CancellationReasonKind.Budget => process.CancellationKind.Budget
+                    case CancellationReasonKind.Parent => process.CancellationKind.Parent
+                    case CancellationReasonKind.Shutdown => process.CancellationKind.Shutdown
+                    case CancellationReasonKind.Failure => process.CancellationKind.Failure
+                }, reason.code, reason.message, occurredAtMillis: reason.cancelledAtMillis)))
+            actualHost.requestAbort()
         })
         try {
-            let response = entry.host.invoke(
+            let response = actualHost.invoke(
                 tool,
                 argumentsJson,
                 identity: identity,
@@ -1896,9 +1907,18 @@ public open class HostJavaScriptPluginHost {
                     } finally { if (!retained) { value.releasePayload() } }
             }
         } finally {
-            entry.invokeLock.unlock()
-            registration.dispose()
-            processCancellation.close()
+            try {
+                registration.dispose()
+                if (actualHost.isClosed) {
+                    // Cancellation may have marked the worker closed before
+                    // its cleanup task returned. Keep the serial slot until
+                    // the existing bounded cleanup wait has run; incomplete
+                    // cleanup retains the same owner and still blocks restart.
+                    let _ = actualHost.awaitCleanup()
+                    retainCleanupOwner(actualHost)
+                }
+                processCancellation.close()
+            } finally { entry.invokeLock.unlock() }
         }
     }
 

@@ -2314,3 +2314,41 @@ E1106–E1107 retain all 127 Python and complete architecture passes, plus a
 final rebuild after fault-directory cleanup ownership is tightened. The real
 artifact failure still passes and the later Core capacity failure remains.
 Generated locks are saved and restored; no dependency update is included.
+
+
+[E1108–E1117](implementation/plan-execution-reliability.md#product-inventory-and-serialized-pi-cancellation)
+record the next Product pass and a real cancellation fix. Three allocation
+candidates still fail the original later Core capacity check and are withdrawn
+exactly. No new consumer API or attachment-retirement candidate is shipped.
+
+All eight unit-profile compilation stages and seventeen fresh plugin fixture
+packages pass their recorded scopes. A private nested-target mismatch is
+corrected before diagnostic case credit is retained. The exact 1081-case
+Product diagnostic traversal then records 498 passes, 575 user-deferred
+Runtime GC-stack failures, seven unclassified physical crashes and one
+non-GC cancellation regression. The complete Product gate remains failed.
+
+The original queued Pi invocation loses its caller's cancellation reason and
+allows the next call to race unfinished worker cleanup. The Host now captures
+that actual worker, preserves the reason, and keeps the serial slot during the
+existing bounded cleanup wait. Failed cleanup still retains its owner and
+blocks replacement. On the rebuilt Product ELF, the original failing public
+case and fifteen adjacent cancellation, revocation, capability and isolation
+cases pass. A neighboring crash-restart case now fails in a Runtime GC stack
+and is deferred without a retry or pass credit. Earlier 498-case pass evidence
+is not full acceptance of the changed Host.
+
+Malformed process identities additionally retain bounded numeric diagnostics.
+Task names, raw bytes, arguments and environment are omitted. Identity failure,
+ancestry, original timeouts and cleanup rules remain unchanged. The earlier
+memory-fixture watcher failure's exact cause remains unknown. All 129 selected
+Python regressions and the complete architecture gate pass. Generated locks
+are saved and restored; no dependency update is included.
+
+Seven physical crashes remain unclassified rather than being silently moved
+to GC deferral. Current production App/Coding artifacts still predate these
+Cangjie changes. Core capacity, remaining distribution/provider paths, the
+matched baseline matrix and release acceptance remain required. No public
+signature, schema, wire, permission or quota changes. GC is deferred; no SDK
+component build or additional external provider call occurs. PR #49 remains
+open and Draft. The task is **not complete**.
