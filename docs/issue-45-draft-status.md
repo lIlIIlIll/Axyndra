@@ -2194,3 +2194,70 @@ complete architecture gate over 2,974 tracked paths. Nine generated locks are
 saved with their bytes, hashes and diffs, then restored to reviewed versions.
 No SDK build, external provider call, quota change, requirement reduction,
 Ready transition or Issue closure occurs in this continuation.
+
+
+[E1071–E1079](implementation/plan-execution-reliability.md#scalar-input-limit-query-and-withdrawn-readonly-experiment)
+record the independent `77eddb88` numeric-query fix. Runtime passes 43/43 after a
+real saturated-bank RED, Core passes 53/53, and the final complete Product O2
+build enumerates 1,081 cases. Its 21 selected non-GC cases pass. Public outward
+getters and all failure/task-return conditions remain unchanged. Consumers must
+rebuild Runtime and Core together; old-binary ABI is unverified.
+
+The complete Native Core gate still fails at `e5-02-existing-create` with
+`input_attachment.capacity`. A larger Readonly candidate is fully withdrawn:
+it does not advance that gate, and 15 selected Product integration cases crash.
+Its partial debugger stack count is not a reclamation result. No candidate
+Host code, getter waiver or status-based refund remains in the branch.
+
+Current normal App and separately staged production Product builds each reach
+the original 900-second cap. No new Coding artifact for `77eddb88` is accepted;
+the earlier Coding and TUI results remain specific to their recorded artifacts.
+GC stays deferred. Every other unmet requirement remains required, PR #49 stays
+Draft, and the task is **not complete**.
+
+Final retained-source checks pass all 125 selected Python regressions and the
+complete architecture gate over 2,975 tracked paths. Generated dependency locks
+are preserved as evidence and restored with exact byte/hash guards. These
+checks do not clear the original Core capacity failure or current production
+build timeouts.
+
+The smaller Source-identity alternative also passes Tool Runtime 72/72 but
+fails the original Native gate at the same capacity case after a 588.45-second
+build and 39.81-second run. It is fully withdrawn. A broader attachment/ACK
+change is not applied because automatic approval review requires specific
+user authorization for its lifecycle and authority risks. Remote publication
+also requires restoration of the existing GitHub CLI authentication (HTTP 401).
+Neither blocker changes the required scope or establishes PR completion.
+
+[E1080–E1088](implementation/plan-execution-reliability.md#authorized-attachment-experiment-and-current-production-rebuild)
+record the manually authorized attachment experiment and the current production
+rebuild. The execution-approval block is resolved. The candidate passes Runtime
+43/43, Tool 72/72, Core 53/53, and Host 275/275, but both complete Native gates
+still fail at `e5-02-existing-create` with `input_attachment.capacity`.
+The candidate is saved and fully withdrawn. A temporary numeric probe stops
+early with `StackOverflowError`; its four source files are restored and it
+provides no ledger at the capacity failure.
+
+On restored source `6e1ccf32`, all nine original production stages pass within
+their unchanged 900-second limits. Product takes 384.00 seconds and App takes
+121.60 seconds. Current Coding assembly, clean-environment, setup, cards, and
+ask pass. Its existing-operator initial-prompt golden also passes with one new
+completed Run, Model Attempt, ContextRead, and Receipt; operator configuration
+and all earlier durable facts are preserved.
+
+These results supply the current App/Coding artifacts missing from E1077.
+The Core capacity failure, complete Product, remaining distributions/provider
+paths, full baseline matrix, and release acceptance remain required.
+GC stays deferred. GitHub authentication is still required for publication.
+PR #49 remains Draft; the task is **not complete**.
+
+E1089 also verifies the current Coding binary with all 100 cold starts, all
+40 headless samples (p95 464.2 ms), the document/composer/long-transcript
+journeys, and all 15 original PTY samples. Original data sizes, deadlines,
+sample counts, and thresholds remain unchanged. The complete matched baseline
+comparison remains required.
+
+E1090 passes all 125 selected Python regressions and the complete architecture
+gate on retained source. Nine generated locks are saved and restored to their
+reviewed bytes. Dependency pins and SDK baselines pass. No candidate attachment
+code or temporary numeric instrumentation is retained.

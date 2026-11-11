@@ -2742,3 +2742,130 @@ Nine generated locks, their diffs and hashes are saved in
 `history-frame-final-lock-restoration` before exact restoration. Static checks
 and these TUI passes do not clear the remaining Agent Core, full Product,
 external provider, baseline or release requirements.
+
+
+## Scalar input-limit query and withdrawn Readonly experiment
+
+The retained implementation is `77eddb88`. `AgentThreadRuntime.activeModelInputLimit240()`
+reads the immutable numeric limit while holding the existing Runtime lock. Core
+uses that query instead of allocating an outward ModelLane and snapshot share.
+No active Run returns zero, matching the previous Core helper. Existing outward
+ModelLane getters, Source, capability checks and return obligations are unchanged.
+
+| Evidence | Entry and scope | Observed result |
+| --- | --- | --- |
+| E1071 | `scalar-input-limit-red` and `scalar-input-limit-green`, complete Runtime O2 module | The former allocating read fails at an actually saturated 16 MiB DATA bank: 42 passed, one error. The numeric query passes all 43 cases and 100 repeated reads leave the same declared bytes, charged bytes and live-lease count. This scoped bank is not the Native aggregate. |
+| E1072 | `scalar-input-limit-core-unit`, complete Core O2 module | All 53 cases pass. Failure Context retention and original task-return rules remain mandatory. |
+| E1073 | `scalar-input-limit-complete-core`, original complete Native Core/recovery | Build passes in 457.14 seconds. Execution fails in 36.57 seconds at `e5-02-existing-create`, still reporting `input_attachment.capacity`. The scalar fix does not solve that failure. |
+| E1074 | `scalar-prepared-unknown-stacks-native-env`, function-name-only debugger observation | The exact scalar-query Native ELF reaches the same capacity failure. The recorded 69 stack shapes include Readonly validation, execution and service metadata exports. Counts are not a live ownership ledger or a refund witness. |
+| E1075 | `closed-readonly-withdrawal`, withdrawn non-attachment Readonly candidate | The candidate compiles but the original Native gate still fails at the same capacity case. Its selected Product run passes 21 of 36 cases; 15 integration cases physically crash. All five modified Host files are restored byte-for-byte, and the added carrier is removed. No candidate implementation ships. |
+| E1076 | `scalar-input-limit-product-serial-build` and `scalar-input-limit-product-affected`, final retained source | Complete Product O2 compilation passes in 854.83 seconds with one build job and enumerates 1,081 cases. The 20 selected hook contracts and early-cancellation case pass, 21/21. No other inventory case receives runtime credit. |
+| E1077 | `scalar-input-limit-app` and `scalar-input-limit-app-staged`, current normal production rebuild | The original 900-second App build times out. A separate production Product stage also reaches its unchanged 900-second cap. A new App or Coding package for this source is not produced or accepted. Earlier package and TUI evidence retains its recorded source scope. |
+| E1078 | `scalar-input-limit-final-static`, final retained source and records | All 125 selected Python regressions and the complete architecture gate pass over 2,975 tracked paths, 72 Markdown files, 39 workspace packages and 178 local edges. The reviewed dependency pins and TUI API hash are unchanged. |
+| E1079 | `closed-readonly-source-id-tool-unit`, `closed-readonly-source-id-complete-core` and `closed-readonly-source-id-withdrawal` | A smaller candidate keeps attachment sources byte-identical and reads normal parent identity from the same sealed Source. Tool Runtime O2 passes 72/72 after a 63.74-second build. The original Native build passes in 588.45 seconds, but execution fails in 39.81 seconds at the same capacity case. All six candidate source files and the added carrier are archived and restored. |
+
+The public regression is
+`ModelInputLimitPressure240Tests.scalarQueryNeedsNoNewLaneOrLeaseAtTheOriginalFullBank`.
+It covers an absent Run, an active Run at the actual bank limit and a completed
+Run. The historical InMemory sink retains its original debt. The test does not
+claim a zero bank, SQL receipt, Source return or external-task acknowledgement.
+The RED run temporarily substitutes the prior allocating Core read into the new
+query and restores the exact source after execution.
+
+All Cangjie commands use the fixed official November 4 SDK. Runtime and Core
+module commands use their original 900-second stage and 60-second case limits.
+The complete Product command is `scripts/pinned_cangjie cjpm test -m agent_product
+--incremental --jobs 1 --dry-run --no-color --no-progress`, with a task-owned
+explicit target directory and the original 900-second cap. Each selected Product
+case runs independently with its original 60-second test and 90-second process
+bounds. Public API addition requires consumers to rebuild with the corresponding
+Runtime. Old-binary ABI remains unverified. No schema or persisted-data migration
+is introduced. Rollback reverts the query, Core caller and public regression
+as one change.
+
+Candidate evidence must not be confused with final-code acceptance. The candidate
+Product compile first times out at 900 seconds. A separate Host stage passes in
+689.03 seconds, but the next Product stage also times out. A one-job Product build
+then passes in 424.17 seconds. Its 15 integration failures include native Runtime
+collector frames; they are not rerun after the candidate is withdrawn. The final
+retained-source build and 21 passes above are separate evidence.
+
+The candidate debugger run ends early with SIGABRT. Its 48 stack shapes and 109
+breakpoint hits cannot be compared with the completed observation's 69 shapes
+and 2,666 hits. A debugger's zero exit status is not inferior-process success.
+The earlier first diagnostic cannot load its native library and yields no useful
+stack evidence. Both failed observations are retained without acceptance credit.
+
+The Native bank remains 144 MiB, with its existing 16 MiB reservation floor and
+64 MiB attachment scratch invoice. No raw-getter exemption, status-based refund,
+new Source, replacement bank, relaxed threshold or extended deadline is shipped.
+GC remains deferred by explicit user decision. Core capacity, complete Product,
+current distribution rebuild, provider paths, baseline matrix and release
+acceptance remain open. PR #49 stays Draft and the task is **not complete**.
+
+E1078 preserves the original unittest and architecture entrypoints. Two earlier
+Root/contract generated locks are saved and restored before the code commit.
+After the production build, only the exact Root lock is dirty. A read-only audit
+and byte/hash guards precede its separate save and restoration. No broad lock
+cleanup is performed. Final source/static validation does not convert E1073 or
+E1077 into passes.
+
+E1079 does not establish final-source Tool or Native acceptance. Its standalone
+Native run uses the original manifest's existing compile profile; no O2 claim
+is made for that executable. Both explicit generated locks match earlier
+known task-generated bytes before their guarded save and restoration.
+
+Automatic approval review rejects the proposed broader attachment metadata
+lifecycle and output-ACK implementation before process creation, citing quota,
+authorization, payload-release and consumer-return risks requiring specific
+user authorization. That implementation is not applied. A concrete file scope,
+return invariants and original acceptance gates are prepared for user review.
+Neither rejection nor the failed narrower alternative clears the required
+capacity work. Remote publication is separately blocked by an invalid existing
+GitHub CLI token (HTTP 401); local commits do not imply the PR was updated.
+
+## Authorized attachment experiment and current production rebuild
+
+The later manual execution approval resolves the earlier approval-review
+block. It authorizes the reviewed attachment experiment; it does not change
+the SDK, bank, Source, ACK, acceptance limits, or publication permissions.
+The experiment starts from retained source `6e1ccf32`, which includes
+`77eddb88`. It is withdrawn after the original complete Native gate still fails.
+
+| Evidence | Scope and retained entry | Actual result |
+| --- | --- | --- |
+| E1080 | `capacity-metadata-approval/state.json`; `authorized-attachment-baseline` | The approved commands execute after manual approval. Eight tracked source baselines are saved before application. The private carrier requires the same Prepared object, encloses reads in callbacks, counts pending loans, and retains one actual metadata consumer through the complete Native helper and attachment ACK. The candidate does not become accepted source. |
+| E1081 | `attachment-metadata-scoped-complete-core/summary.json`; `attachment-metadata-authority-complete-core/summary.json` | Builds pass in 503.36 and 511.54 seconds. Runs fail in 45.17 and 43.03 seconds at `e5-02-existing-create`: `input_attachment.capacity` replaces the expected `application_plan.create_target_exists`. The second candidate also closes the file-plan service authority read inside its original loan. Both original 900-second limits and all assertions remain. |
+| E1082 | `attachment-metadata-scoped-unknown-stacks`; `attachment-metadata-authority-frame-stacks` | Both function-name-only diagnostics reach the same contract failure. In the second run the selected private executor is entered 11 times and its Root-return method is entered ten times. The inferior exits 1 even though GDB exits 0. Entry counts do not prove allocation retirement or authorize a refund. |
+| E1083 | `attachment-metadata-unit-dependencies/summary.json`; `attachment-metadata-module-runs/summary.json`; `attachment-metadata-full-host/summary.json` | The five original dependency stages compile. The candidate passes complete Runtime 43/43, Tool 72/72, Core 53/53, and Host 275/275. The Host gate keeps its 900-second module and 60/90-second case limits. These candidate module results do not clear E1081 or validate withdrawn code as final source. |
+| E1084 | `attachment-metadata-current-ledger/summary.json`; `source/manifest.json` | The numeric probe build passes in 560.06 seconds. Execution stops after 11.75 seconds with `StackOverflowError` in the probe's `File.appendTo`. Its 39,550 event lines are an early observation, not a ledger at the capacity failure. All four instrumented files are restored byte for byte. No probe code is retained. |
+| E1085 | `attachment-metadata-withdrawal/manifest.json`; `candidate.patch` | All nine candidate source files and the exact patch are saved. Eight tracked files are restored to retained HEAD and the new private carrier is removed. Two generated locks and their diffs are saved before exact restoration. The retained tree is clean at `6e1ccf32`. No attachment candidate is committed or shipped. |
+| E1086 | `scalar-input-limit-nine-production-stages/summary.json` | All nine original production stages pass on the restored scalar-query source with the fixed official SDK. Runtime, Tool, Store, Core, Host, Product, RPC, App, and Minimal each keep the original 900-second cap. Product takes 384.00 seconds and App takes 121.60 seconds. This is the existing staged recipe, not an extended monolithic deadline. The earlier two build timeouts remain recorded. |
+| E1087 | `scalar-input-limit-coding/summary.json`; package provenance | Current Coding assembly passes in 749.31 seconds. The original clean-environment, setup, cards, and ask checks pass. The current App is `9c9d7231b1cfdf78e0bd4df4b60c2df2a8da3e167353d2c714cb2b44f024ab5e`; Coding is `1ef648607a1bc0035d7a531945308e561871590f841b1edf4b092f34502af589`. The exact packaged native inputs are recorded in provenance. |
+| E1088 | `scalar-input-limit-existing-initial/summary.json` | The current Coding package passes the unchanged three-size initial-prompt golden in 13.46 seconds on an actual existing operator installation. Read-only SQL verifies one new completed Run, one completed Model Attempt, one committed ContextRead, and one completed Receipt. Existing facts and operator JSON hashes remain unchanged. This is an upgrade-path check, not fresh-install or external-provider proof. |
+| E1089 | `scalar-input-limit-current-performance/summary.json`; `scalar-input-limit-current-pty/summary.json` | The same current Coding ELF passes 100 original cold starts (max 89.0 ms), all 40 headless samples (p50 463.8 ms, p95 464.2 ms), document, composer, and long-transcript journeys. The complete original PTY gate passes all 15 samples: five 10,000-row scenarios with three samples each, the original 100 stream chunks, 12-second case limits, and original latency/output/stall thresholds. This is absolute gate evidence, not the complete matched baseline comparison. |
+
+E1086 and E1087 provide current production artifacts that E1077 lacked.
+They do not explain every historical timeout. Fresh-operator paths with matched
+GC failures remain deferred by the user's decision and are not retried here.
+No SDK component is built and no additional external provider call is made.
+
+The original complete Core capacity gap remains open. Complete Product,
+remaining distributions and provider paths, the complete baseline matrix, and
+release acceptance remain required. The current initial-prompt result does not
+replace the separate Todo gate or explain its earlier intermittent timeout.
+No persisted schema, dependency pin, Native protocol, authorization, Source, or
+quota changes. The numeric-query API still requires a consistent Runtime/Core
+rebuild; old-binary ABI remains unverified. Rollback reverts that query and its
+Core caller together while preserving durable facts.
+
+PR #49 remains Draft. Acceptance is **not complete**. GitHub authentication
+must be restored before the authorized fast-forward publication and PR update.
+
+E1090 records `scalar-input-limit-current-final-static`: all 125 selected
+Python regressions and the complete architecture gate pass on retained source.
+The gate checks 2,975 tracked paths, 72 Markdown files, 39 workspace packages,
+and 178 local dependency edges. Nine generated dependency locks are saved with
+their exact bytes and diffs before restoration in
+`scalar-input-limit-current-lock-restoration`. Dependency pins and SDK
+baselines pass. Static checks do not clear the remaining runtime acceptance.
