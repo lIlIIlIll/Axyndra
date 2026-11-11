@@ -21,8 +21,16 @@ _WORKER_MODES = {'case': '--owned-worker', 'compilation': '--owned-compilation-w
                  'fixture': '--owned-fixture-worker'}
 
 
+def _stat_cells(raw):
+    # Linux comm is an opaque, byte-truncated task name, not identity. Decode
+    # only the kernel's ASCII fields after its closing parenthesis.
+    if isinstance(raw, bytes):
+        return raw[raw.rindex(b')') + 2:].decode('ascii').split()
+    return raw[raw.rindex(')') + 2:].split()
+
+
 def _cell(raw):
-    cells = raw[raw.rindex(')') + 2:].split()
+    cells = _stat_cells(raw)
     state, parent, group, session, start = cells[0], int(cells[1]), int(cells[2]), int(cells[3]), cells[19]
     # A captured Linux dead task may lose both group identities together.
     # Preserve their original -1 values; this is not evidence of reaping.
@@ -43,7 +51,7 @@ def processes():
             continue
         pid = int(path.name)
         try:
-            found[pid] = _cell((path / 'stat').read_text())
+            found[pid] = _cell((path / 'stat').read_bytes())
         except OSError as error:
             if error.errno not in (errno.ENOENT, errno.ESRCH):
                 uncertain.append(dict(pid=pid, reason='process_stat_unobservable', errno=error.errno))
@@ -87,7 +95,7 @@ def kill_exact(items):
         try:
             descriptor = os.pidfd_open(item['pid'])
             try:
-                now = _cell(Path('/proc', str(item['pid']), 'stat').read_text())
+                now = _cell(Path('/proc', str(item['pid']), 'stat').read_bytes())
             except OSError as error:
                 if error.errno in (errno.ENOENT, errno.ESRCH):
                     continue
@@ -160,9 +168,9 @@ def _only_kernel_exiting(items):
     uncertain = []
     for item in items:
         try:
-            raw = Path(f"/proc/{item['pid']}/stat").read_text()
+            raw = Path(f"/proc/{item['pid']}/stat").read_bytes()
             current = _cell(raw)
-            flags = int(raw[raw.rindex(')') + 2:].split()[6])
+            flags = int(_stat_cells(raw)[6])
             if flags < 0:
                 raise ValueError('invalid process flags')
             if current['start'] != item['start'] or current['state'] in ('Z', 'X', 'x'):
@@ -381,7 +389,7 @@ def _run_owned(command, log, seconds, cwd=None, purpose='case', environment=None
                 stdout=output, stderr=subprocess.STDOUT, start_new_session=True, env=environment)
             witness_start = None
             try:
-                witness_start = _cell(Path('/proc', str(witness.pid), 'stat').read_text())['start']
+                witness_start = _cell(Path('/proc', str(witness.pid), 'stat').read_bytes())['start']
             except OSError as error:
                 # Even genuine ENOENT here supplies no original tree root.
                 # A receipt alone cannot replace this lost identity witness.

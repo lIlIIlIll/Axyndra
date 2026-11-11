@@ -67,6 +67,7 @@ class QualifiedRpcResultTests(unittest.TestCase):
 
 
 import sys
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -197,6 +198,9 @@ class RpcUnobservableProcessTests(unittest.TestCase):
             if isinstance(self.value, BaseException):
                 raise self.value
             return self.value
+        def read_bytes(self):
+            value = self.read_text()
+            return value if isinstance(value, bytes) else value.encode('utf-8')
 
     class Proc:
         def __init__(self, entry):
@@ -542,6 +546,47 @@ class RpcDeadIdentity208Tests(unittest.TestCase):
         actual['unreaped_owned_processes'] = []
         actual['parent_cleanup']['unreaped_owned_processes'] = [dead]
         self.assertFalse(process_watch.process_custody_closed(actual))
+
+
+class RpcOpaqueTaskNameTests(unittest.TestCase):
+    def test_numeric_identity_does_not_decode_the_opaque_comm_bytes(self):
+        baseline = bytes.fromhex(RpcDeadIdentity208Tests.observed_hex)
+        prefix = baseline[:baseline.index(b'(') + 1]
+        tail = baseline[baseline.rindex(b')'):]
+        raw = prefix + b'worker-\xff)\xfe' + tail
+        self.assertEqual(process_watch._cell(raw),
+            dict(state='X', parent=0, group=-1, session=-1, start='28749'))
+        with self.assertRaises((UnicodeError, ValueError)):
+            process_watch._cell(prefix + b'worker' + tail.replace(b'28749', b'\xff'))
+        with self.assertRaises((ValueError, IndexError)):
+            process_watch._cell(prefix + b'worker' + tail.replace(b' X ', b' Z '))
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'requires actual Linux procfs')
+    def test_actual_non_utf8_task_name_keeps_its_observable_identity(self):
+        import subprocess
+        program = (
+            'import ctypes,os,sys;'
+            'libc=ctypes.CDLL(None,use_errno=True);'
+            'rc=libc.prctl(15,ctypes.c_char_p(b"worker-\\xff"),0,0,0);'
+            'assert rc==0;'
+            'print(os.getpid(),flush=True);'
+            'sys.stdin.buffer.read(1)'
+        )
+        child = subprocess.Popen([sys.executable, '-c', program],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            self.assertEqual(int(child.stdout.readline()), child.pid)
+            observed, unknown = process_watch.processes()
+            self.assertTrue(child.pid in observed, 'controlled task identity is missing')
+            self.assertEqual(observed[child.pid]['parent'], os.getpid())
+            self.assertFalse(any(item['pid'] == child.pid for item in unknown))
+        finally:
+            try:
+                child.communicate(input=b'x', timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.communicate(timeout=5)
+        self.assertEqual(child.returncode, 0)
 
 
 if __name__ == '__main__':

@@ -2261,3 +2261,22 @@ E1090 passes all 125 selected Python regressions and the complete architecture
 gate on retained source. Nine generated locks are saved and restored to their
 reviewed bytes. Dependency pins and SDK baselines pass. No candidate attachment
 code or temporary numeric instrumentation is retained.
+
+[E1091–E1094](implementation/plan-execution-reliability.md#opaque-linux-task-names-and-reconciled-allocation-categories)
+add a narrow process-watcher fix. Linux task names remain opaque bytes;
+numeric identity fields alone use ASCII decoding. The two real/parser
+regressions fail before the fix and all 43 watcher cases pass after it.
+Unknown identity, original deadlines, pidfd identity, and real reaping rules
+remain unchanged. The earlier watcher abort's exact cause remains unproven.
+
+Two numeric diagnostics reach the original Core capacity failure and reconcile
+all 174,674 counter and lease checks. The classified run locates 33,413,328 live
+bytes in 111 Catalog snapshot descendants and 12,562,192 bytes in 45 Prepared
+metadata leases, including headers. This is not evidence that those consumers
+returned or that a payment may retire. All temporary Cangjie probe source is
+restored. The original capacity gap remains required; GC stays deferred.
+
+E1095 passes all 127 selected Python regressions and the complete architecture
+gate after the byte-reader fix. The generated contract lock is saved and
+restored. Current App/Coding and their recorded performance evidence remain
+unchanged; the independent Core capacity gap is not closed.

@@ -2869,3 +2869,41 @@ and 178 local dependency edges. Nine generated dependency locks are saved with
 their exact bytes and diffs before restoration in
 `scalar-input-limit-current-lock-restoration`. Dependency pins and SDK
 baselines pass. Static checks do not clear the remaining runtime acceptance.
+
+## Opaque Linux task names and reconciled allocation categories
+
+The physical process watcher reads Linux stat files as bytes and decodes only
+the kernel's ASCII identity fields after the closing task-name parenthesis.
+Task names may contain non-UTF8 bytes. They are not authority and do not
+determine ancestry or return. Parent, group, session, starttime, dead-state,
+pidfd, deadline, unknown-identity, and actual reaping checks remain unchanged.
+Malformed numeric fields still fail. A physical process exit is still not a
+DATA-consumer ACK.
+
+| Evidence | Executed scope | Actual result |
+| --- | --- | --- |
+| E1091 | `diagnostic-file-writer-probe`; `retained-scalar-core-stable-ledger/validation.json` | A fixed-SDK minimal global-writer probe passes before the numeric diagnostic. The original complete Native build passes in 668.82 seconds, then execution reaches the same capacity failure in 51.44 seconds. All 174,674 counter/SUM/count checks reconcile across 174,758 events. At the refusal the original capacity is 150,994,944 bytes, charged bytes 106,649,328, requested growth 50,331,648, and overshoot 5,986,032. The Registry group costs 72,881,904 bytes. All four temporary source files are restored. These are accounting facts, not refund authority. |
+| E1092 | `retained-scalar-classified-ledger/summary.json` | A first category-tag diagnostic stops after 113.93 seconds because its process watcher reports `process_stat_malformed`. It is a watcher failure, not a passing compile or a compiler diagnostic. Owned survivors are cleaned and reaped, and all eight temporary Cangjie sources are restored. The original malformed bytes were not captured, so the later encoding repair does not establish this failure's cause. |
+| E1093 | `proc-stat-byte-identity-red`; `proc-stat-byte-identity-green` | Two new regressions fail before the fix: direct opaque-byte parsing and an actual Linux child whose task name contains a non-UTF8 byte. A pipe handshake keeps that real child alive until observation; the fixture then releases and waits for it. After the fix all 43 process-watcher regressions pass, including the original unknown-identity, negative-field, immutable-signal, PID-reuse, and physical-reaping controls. |
+| E1094 | `retained-scalar-classified-ledger-byte-reader/validation.json`; `classified-live-invoices.json` | With the byte reader, classification builds in 491.31 seconds and reaches the original capacity failure in 48.81 seconds. All 174,674 accounting checks reconcile across 175,267 events. The largest classified live category is Catalog snapshot descendants: 111 leases totaling 33,413,328 bytes including headers. Prepared metadata is 45 leases totaling 12,562,192 bytes including headers. Current overshoot is 5,986,040 bytes. The eight-byte difference from E1091 is recorded, not normalized away. All eight temporary sources are restored. |
+
+The categories identify where to continue the implementation audit. They do not
+establish that any snapshot or metadata consumer has returned. The 144 MiB bank,
+16 MiB floor, 64 MiB attachment invoice, SUM accounting, and last-lease physical
+retirement remain unchanged. No diagnostic API or probe enters shipped Cangjie
+source. The byte-reader repair affects the Python validation harness; the
+current App/Coding binaries and their E1086–E1089 scope are unchanged.
+
+The full Core capacity and the remaining requirement matrix are still open.
+The original whole-case limits remain. GC stays deferred, and no SDK build or
+additional external provider call occurs. PR #49 remains Draft and acceptance
+is **not complete**.
+
+E1095 records `proc-stat-byte-identity-final-static`: all 127 selected Python
+regressions and the complete architecture gate pass. Dependency pins, package
+inventory, TUI API, and SDK baselines remain unchanged. The generated contract
+lock is saved and restored in `proc-stat-byte-identity-lock-restoration`.
+The fix changes validation-harness input parsing, not product Cangjie APIs,
+durable storage, or the physical DATA-return contract. Rollback pairs the
+watcher reader with its regressions; it never converts an unknown identity to
+a successful return.
