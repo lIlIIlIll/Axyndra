@@ -2352,3 +2352,74 @@ matched baseline matrix and release acceptance remain required. No public
 signature, schema, wire, permission or quota changes. GC is deferred; no SDK
 component build or additional external provider call occurs. PR #49 remains
 open and Draft. The task is **not complete**.
+
+
+[E1118–E1126](implementation/plan-execution-reliability.md#current-production-packages-and-request-startup-boundaries)
+refresh production evidence on `a28d1590`. All nine production build stages
+pass. Fresh Minimal/Coding/Full packages are bound to those actual binaries
+and the matched native bridge. Their original clean-environment/setup scopes
+pass; Minimal's empty/offline contract and Coding's cards/ask also pass.
+Sixteen Full Native endpoint checkers pass 601 cases. Memory's application
+acceptance is separate and incomplete.
+
+Current Coding additionally passes all 100 cold starts, 40 headless samples
+(p95 464.9 ms), document/composer/long-transcript journeys and fifteen original
+PTY samples. The original seven-record absolute plugin performance gate passes
+after its private namespace receives a writable state directory. The earlier
+read-only default-directory failure is retained as an environment failure.
+These absolute results do not replace the immutable-base comparison.
+
+The complete positive model/CLI/ACP entries still fail. The first local model
+profile request times out at 5 s. ACP's first prompt also exceeds 5 s and its
+owner cleanup remains pending. A separate read-only snapshot has zero Runs,
+Attempts and Operations; an actual no-argument debugger sample observes
+package hashing during first-assembly enable/dependency checks. It captures
+no GC failure. The CLI diagnostic with a writable default home still times
+out on actual `read README.md:1` at 10 s. No timeout or content-integrity check
+is relaxed, and these failures are not moved into GC deferral.
+
+The current production artifacts now include the Host cancellation fix.
+Full Core capacity, full Product, seven unclassified physical crashes, the
+model/CLI/ACP startup gaps, remaining Todo/Memory paths, matched baseline and
+release acceptance remain required. No SDK component build or additional
+external provider call occurs. The task is **not complete**; PR #49 stays
+open and Draft.
+
+
+[E1127–E1135](implementation/plan-execution-reliability.md#nested-native-stack-regression-and-final-artifact-verification)
+record and fix a regression discovered by the later full Core recheck. The
+published cancellation change grows the active nested Native invocation frame
+and produces `StackOverflowError`. A strict one-file old-Host control removes
+that overflow and reaches the earlier capacity refusal. The current source
+restores exactly after the control. Extracting cleanup alone is insufficient;
+that intermediate failure remains recorded.
+
+The final Host keeps the same cancellation and physical-cleanup behavior but
+handles result decoding and cleanup in private methods entered after the
+actual invocation returns. The complete Core no longer overflows. It again
+reaches the original later `input_attachment.capacity` failure, so full Core
+remains failed. All sixteen original Pi cancellation, revocation, capability
+and isolation regressions pass on the rebuilt Product ELF.
+
+All nine production stages and three fresh distribution assemblies pass again
+on this final source. Original clean/setup, Minimal empty/offline, Coding
+cards/ask, 100 cold starts, 40 headless samples (p95 463.9 ms), document/input/
+long-transcript, fifteen PTY samples and seven absolute plugin performance
+records pass. The sixteen final Full Native endpoint binaries are identical
+to the recorded 601-case protocol passes. None of these results substitutes
+for the complete baseline comparison or failing full application gates.
+
+Final positive entry gates are still incomplete: the first local-provider
+request and ACP prompt exceed their original 5 s limits. The CLI main passes
+actual read/grep/count, then workspace enable fails with owner disconnect
+before paginated grep. ACP cleanup also reports owner disconnect/broken pipe.
+No GC stack is captured for these failures, so they remain unresolved rather
+than GC-deferred. Source, permission, quota, assertions and clocks are intact.
+The task is **not complete**; PR #49 remains open and Draft.
+
+
+E1136 retains all 129 Python passes and the complete architecture gate on final
+tested source. Generated locks restore exactly after evidence capture. Public
+interfaces, dependency pins, SDK baselines and durable schema are unchanged.
+The result-consumption match is verified unchanged apart from its private
+post-return location. This does not accept the failing full application gates.

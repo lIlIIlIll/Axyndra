@@ -1869,57 +1869,77 @@ public open class HostJavaScriptPluginHost {
                 serviceRequestLimit: if (identity.kind == "prepare" || identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider" || identity.kind == "view") { 0 } else { JAVASCRIPT_HOST_MAX_SERVICE_CALLS },
                 observer: observer
             )
-            match (response) {
-                case JavaScriptHostResult.Err(error) =>
-                    match (generation.invocationRevocationCause(processCancellation.token)) {
-                        case Some(cause) => if (error.code == "process.parent_cancelled" && error.message == cause.message) {
-                            let actualError = AgentError(AgentErrorKind.Cancelled, cause.code, cause.message)
-                            match (executionObservation) {
-                                case Some(observation) => observation.record(identity, generation, processCancellation.token, actualError)
-                                case None => ()
-                            }
-                            return Result.Err(actualError)
-                        }
-                        case None => ()
-                    }
-                    Result.Err(hostJavascriptPluginAgentError(error))
-                case JavaScriptHostResult.Ok(value) =>
-                    var retained = false
-                    try {
-                        if (generation.isClosing() || cancellation.isCancelled()) {
-                            return hostJavascriptPluginError<HostJavaScriptPluginInvocationResult>(
-                                "extension.cancelled", "plugin query was cancelled or its generation was revoked")
-                        }
-                        let maximum = if (toolPayloadLimits.isSome()) { toolPayloadLimits.getOrThrow().maxResultBytes }
-                        else if (identity.kind == "view") { PLUGIN_VIEW_MAX_BYTES }
-                        else if (identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider") {
-                            CONTENT_PAYLOAD_RESULT_BYTES
-                        } else { JAVASCRIPT_EXTENSION_MAX_FRAME_BYTES }
-                        match (hostJavascriptPluginDecodeValue(value.resultJson, maxBytes: maximum)) {
-                            case Result.Ok(result) =>
-                                let output = HostJavaScriptPluginInvocationResult(result, value.isError,
-                                    releasePayload: { => value.releasePayload() })
-                                retained = true
-                                Result.Ok(output)
-                            case Result.Err(error) => hostJavascriptPluginError<HostJavaScriptPluginInvocationResult>(
-                                "extension.result_invalid", error.message)
-                        }
-                    } finally { if (!retained) { value.releasePayload() } }
-            }
+            finishInvocationResponse(response, generation, processCancellation, identity,
+                cancellation, toolPayloadLimits, executionObservation)
         } finally {
-            try {
-                registration.dispose()
-                if (actualHost.isClosed) {
-                    // Cancellation may have marked the worker closed before
-                    // its cleanup task returned. Keep the serial slot until
-                    // the existing bounded cleanup wait has run; incomplete
-                    // cleanup retains the same owner and still blocks restart.
-                    let _ = actualHost.awaitCleanup()
-                    retainCleanupOwner(actualHost)
-                }
-                processCancellation.close()
-            } finally { entry.invokeLock.unlock() }
+            try { finishInvocationWorker(registration, processCancellation, actualHost) }
+            finally { entry.invokeLock.unlock() }
         }
+    }
+
+    // Result decoding and error projection run only after the physical
+    // invocation frame returns. Their stack locals need not stay reserved
+    // through nested Native calls; payload ownership is unchanged.
+    private func finishInvocationResponse(
+        response: JavaScriptHostResult<JavaScriptHostInvocationResult>,
+        generation: HostJavaScriptPluginGeneration, processCancellation: process.CancellationSource,
+        identity: JavaScriptHostInvocationIdentity, cancellation: CancellationToken,
+        toolPayloadLimits: ?OrdinaryToolPayloadLimits,
+        executionObservation: ?HostToolExecutionCancellationObservation
+    ): Result<HostJavaScriptPluginInvocationResult> {
+        match (response) {
+            case JavaScriptHostResult.Err(error) =>
+                match (generation.invocationRevocationCause(processCancellation.token)) {
+                    case Some(cause) => if (error.code == "process.parent_cancelled" && error.message == cause.message) {
+                        let actualError = AgentError(AgentErrorKind.Cancelled, cause.code, cause.message)
+                        match (executionObservation) {
+                            case Some(observation) => observation.record(identity, generation, processCancellation.token, actualError)
+                            case None => ()
+                        }
+                        return Result.Err(actualError)
+                    }
+                    case None => ()
+                }
+                Result.Err(hostJavascriptPluginAgentError(error))
+            case JavaScriptHostResult.Ok(value) =>
+                var retained = false
+                try {
+                    if (generation.isClosing() || cancellation.isCancelled()) {
+                        return hostJavascriptPluginError<HostJavaScriptPluginInvocationResult>(
+                            "extension.cancelled", "plugin query was cancelled or its generation was revoked")
+                    }
+                    let maximum = if (toolPayloadLimits.isSome()) { toolPayloadLimits.getOrThrow().maxResultBytes }
+                    else if (identity.kind == "view") { PLUGIN_VIEW_MAX_BYTES }
+                    else if (identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider") {
+                        CONTENT_PAYLOAD_RESULT_BYTES
+                    } else { JAVASCRIPT_EXTENSION_MAX_FRAME_BYTES }
+                    match (hostJavascriptPluginDecodeValue(value.resultJson, maxBytes: maximum)) {
+                        case Result.Ok(result) =>
+                            let output = HostJavaScriptPluginInvocationResult(result, value.isError,
+                                releasePayload: { => value.releasePayload() })
+                            retained = true
+                            Result.Ok(output)
+                        case Result.Err(error) => hostJavascriptPluginError<HostJavaScriptPluginInvocationResult>(
+                            "extension.result_invalid", error.message)
+                    }
+                } finally { if (!retained) { value.releasePayload() } }
+        }
+    }
+
+    // This cleanup runs after the nested invocation returns. Keeping its
+    // exception/cleanup frame separate avoids reserving that stack space
+    // throughout every deeply nested Native service call.
+    private func finishInvocationWorker(registration: CancellationRegistration,
+        processCancellation: process.CancellationSource, actualHost: JavaScriptExtensionHost): Unit {
+        registration.dispose()
+        if (actualHost.isClosed) {
+            // A closed flag precedes actual cleanup return. Keep the serial
+            // slot for the existing bounded wait; incomplete cleanup retains
+            // the same owner and still blocks replacement.
+            let _ = actualHost.awaitCleanup()
+            retainCleanupOwner(actualHost)
+        }
+        processCancellation.close()
     }
 
     private func find(extensionId: String): ?HostJavaScriptPluginGeneration {

@@ -3009,3 +3009,90 @@ Core capacity, full Product and remaining production/distribution, baseline
 and release acceptance remain open. GC stays explicitly deferred. No SDK
 component is built, no additional external provider call is made, and PR #49
 remains Draft. The task is **not complete**.
+
+
+## Current production packages and request startup boundaries
+
+The following production evidence applies to `a28d159017d6ddec6d2c4c7eceb6c2dc5e43fa9a`.
+Later documentation or generated-lock restoration does not alter these tested
+Cangjie inputs. All packages use the fixed official SDK and the actual rebuilt
+native bridge. No SDK component or external model call is added.
+
+| Evidence | Executed scope | Actual result |
+| --- | --- | --- |
+| E1118 | `pi-cancellation-nine-production-stages` | Runtime, Tool, Store, Core, Host, Product, RPC, App and Minimal production builds all pass their original 900 s limits. App SHA-256 is `5744b9f540a2515b496964f7144a7ce725d68a31e1de9cbd010a69166a81b2f2`; Minimal is `481697b50e1c9cf71a5f77f55bf5ea2b7b88cfb271bcc0addfedbcfa7eb87388`. These are current builds, not acceptance of every application path. |
+| E1119 | `pi-cancellation-current-coding` | Fresh Coding9 assembly passes in 597.21 s. Relocation into the original clean environment, operator setup, cards and ask all pass. Packaged ELF is `5804a9d737830cb687cf8629ad1e61d5131ae008b7e38b18e47396eff24d6e54`; provenance binds it to the actual App source binary and matched bridge. Previously GC-deferred fresh default, initial-prompt and Todo paths are not retried or counted as passes. |
+| E1120 | `pi-cancellation-minimal-full-packages` | Fresh Minimal and Full17 assemblies pass, with current production inputs. Minimal relocation and the original actual empty/offline host contract pass. Full relocation and operator setup pass. Full and Coding use the same recorded host ELF. Packaged Minimal SHA-256 is `cda13e861fe3925e94ebfdd7f30ec8d83d373d952814d6fda68bdc9e55ba0307`. Assembly alone is not complete distribution acceptance. |
+| E1121 | `pi-cancellation-current-performance`; `pi-cancellation-current-pty` | Current Coding passes all 100 cold starts, all 40 headless samples (p95 464.9 ms against the original 500 ms bound), document/composer/long-transcript journeys, and all fifteen original PTY samples across five 10000-row scenarios. Stream retains 100 chunks and every original latency/output/stall threshold. This is absolute-gate evidence, not an immutable-base comparison. |
+| E1122 | `pi-cancellation-current-frontends` | The original full local-provider profile test times out on its first model request at 5 s. The original full CLI entry suite reaches its 180 s outer bound. ACP initialization/authentication/session/configuration reach their assertions, but its first prompt times out at 5 s and cleanup reports `owner.acp_frontend_close_pending`. All three gates fail. The watcher collects all recorded survivors; no unknown identity or unreaped process remains. |
+| E1123 | `pi-cancellation-acp-owner-stack`; `pi-cancellation-acp-digest-roles`; `pi-cancellation-acp-durable-state` | Read-only metadata after the original first-prompt timeout contains zero Runs, Model Attempts, Operations, Receipts, audit events and items. A separate no-argument debugger sample observes actual package `SHA256_Update` during first-assembly dependency enable checks. Its role probe counts 1083 file-digest entries across source inspection, materialization, registry reload and enable/dependency inspection. These are debugger call counts, not package counts, leaked-owner proof or uninstrumented timing measurements. No GC failure is captured in these diagnostics, so this timeout stays unresolved rather than GC-deferred. |
+| E1124 | `pi-cancellation-current-native-protocols` | Sixteen independent Native protocol checkers pass all 601 reported cases against the newly assembled Full artifacts. Per-endpoint original assertions and internal deadlines remain unchanged. The seventeenth package, Memory, has no equivalent standalone checker here; its application-level 63 MiB acceptance remains separately incomplete. These endpoint checks do not replace Core/Host authority or actual model-path acceptance. |
+| E1125 | `pi-cancellation-current-plugin-performance`; `pi-cancellation-current-plugin-performance-writable-home` | The first run reaches a read-only default state directory in the private namespace and fails; this is retained as a harness/environment failure. With an explicit task-private writable default state directory, the complete original absolute plugin performance gate passes seven metric records. Runtime retains its original 12 samples (240 steady IPC exchanges), and both product profiles retain 20 samples. All original thresholds and 300 s runtime/30 s per-sample bounds remain. No immutable-base comparison credit is claimed. |
+| E1126 | `pi-cancellation-entry-modes-writable-home` | The private CLI diagnostic also supplies a writable default state directory for its RPC/EOF branches and records only command indices and static verbs. The original main still fails at actual `read README.md:1` after the original 10 s command limit. The test remains failed; no read success, permission acceptance or GC cause is inferred. |
+
+The first model/profile request, first ACP prompt and actual CLI read remain
+open acceptance gaps. The ACP sample locates work before Run admission and
+shows real package validation in progress. It does not prove a deadlock or
+justify skipping content verification, sharing unchecked snapshots, moving
+initialization before the request, changing cancellation, or extending a
+clock. Operation facts, required plugin handshakes and the atomically frozen
+Catalog remain mandatory before model execution.
+
+The new package and performance passes supersede the earlier statement that
+all current production binaries predate the Host fix. They do not supersede
+any failed full Core, Product, model, CLI, ACP, Todo, Memory, baseline or release
+requirement. The seven unclassified physical Product crashes remain failed.
+GC remains explicitly deferred, not passed. The task is **not complete** and
+PR #49 remains Draft.
+
+
+## Nested Native stack regression and final artifact verification
+
+The later complete Core check exposes a regression missed by the focused Pi
+cases. These results remain visible even though the earlier cancellation
+change is already in the Draft PR. No stack size, runtime flag, quota,
+assertion or deadline changes to make this check pass.
+
+| Evidence | Executed scope | Actual result |
+| --- | --- | --- |
+| E1127 | `pi-cancellation-current-complete-core` | Current `a28d1590` Core builds in 455.40 s, then fails after 3.39 s with `StackOverflowError` in the nested Native read-view process/sandbox path. It has not reached the earlier capacity refusal. This is a regression, not a GC-deferred or accepted result. |
+| E1128 | `pi-cancellation-core-single-source-control` | Only `javascript_plugin_host.cj` temporarily returns to its exact `01e8005d` bytes. All other source, current Full endpoints, fixed SDK, optimization and original limits remain. Build 422.39 s; original Core 49.56 s, failing at later capacity without stack overflow. Both exact binaries/sources are retained and current source restores in `finally`. This isolates the regression to the Host change. |
+| E1129 | `pi-cancellation-separated-cleanup-core` | Extracting only post-return cleanup reduces the selected prologue stack subtraction but is insufficient. Build 360.88 s; original Core 34.02 s, reaching `e5-02-invalid-path` before another `StackOverflowError` during derived SQL admission. This intermediate candidate is not accepted or shipped as the fix. |
+| E1130 | `pi-cancellation-returned-frame-core` | Both the original result-consumption match and physical cleanup run in private methods entered after the invocation returns. Build 360.40 s; original complete Core 48.58 s. The stack regression disappears; old rejection/artifact scenarios progress again, and the existing later model-selected Program still fails with `input_attachment.capacity`. Full Core remains failed. |
+| E1131 | Exact ELF prologue comparison | The main `invokeObserved` initial stack subtraction is `0x2ea8` in the regressing binary, `0x2798` in the one-file old-Host control and `0x1e08` in the final private-helper candidate. These are measurements of that prologue, not the entire call chain or a performance verdict. The physical call/exception shape is retained by the actual complete Core run. |
+| E1132 | `pi-returned-frame-unit-build`; `pi-returned-frame-focused` | Host and Product test-profile builds pass in 230.66 s and 623.28 s. On Product ELF `527117f5db164f206b7e15da357bdaf178ee09d40d2210c9dfbda5ef853c6ba2`, all sixteen original Pi cancellation/revocation/capability/isolation cases pass again. The GC-deferred case 792 is not rerun. |
+| E1133 | `pi-returned-frame-nine-production-stages`; `pi-returned-frame-current-coding`; `pi-returned-frame-minimal-full-packages` | All nine production stages pass their original limits. Final App SHA-256 is `cfffc2919bebc32badc5d10e7fe247843d148d57130f4860b05f23c7567d7dd7`; Minimal is `046249471027ccb8ae1b8d59cb47b9c3b23a90887742d8968d3710d71b139537`. All three distributions are freshly assembled through the original production script. Their clean-environment/setup scopes, Minimal empty/offline host and Coding cards/ask pass again. Final packaged Coding/Full ELF is `ae7f31331188ac995f6553e094b6d4aceedbc864ace7866a6e47bc1a10c2e8fc`. |
+| E1134 | `pi-returned-frame-native-protocol-identity.json`; `pi-returned-frame-current-performance`; `pi-returned-frame-current-pty`; `pi-returned-frame-current-plugin-performance` | All sixteen final Full Native endpoint binaries are byte-identical to the E1124 601-case protocol passes; unchanged endpoint sources and fixed SDK preserve that evidence. Final host ELF passes all 100 cold starts, 40 headless samples (p95 463.9 ms), document/composer/long-transcript, fifteen PTY samples and the complete seven-record absolute plugin performance gate. Original sample counts, thresholds and clocks remain. This still provides no immutable-base comparison credit. |
+| E1135 | `pi-returned-frame-current-frontends` | Final local-provider profile still times out on the original first 5 s request. The original CLI main now passes its actual read, grep and count assertions, but later workspace enable fails with `owner.peer_disconnected` before the paginated grep assertion. ACP first prompt times out at 5 s and reports owner disconnect/broken pipe during cleanup. All three complete entry gates remain failed. There is no direct GC-stack evidence for these failures; no GC deferral or whole-gate pass is inferred. Recorded survivors are collected, with zero remaining/unreaped/unknown identities. |
+
+The final change keeps cancellation bound to the exact captured worker and
+preserves the caller's reason. It keeps the serial lock through the original
+bounded cleanup attempt. Only result decoding/error projection and cleanup
+locals move out of the frame active during nested Native invocation. The
+result match is unchanged, payload ownership is unchanged, and a pending
+physical cleanup owner still blocks replacement. No new public signature,
+permission, receipt, durable schema or logical-payload return rule is added.
+
+Final tested Host source SHA-256 is
+`abcf9d9f3b58db6eca45231f5e9de678695572ae20a663799fd7ebaab7599df5`.
+Current production/performance evidence in E1133–E1134 supersedes earlier host
+binary evidence for these changed Cangjie inputs. E1127 and E1129 stay failed
+regression attempts. E1128 is a control, not final-code acceptance. Rollback
+must preserve the original cancellation/physical-cleanup contract rather than
+restoring the larger regressing frame as a purported complete fix.
+
+The later Core capacity gap, full Product, seven unclassified physical crashes,
+positive model/ACP/complete CLI entries, remaining Todo/Memory cases, matched
+baseline and complete release acceptance remain required. GC stays deferred.
+There is no SDK component build or additional external model call. The task
+is **not complete**, and PR #49 remains Draft.
+
+
+E1136 records `pi-returned-frame-final-static`: all 129 selected Python
+regressions and the complete architecture gate pass on the final tested Host
+source and evidence update. `pi-returned-frame-lock-restoration` retains exact
+generated lock bytes, hashes and differences before restoring reviewed pins.
+It also verifies that the result-consumption match moved without content
+changes. Only private Host methods and the existing evidence documents change;
+no public signature, SDK, dependency or schema migration is added. Full
+application acceptance remains incomplete for the failures above.
