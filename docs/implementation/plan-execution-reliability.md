@@ -2885,7 +2885,7 @@ DATA-consumer ACK.
 | E1091 | `diagnostic-file-writer-probe`; `retained-scalar-core-stable-ledger/validation.json` | A fixed-SDK minimal global-writer probe passes before the numeric diagnostic. The original complete Native build passes in 668.82 seconds, then execution reaches the same capacity failure in 51.44 seconds. All 174,674 counter/SUM/count checks reconcile across 174,758 events. At the refusal the original capacity is 150,994,944 bytes, charged bytes 106,649,328, requested growth 50,331,648, and overshoot 5,986,032. The Registry group costs 72,881,904 bytes. All four temporary source files are restored. These are accounting facts, not refund authority. |
 | E1092 | `retained-scalar-classified-ledger/summary.json` | A first category-tag diagnostic stops after 113.93 seconds because its process watcher reports `process_stat_malformed`. It is a watcher failure, not a passing compile or a compiler diagnostic. Owned survivors are cleaned and reaped, and all eight temporary Cangjie sources are restored. The original malformed bytes were not captured, so the later encoding repair does not establish this failure's cause. |
 | E1093 | `proc-stat-byte-identity-red`; `proc-stat-byte-identity-green` | Two new regressions fail before the fix: direct opaque-byte parsing and an actual Linux child whose task name contains a non-UTF8 byte. A pipe handshake keeps that real child alive until observation; the fixture then releases and waits for it. After the fix all 43 process-watcher regressions pass, including the original unknown-identity, negative-field, immutable-signal, PID-reuse, and physical-reaping controls. |
-| E1094 | `retained-scalar-classified-ledger-byte-reader/validation.json`; `classified-live-invoices.json` | With the byte reader, classification builds in 491.31 seconds and reaches the original capacity failure in 48.81 seconds. All 174,674 accounting checks reconcile across 175,267 events. The largest classified live category is Catalog snapshot descendants: 111 leases totaling 33,413,328 bytes including headers. Prepared metadata is 45 leases totaling 12,562,192 bytes including headers. Current overshoot is 5,986,040 bytes. The eight-byte difference from E1091 is recorded, not normalized away. All eight temporary sources are restored. |
+| E1094 | `retained-scalar-classified-ledger-byte-reader/validation.json`; `classified-live-invoices.json` | With the byte reader, classification builds in 491.31 seconds and reaches the original capacity failure in 48.81 seconds. All 174,674 accounting checks reconcile across 175,267 events. The largest method-based category is `reserveSnapshotCatalogData159`: 111 leases totaling 33,413,328 bytes including headers. Prepared metadata is 45 leases totaling 12,562,192 bytes including headers. Current overshoot is 5,986,040 bytes. The eight-byte difference from E1091 is recorded, not normalized away. All eight temporary sources are restored. |
 
 The categories identify where to continue the implementation audit. They do not
 establish that any snapshot or metadata consumer has returned. The 144 MiB bank,
@@ -2907,3 +2907,51 @@ The fix changes validation-harness input parsing, not product Cangjie APIs,
 durable storage, or the physical DATA-return contract. Rollback pairs the
 watcher reader with its regressions; it never converts an unknown identity to
 a successful return.
+
+
+## Known derived terminal Receipts and preview publication failure
+
+`reserveSnapshotCatalogData159` also funds model input and Registry DATA.
+Its 111 leases in E1094 are not 111 snapshot objects. Actual caller roles and
+original completion failures are separated below before any retirement change.
+All evidence uses the fixed official SDK and original limits. Evidence names
+denote private run directories, not additional checked-in gates.
+
+| Evidence | Executed scope | Actual result |
+| --- | --- | --- |
+| E1096 | `retained-scalar-allocation-role-ledger` | Build 809.25 s; full Core 54.09 s, failing. All 174,674 checks reconcile. Toolset producers: 44 leases/15,090,256 bytes; Prepared metadata: 45/12,562,248; Registry DATA: 59/9,302,272; model input: 8/9,020,800. These are invoices, not leaked/returned-consumer proof. All ten probe sources restore. |
+| E1097 | `retained-scalar-model-return-ledger` | Build 715.42 s; full Core 45.65 s, failing. All 174,674 checks reconcile. Live input custodians lack the original Run task-return witness. Earlier custodians with actual task/provider/caller/worker/Future return retire through the original collector. All eleven probe sources restore. |
+| E1098 | `retained-scalar-run-result-ledger`; `retained-scalar-settlement-offset-stacks`; `retained-scalar-unsettled-source-sql` | Invalid path, path-byte-limit and stale precondition first return `thread.durable_commit_failed`, with SQL Run state `recovery_required`. Exact ELF offsets and read-only SQL locate the completion barrier. The children have actual Failed Receipts, matching reserved slots, plans and registers, same-Run/call parents and committed canonical parent results. Unresolved line/dynamic-symbol breakpoint attempts have no evidence credit. |
+| E1099 | `completed-derived-failure-red` | Runtime/Tool/Store builds pass original 900 s limits. The public positive completion regression fails before the fix; seven corruption controls pass. Two cases execute; 257 filter-excluded cases receive no pass credit. |
+| E1100 | `completed-derived-failure-codec-green`; `completed-derived-failure-full-store` | Rejected/cancelled/timed-out/failed children complete with exact canonical facts, in standalone and same-bank prepaid Store paths. Seven Unknown/state/slot/depth/digest/effect/missing-Receipt counterexamples block completion. All 259 Store cases pass unfiltered. An intermediate JSON assumption fails and is replaced by the original framed codec and paid full decoding. |
+| E1101 | `completed-derived-failure-complete-core`; `completed-derived-failure-complete-core-rerun` | An incorrect parameterized `scalarInt` assertion does not compile; parameterized `query` corrects the API use. The next build passes in 407.34 s. Core passes old rejection scenarios through `operation-limit`, then reveals duplicate plugin installation in the artifact-failure fixture. This is not complete Core acceptance. |
+| E1102 | `completed-derived-failure-isolated-workspace-core`; `artifact-fault-actual-child-sql` | Independent failure Product receives an independent workspace. Build 307.91 s; run 51.22 s, failing. SQL confirms the actual selected Native read completed. Removing the entire blob root corrupts committed Source artifacts and cannot prove a simple new-publication failure. |
+| E1103 | `completed-derived-failure-specific-artifact-core`; `artifact-fault-typed-error-sql` | Only the exact new patch blob is obstructed. Build 340.12 s; run 47.91 s, failing. Actual framed Receipt decoding confirms `application_plan.artifact_store_unavailable`, but generic executing Err becomes Unknown and the parent reports `readonly_delegation.child_outcome_unknown`. |
+| E1104 | `completed-derived-failure-known-preview-core` | Build 407.34 s; original Core 48.39 s. The concrete preview executor reports only its own complete storage/generator failure as a known failed result, after current cancellation/generation checks. Original error/file assertions and added exact Failed Receipt/completed Run assertions pass. Core then fails later at the model-selected Program with capacity. |
+| E1105 | `known-preview-current-role-ledger` | Build 355.34 s; original Core 46.06 s, failing later. All 202,212 counter/SUM/count checks reconcile. Capacity 150,994,944 bytes, charged 112,708,828, growth 50,331,648, overshoot 12,045,532. Registry costs are 55,630,784 and 23,286,044; live lease sums 49,372,456 and 9,480,640. Fixed buffers cost 237,568. All ten probe sources restore exactly. High-water excess and raw aliases remain paid. |
+
+No public Cangjie signature, storage schema, pin, wire migration, Source,
+permission or acknowledgement changes. Registry-backed reads pay before raw
+and decoded copies; unknown decoder failures retain the invoice. Standalone
+Store retains its existing synchronous codec path without a fallback bank.
+
+Rollback pairs the Store completion proof with its regressions and the concrete
+preview result branch with its product fixture. Existing Failed Receipts stay
+unchanged and may again block completion under old code. No data is deleted or
+reclassified. Current App/Coding artifacts and earlier performance results are
+not rebuilt proof of these Cangjie changes. Full Core, Product, remaining
+distributions/provider paths, baseline matrix and release acceptance remain
+required. GC is explicitly deferred. The task is **not complete**.
+
+
+E1106 records `completed-derived-final-static`: all 127 selected Python cases
+and the complete architecture gate pass, including 2,976 tracked paths,
+72 Markdown files, 39 workspace packages and 178 dependency edges. Original
+pins, SDK baselines, package inventory and TUI API remain unchanged. Generated
+locks are saved and restored. This does not accept the failing full Core.
+
+E1107 records `completed-derived-failure-cleanup-owner-core`: after tightening
+the fault fixture to own cleanup only after its directory creation succeeds,
+the final build passes in 398.58 seconds. The original Core runs 47.81 seconds,
+passes the exact artifact-failure checks and again fails at the later
+model-selected Program with capacity. No new quota or return rule is used.

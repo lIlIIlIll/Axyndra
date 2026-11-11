@@ -2271,7 +2271,7 @@ remain unchanged. The earlier watcher abort's exact cause remains unproven.
 
 Two numeric diagnostics reach the original Core capacity failure and reconcile
 all 174,674 counter and lease checks. The classified run locates 33,413,328 live
-bytes in 111 Catalog snapshot descendants and 12,562,192 bytes in 45 Prepared
+bytes in 111 leases acquired through `reserveSnapshotCatalogData159` and 12,562,192 bytes in 45 Prepared
 metadata leases, including headers. This is not evidence that those consumers
 returned or that a payment may retire. All temporary Cangjie probe source is
 restored. The original capacity gap remains required; GC stays deferred.
@@ -2280,3 +2280,37 @@ E1095 passes all 127 selected Python regressions and the complete architecture
 gate after the byte-reader fix. The generated contract lock is saved and
 restored. Current App/Coding and their recorded performance evidence remain
 unchanged; the independent Core capacity gap is not closed.
+
+
+[E1096–E1105](implementation/plan-execution-reliability.md#known-derived-terminal-receipts-and-preview-publication-failure)
+fix an inconsistency exposed before the capacity failure. A derived Operation
+keeps its exact terminal state and reserved Receipt, without an independent
+Thread ToolResult. Run completion verifies its known outcome, exact
+Receipt/effect/register bindings, original plan digest and bounded same-Run
+ancestry. Missing, Unknown, unbound or corrupted facts still block completion.
+The public Runtime/SQLite positive regression fails before the fix. After the
+fix four terminal outcomes pass with and without a Registry allocator, seven
+corruption controls pass, and the complete Store module passes 259/259.
+
+Original Native Core passes the old rejection scenarios through
+`operation-limit`. The artifact-publication fault also passes its exact error,
+file preservation, Failed Receipt and completed parent Run assertions. That
+independent Product has an independent installation workspace. The fault
+blocks only the new patch blob; committed Source artifacts remain intact.
+The concrete preview executor preserves its full typed error and rechecks
+cancellation and plugin generation before returning this known failed result.
+Generic executing errors and damaged Source keep their Unknown semantics.
+
+Complete Core still fails later, at the model-selected Program scenario, with
+`input_attachment.capacity`. All 202,212 checks in the new actual-allocation
+ledger reconcile; at that refusal the unchanged 150,994,944-byte bank is over
+by 12,045,532 bytes. Shared high-water accounting and raw aliases remain paid.
+Current App/Coding binaries predate these Cangjie changes and require rebuilds.
+GC remains deferred. GitHub authentication is restored. PR #49 remains open
+and Draft, and the task is **not complete**.
+
+
+E1106–E1107 retain all 127 Python and complete architecture passes, plus a
+final rebuild after fault-directory cleanup ownership is tightened. The real
+artifact failure still passes and the later Core capacity failure remains.
+Generated locks are saved and restored; no dependency update is included.

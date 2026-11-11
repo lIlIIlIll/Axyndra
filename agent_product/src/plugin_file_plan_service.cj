@@ -123,7 +123,22 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
         }
         let summary = match (generateProductApplicationPlanFromOrigin(proposal, source, workspace, artifacts)) {
             case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
+            case Result.Err(error) =>
+                if (error.code != "application_plan.artifact_store_unavailable") { return Result.Err(error) }
+                // The complete concrete generator/storage frame returned this
+                // failure. Workspace application is a separate authorized root;
+                // this is a known failed preview, never a generic Err/Unit ACK.
+                match (context.cancellation.check()) {
+                    case Result.Err(cancelled) => return Result.Err(cancelled)
+                    case Result.Ok(_) => () }
+                match (host.servicePackage(namespace, generation)) {
+                    case Result.Err(stale) => return Result.Err(stale)
+                    case Result.Ok(_) => () }
+                let output = operationErrorValue(error)
+                // Preserve every typed error field and the Program service's
+                // existing error-code projection for its actual failed child.
+                output.put("error_code", textValue(error.code))
+                return Result.Ok(ToolResult(call.callId, output, isError: true))
         }
         // Immutable internal artifacts may remain after cancellation, but a
         // cancelled/revoked invocation never publishes a successful result or

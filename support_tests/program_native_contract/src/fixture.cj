@@ -356,13 +356,20 @@ public class NativeProgramPlanArtifactFault {
             "AND e.tool_id=? AND o.state='committed' AND receipt.outcome='completed' AND e.reserved_receipt_id=receipt.id",
             [SqlParameter.Text(threadId),SqlParameter.Text(selected)])
         if(rows.size!=1){return}
-        lock.lock();try{if(applied){return};applied=true}finally{lock.unlock()}
-        if(exists(Path(path))){remove(path,recursive:true)}
-        File.writeTo(path,"artifact store unavailable".toArray())
+        lock.lock()
+        try {
+            if(applied){return}
+            // Block only the new immutable patch blob. Earlier read/Source
+            // blobs remain intact. Cleanup owns only a directory this call
+            // actually created, including when an unexpected collision fails.
+            if(exists(Path(path))){throw IllegalStateException("fault target must be a new artifact")}
+            Directory.create(path,recursive:true)
+            applied=true
+        } finally {lock.unlock()}
     }
     public func wasApplied(): Bool {lock.lock();try{applied}finally{lock.unlock()}}
     public func restore(): Unit {
-        if(exists(Path(path)) && FileInfo(Path(path)).isRegular()){remove(path);Directory.create(path,recursive:true)}
+        if(wasApplied() && exists(Path(path))){remove(path)}
     }
 }
 

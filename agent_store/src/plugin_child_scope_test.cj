@@ -130,6 +130,22 @@ private class ChildStoreFixture111 {
     func waitReceipt(): Result<VNextOperationReceipt> {
         store.pluginChildStartReceipt111(source,parent,OperationId("primitive-wait"),run,thread,epoch,waitPlan())
     }
+    func commitParentFailure(): Bool {
+        let slots = database.query("SELECT reserved_receipt_id,reserved_result_item_id FROM operation_effect_records WHERE operation_id=?",
+            [SqlParameter.Text(parent.value)])
+        if (slots.size != 1) { throw IllegalStateException("parent lost its real reserved settlement slots") }
+        let output = objectValue([ValueField("error", textValue("fixture child failed"))])
+        let receipt = VNextOperationReceipt(slots[0].required(0), parent, OperationOutcome.Failed,
+            output, objectValue([]), 16)
+        match (runtime.commitOperationResult(ResultEnvelope(thread, SemanticTurnId("primitive-turn"), run, epoch,
+            runtime.threadSnapshot().nextResultSequence,
+            ThreadItemDraft(ItemId(slots[0].required(1)), ThreadItemContent.ToolResult(
+                CanonicalToolCallId("primitive-call"), parent, receipt.receiptId, output, true),
+                ItemProvenance("operation", runId: Some(run), operationId: Some(parent)), createdAtMillis: 16)), receipt)) {
+            case SemanticCommitDecision.Committed(_, _) => true
+            case _ => false
+        }
+    }
     func close(): Unit { database.close(); remove(directory, recursive: true) }
 }
 
@@ -138,6 +154,59 @@ private class ChildStoreFixture111 {
 // required Host/Product pilot tests before this service can be enabled.
 @Test
 class PluginChildScopeTests111 {
+    @TestCase
+    func KnownTerminalDerivedReceiptAllowsCompletedRunAfterCanonicalParentResult(): Unit {
+        for (paid in [false, true]) {
+            for (outcome in [OperationOutcome.Rejected, OperationOutcome.Cancelled, OperationOutcome.TimedOut, OperationOutcome.Failed]) {
+                let bank = LogicalJsonOwnerBudget()
+                let original = bank.acquire(131072)
+                let allocate = { bytes: Int64 =>
+                    let loan = original.deriveRetainedLease()
+                    try { loan.ensureRetainedPeak(bytes); loan }
+                    catch (error: Exception) { loan.close(); throw error }
+                }
+                let allocation: ?(Int64)->LogicalJsonOwnerReservation = if (paid) { Some(allocate) } else { None }
+                let f = ChildStoreFixture111(allocation: allocation)
+                try {
+                    f.parentHandoff()
+                    if (outcome == OperationOutcome.Rejected) { childRequire111(f.prepareChild()) } else { f.childHandoff() }
+                    childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+                        "receipt-" + f.child.value, f.child, outcome, objectValue([]), objectValue([]), 15)))
+                    @Assert(f.commitParentFailure())
+                    let completed = f.runtime.finish(RunState.Completed, 1000)
+                    @Expect(completed.isOk())
+                    @Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs WHERE state='completed'"), 1)
+                    let rows = f.database.query("SELECT o.state,receipt.outcome FROM operations o JOIN operation_receipts receipt " +
+                        "ON receipt.operation_id=o.id WHERE o.id='primitive-child'")
+                    @Expect(rows.size, 1)
+                    @Expect(rows[0].required(0), operationOutcomeName(outcome))
+                    @Expect(rows[0].required(1), operationOutcomeName(outcome))
+                } finally { f.close(); original.close() }
+            }
+        }
+    }
+    @TestCase
+    func FailedDerivedCompletionStillRequiresExactCanonicalReceiptAndSource(): Unit {
+        for (mode in ["unknown", "state", "receipt", "depth", "digest", "effect", "missing"]) {
+            let f = ChildStoreFixture111()
+            try {
+                f.parentHandoff(); f.childHandoff()
+                childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+                    "receipt-" + f.child.value, f.child, OperationOutcome.Failed, objectValue([]), objectValue([]), 15)))
+                @Assert(f.commitParentFailure())
+                if (mode == "unknown") { f.database.execute("UPDATE operation_receipts SET outcome='unknown' WHERE operation_id='primitive-child'") }
+                else if (mode == "state") { f.database.execute("UPDATE operation_state_registers SET state='executing' WHERE operation_id='primitive-child'") }
+                else if (mode == "receipt") { f.database.execute("UPDATE operation_effect_records SET reserved_receipt_id='changed' WHERE operation_id='primitive-child'") }
+                else if (mode == "depth") { f.database.execute("UPDATE derived_operation_admissions SET depth=1 WHERE operation_id='primitive-child'") }
+                else if (mode == "digest") { f.database.execute("UPDATE derived_operation_admissions SET request_digest='changed' WHERE operation_id='primitive-child'") }
+                else if (mode == "effect") { f.database.execute("UPDATE operation_effect_records SET normalized_plan='{}' WHERE operation_id='primitive-child'") }
+                else { f.database.execute("DELETE FROM operation_receipts WHERE operation_id='primitive-child'") }
+                @Expect(f.runtime.finish(RunState.Completed, 1000).isError())
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs WHERE state='completed'"), 0)
+            } finally { f.close() }
+        }
+    }
+
     @TestCase
     func SupervisedNativeTaskChildrenReuseOnlyTheirCanonicalAdmittedRoot(): Unit {
         let bank = LogicalJsonOwnerBudget()

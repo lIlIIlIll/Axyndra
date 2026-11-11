@@ -626,7 +626,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink & ReturningModelLaneComm
         let turnId = transition.before.thread.activeTurnId.getOrThrow()
         let runId = transition.before.activeRunId.getOrThrow()
         if (runState == "completed") {
-            requireCompletedRunHasNoWorkDebt(transaction, runId)
+            requireCompletedRunHasNoWorkDebt(transaction, runId, knownParentAllocation)
             sealApprovedPlanCompletion(transaction, runId, knownParentAllocation)
         }
         transaction.execute(
@@ -976,7 +976,8 @@ func stepStatusForRun(runState: String): String {
 // by the database and must converge before a successful Run can publish.
 func requireCompletedRunHasNoWorkDebt(
     transaction: SqliteTransaction,
-    runId: RunId
+    runId: RunId,
+    allocate: ?(Int64)->LogicalJsonOwnerReservation
 ): Unit {
     let continuationRows = transaction.query(
         "SELECT payload,digest FROM run_continuations WHERE run_id=?",
@@ -1005,15 +1006,17 @@ func requireCompletedRunHasNoWorkDebt(
         throw IllegalStateException("completed Run still owns an unsettled model Attempt")
     }
     let unsettledOperations = transaction.query(
-        "SELECT operations.id FROM operations LEFT JOIN operation_receipts receipt " +
+        "SELECT operations.rowid FROM operations LEFT JOIN operation_receipts receipt " +
             "ON receipt.operation_id=operations.id WHERE operations.run_id=? " +
             "AND (operations.state!='committed' OR receipt.id IS NULL)",
         [SqlParameter.Text(runId.value)]
     )
-    if (!unsettledOperations.isEmpty()) {
-        throw IllegalStateException(
-            "completed Run still owns an unsettled Operation"
-        )
+    for (row in unsettledOperations) {
+        // Derived operations publish their own terminal state and reserved
+        // Receipt, without a separate Thread ToolResult. A known, fully bound
+        // child outcome is settled DATA, not unfinished Run work.
+        requireCompletedDerivedSettlement240(transaction,
+            parseStoreInt(row.required(0), "derived Operation row"), runId, allocate)
     }
 }
 

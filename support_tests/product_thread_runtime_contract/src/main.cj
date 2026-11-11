@@ -3997,6 +3997,10 @@ func expectRejectedFilePlan(
     let (output, isError) = runProductProgramToolCall(
         product, database, sessionName, callId, source
     )
+    let completedRuns = database.query("SELECT COUNT(*) FROM runs WHERE thread_id=? AND state='completed'",
+        [SqlParameter.Text(sessionName)])
+    expect(completedRuns.size == 1 && completedRuns[0].required(0) == "1",
+        label + "; known rejected file plan must settle its actual Run")
     let actualCode = match (output.field("error_code")) {
         case Some(value) => value.text
         case None => ""
@@ -4638,12 +4642,24 @@ func runProductFilePlanRecoveryContracts(
 }
 
 func runProductPlanArtifactStoreFailureContract(root: String, workspace: String): Unit {
+    // This independent Product owns an independent installation scope. Reusing
+    // the earlier Product's workspace would import the same namespaces twice.
+    let failureWorkspace = root + "/file-plan-artifact-failure-workspace"
+    Directory.create(failureWorkspace + "/src", recursive: true)
+    let originalAlpha = String.fromUtf8(File.readFrom(Path(workspace + "/src/alpha.cj")))
+    File.writeTo(failureWorkspace + "/src/alpha.cj", originalAlpha.toArray())
     let failureStateRoot = root + "/file-plan-artifact-failure-state"
-    let storageFault=NativeProgramPlanArtifactFault("e5-02-artifact-store-failure",failureStateRoot+"/blobs")
+    let replacement = originalAlpha + "// must remain unapplied\n"
+    let patch = encodeAgentValue(objectValue([
+        ValueField("schema", textValue("axyndra.file-patch/v1")),
+        ValueField("operations", listValue([objectValue([
+            ValueField("ordinal", integerValue(0)), ValueField("utf8_content", textValue(replacement))])]))]))
+    let storageFault=NativeProgramPlanArtifactFault("e5-02-artifact-store-failure",
+        failureStateRoot + "/blobs/" + modelPolicySha256Text(patch) + ".txt")
     let product = openProduct(config: ProductConfig(
         settingsRoot: root + "/file-plan-artifact-failure-settings",
         stateRoot: failureStateRoot,
-        workspaceRoot: workspace,
+        workspaceRoot: failureWorkspace,
         fixture: true,
         asyncEnabled: false,
         fixtureTransactionCommitMonitor:Some({transaction=>storageFault.observe(transaction)})
@@ -4652,9 +4668,6 @@ func runProductPlanArtifactStoreFailureContract(root: String, workspace: String)
     try {
         let binding=NativeProgramContractBinding(product,filePlanProposals:true,inputAttachment:false)
         storageFault.selectActualRead(binding.workspaceName("read"))
-        let originalAlpha = String.fromUtf8(File.readFrom(
-            Path(workspace + "/src/alpha.cj")
-        ))
         let failureValue = objectValue([
             ValueField("application_plan", filePlanProposal([
                 filePlanReplaceOperation(
@@ -4675,8 +4688,17 @@ func runProductPlanArtifactStoreFailureContract(root: String, workspace: String)
             case None => ""
         }
         expect(storageFault.wasApplied() && isError && errorCode == "application_plan.artifact_store_unavailable" &&
-            String.fromUtf8(File.readFrom(Path(workspace + "/src/alpha.cj"))) == originalAlpha,
-            "missing plan artifact storage rejects generation without changing workspace")
+            String.fromUtf8(File.readFrom(Path(failureWorkspace + "/src/alpha.cj"))) == originalAlpha,
+            "missing plan artifact storage rejects generation without changing workspace; injected=" +
+                storageFault.wasApplied().toString() + "; is_error=" + isError.toString() + "; code=" + errorCode)
+        let terminal = database.query("SELECT o.state,receipt.outcome FROM operations o JOIN runs r ON r.id=o.run_id " +
+            "JOIN operation_effect_records e ON e.operation_id=o.id JOIN operation_receipts receipt ON receipt.operation_id=o.id " +
+            "WHERE r.thread_id=? AND e.tool_id='host.file.plan.propose' AND receipt.id=e.reserved_receipt_id",
+            [SqlParameter.Text("e5-02-artifact-store-failure")])
+        expect(terminal.size == 1 && terminal[0].required(0) == "failed" && terminal[0].required(1) == "failed",
+            "actual preview publication failure settles its exact reserved Failed Receipt")
+        expect(database.scalarInt("SELECT COUNT(*) FROM runs WHERE thread_id='e5-02-artifact-store-failure' AND state='completed'") == 1,
+            "known failed preview completes its canonical parent Run without Unknown debt")
     } finally {
         database.close()
         storageFault.restore()
