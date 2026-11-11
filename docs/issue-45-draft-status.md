@@ -2454,3 +2454,32 @@ E1141 records all 129 selected Python regressions and the complete architecture
 gate passing. Generated root lock output is retained separately and restored
 to the reviewed dependency pins. These checks do not close the full acceptance
 gaps above.
+
+
+[E1142](implementation/plan-execution-reliability.md#current-boundary-of-the-seven-previously-unclassified-crashes)
+rechecks only the seven formerly unclassified Product failures on the current
+E1139 ELF and original Native fixtures. All seven still crash. Six current
+samples capture explicit Runtime GC frames and remain user-deferred, without
+pass credit or retroactive claims about their older stacks. The portable Codex
+Skills case has only a regional assertion, a GC thread name and an unresolved
+native frame; it remains unclassified. Evidence review corrects the private
+runner's overbroad initial label and retains that original output separately.
+No test or production source changes. Complete Product remains unaccepted;
+Core capacity, full frontend startup, baseline and release gaps stay open.
+
+
+[E1143–E1145](implementation/plan-execution-reliability.md#fresh-coding-artifact-and-retained-frontend-cores)
+bind a fresh original Coding assembly to the current E1140 App. Clean/setup and
+cards/ask pass. The original complete provider-profile, CLI and ACP tests still
+fail. Provider's first model request exceeds 5 s; CLI disconnects at plugin
+import, and ACP's first prompt times out with owner disconnect/broken pipe.
+All owned processes are collected without unknown or unreaped identities.
+
+The two already saved CLI/ACP cores contain actual Runtime GC frames in their
+crashing threads, on the exact private Coding binary and matching serial gate
+intervals. Only these current samples enter the user-deferred GC boundary.
+Neither receives pass credit. The model timeout and older incomplete stacks
+remain unclassified. No extra model call, new test execution, SDK build or
+relaxed assertion produces this diagnosis. Nine generated locks restore to
+reviewed pins. Full Core/Product, first model startup, matched baseline and
+release requirements remain incomplete; PR #49 stays open and Draft.

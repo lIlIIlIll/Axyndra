@@ -3147,3 +3147,68 @@ documentation, dependency pins, library boundaries and SDK API baselines.
 bytes and the exact diff before restoring the reviewed lock. No dependency
 change is included. Only the production existing-record branch, five public
 regressions and the existing evidence ledgers change.
+
+
+## Current boundary of the seven previously unclassified crashes
+
+E1142 records `product-unclassified-current-seven` on `62375ebc` with the exact
+E1139 Product ELF, final 1,086-case inventory and the original seventeen Native
+fixture packages. Only the seven previously unclassified identities are
+selected. Known GC-deferred identities are not retried. Original test bodies,
+case limits, qualified SDK results and physical process custody remain.
+All seven selected tests crash; none receives pass credit.
+
+Six current samples include an actual SIGSEGV and Runtime GC frames:
+`CodingDistributionTests.freshConfigurationPreservesDisabledUserProviderAndKeepsManagementUsable`,
+`PluginProcessEnvironmentTests.reflectedRawAndJsonEscapedSecretsNeverReachPluginOrCanonicalOutput`,
+`PluginShellManagedJobTests.sameCallIdAcrossThreadsKeepsIndependentTaskCancellationAndServiceLease`,
+`PluginShellServiceTests.cancellationJoinsActualBashChildBeforeCleanupAcknowledgement`,
+`InstalledWorkflowDocumentTests.actualSetCreatesThenReplacesOnlyAfterCanonicalGoalRead`,
+and `WorkspaceFrontendTests.absentSelectionAndDisabledActualPackageFailBeforeAnyNewRoot`.
+The first five capture `MapleRuntime::CheckAndPush`; the last captures
+`Mutator::GcPhaseEnum`. These current observations enter the user-deferred GC
+boundary. They do not establish a repair or classify the older incomplete
+backtraces retroactively.
+
+`PluginRuntimeContractTests.importedPortableCodexSkillsUseInstalledContextProvider`
+still has no adequate backtrace: it reports SIGABRT, the regional assertion
+`toRegion2Idx != INVALID_VALUE`, a GC thread name and one unresolved native
+frame. The private runner's initial classifier labels that combination as GC,
+but evidence review rejects that label. The original classifier output is
+retained separately; the reviewed summary records this case as
+`FAIL_NEEDS_ANALYSIS`. A thread name and assertion are not substitutes for the
+required GC stack evidence. No crash, quota, timeout, assertion or return rule
+is relaxed. Current counts are zero passes, six observed GC-deferred failures
+and one unclassified failure, with no full Product acceptance credit.
+
+This diagnostic changes no product code or acceptance gate. The non-GC Core
+capacity, full frontend startup, baseline and release requirements stay open.
+The 63 MiB Memory path also retains its earlier observed GC barrier and its
+unresolved historical OOM. GC remains deferred, PR #49 remains Draft, and the
+task is **not complete**.
+
+
+## Fresh Coding artifact and retained frontend cores
+
+| Evidence | Executed scope | Actual result |
+| --- | --- | --- |
+| E1143 | `distribution-existing-record-current-coding` | Original production Coding assembly passes in 475.47 s using E1140 App. Clean environment, operator setup and original cards/ask golden scopes pass. Packaged ELF SHA-256 is `eb99840258c3e09ec1e10ca16ba836801414566dac005ee18016feda0a3f6233`; provenance binds source App `47511d9bce1bdef80f1a3fef39cd2af9cd939f9de55e710833e028065df75b56`. Fresh default/initial/Todo paths already blocked by observed GC are not retried. Full Coding/release acceptance is not claimed. |
+| E1144 | `distribution-existing-record-current-frontends` | The three original complete local-fixture entrypoints still fail. Provider profile's first model request exceeds its original 5 s. CLI now disconnects at actual plugin import (before the earlier read/grep progress), and ACP's first prompt exceeds 5 s with owner disconnect/broken pipe. These are failures, not successful retries. Watchers collect survivors with zero remaining, unreaped or unknown identities. No extra real provider call occurs. |
+| E1145 | `distribution-existing-record-saved-frontend-cores` | Read-only GDB of two already saved system cores binds the exact E1143 private binary, actual broker role and the corresponding serial CLI/ACP gate intervals. Both terminate with SIGSEGV. CLI's crashing thread contains `BaseObject::GetSize`, `WCollector::MarkObject`, `ConcurrentMarkingWork::Execute` and `GCPoolThread::WorkerFunc`. ACP's crashing thread contains `GCTib::ForEachBitmapWord`, `Mutator::GcPhaseEnum` and `VisitStackRoots`. Both current samples have direct Runtime GC evidence and remain user-deferred, without pass credit. No new execution, arguments, locals, environment dump or SDK build is used to obtain the stacks. |
+
+The two retained uncompressed cores total 1,387,823,104 bytes. Their hashes,
+function-only stacks and exact artifact binding remain private failure evidence.
+GDB reports unavailable SQLite shared-memory mappings from the completed test
+directories; executable and Runtime symbols resolve. No application-data
+contents are read from those mappings or included in the repository.
+The missing historical portable-Skills backtrace in E1142 is not recovered
+from the system core inventory and remains unclassified.
+
+These direct stacks qualify only the two current CLI/ACP failures for the
+existing GC deferral. They do not reclassify the local model timeout, older
+unmatched failures or all subsequent unexecuted entry assertions. Initial model
+startup, full Core capacity, full Product, matched baseline and release work
+remain incomplete. `distribution-existing-record-post-package-lock-restoration`
+retains all nine generated locks and restores the reviewed pins before
+publication. Product source and the five E1139 regressions are unchanged.
+PR #49 remains Draft and the task is **not complete**.
