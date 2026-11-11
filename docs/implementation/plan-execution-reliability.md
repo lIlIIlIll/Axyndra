@@ -3096,3 +3096,54 @@ It also verifies that the result-consumption match moved without content
 changes. Only private Host methods and the existing evidence documents change;
 no public signature, SDK, dependency or schema migration is added. Full
 application acceptance remains incomplete for the failures above.
+
+
+## Preserve existing operator records during distribution defaults
+
+The existing-record branch in `applyProductDistributionDefaults` calls
+`setPluginEnabled(..., true, User)` when the bundle marks that entry enabled.
+This overrides a disabled User record and incorrectly resolves a Workspace
+record in User scope. The branch contradicts both its preservation comment
+and the existing Coding distribution requirements. The fix leaves an existing
+operator record unchanged. Normal startup and explicit management retain
+activation ownership. Missing defaults still use the original import and
+first-assembly enable paths.
+
+| Evidence | Executed scope | Actual result |
+| --- | --- | --- |
+| E1137 | `core-presence-closed-query` | Replacing the Core fixture's schema-exporting existence query with the existing boolean presence API still fails the original complete Core at later capacity (build 342.31 s, run 43.68 s). This experiment is withdrawn; the fixture restores to exact `cbb4f53f` bytes. It receives no fix or acceptance credit. |
+| E1138 | `distribution-existing-record-red` | On the unchanged production branch, four new public Product tests compile in 266.35 s. Explicitly disabled User, imported-but-disabled User and disabled Workspace regressions fail. An enabled User control passes. Actual failures include changed enabled/explicit-disable/lock state and the wrong-scope distribution error. Each case runs against a separately compiled Native C process with the original case limits and closed physical custody. |
+| E1139 | `distribution-existing-record-green`; `distribution-existing-record-final-green` | The narrow existing-record fix passes the same four tests after a 393.38 s compile. Adding a public `openProduct` first-install/close/reopen test and rebuilding in 268.29 s passes all five cases. Fresh defaults enable normally; a subsequent operator disable survives reopen without lock mutation. Explicit management enable and real tool calls remain usable. Enabled-instance calls advance from 1 to 2 in the same worker. Final Product test ELF is `9bc355c8525d566e5a5cd7af22281b2e2d19f3e7611a9d76de4b29c8d4718a82`. Natural compiled inventory is 1,086 cases; only these five receive pass credit. |
+| E1140 | `distribution-existing-record-nine-production-stages` | All original nine production stages pass with their unchanged 900 s stage bounds. App SHA-256 is `47511d9bce1bdef80f1a3fef39cd2af9cd939f9de55e710833e028065df75b56`. Minimal remains byte-identical to E1133. This is compilation evidence, not fresh distribution, performance or full frontend acceptance on the changed App. |
+
+Final tested `distribution.cj` SHA-256 is
+`2274fe73fd76b5426a1aab1bb1d6182f08c2060436a319eb1b60eee1c5e11984`.
+The public Native regression source SHA-256 is
+`879ac0da6c8e6c55f8f5494ef5242f15ff76da38dae3acff97b1a08429f265b0`.
+The direct default-application cases check both registry lock paths, the
+absence of a new context selection, retained content identity and actual
+post-application execution. The startup case uses the real distributionRoot
+configuration path rather than calling a private activation helper.
+
+This fix adds no public signature, dependency, SDK or durable-schema change.
+Operators retain control through the existing management API. There is no
+migration or automatic state rewrite. Rolling back restores the unintended
+re-enable behavior, so a disabled record must not be treated as authorizing
+activation. No permissions, Source checks, quotas, ACK rules or clocks change.
+
+The earlier full Core capacity failure, seven unclassified Product crashes,
+full Product, full model/CLI/ACP entries, remaining Todo/Memory paths, matched
+immutable-base comparison and release acceptance remain open. Known GC
+failures stay user-deferred and receive no pass credit. Earlier package and
+performance results retain their exact E1133–E1135 artifact scope. This change
+does not relabel them as tests of the new App. PR #49 remains open and Draft;
+the task is **not complete**.
+
+
+E1141 records `distribution-existing-record-final-static`: all 129 selected
+Python regressions and the complete architecture gate pass. The latter includes
+documentation, dependency pins, library boundaries and SDK API baselines.
+`distribution-existing-record-lock-restoration` retains generated root lock
+bytes and the exact diff before restoring the reviewed lock. No dependency
+change is included. Only the production existing-record branch, five public
+regressions and the existing evidence ledgers change.

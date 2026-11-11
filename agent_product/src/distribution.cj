@@ -135,7 +135,7 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
         // re-mounts every previously enabled plugin and repeats its handshake,
         // so N defaults cost O(N^2) resident generations. Register every
         // default first, then mount each one once through the same activation
-        // path. An existing operator record keeps the original per-plugin path.
+        // path. Existing operator records retain their state and activation.
         let existingRecords = product.pluginSnapshots()
         let registryEmpty = existingRecords.size == 0
         existingRecords.close()
@@ -152,11 +152,9 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
             match (existing) {
                 case Some(_) =>
                     // Never update, re-enable or shadow an operator's record.
-                    if (entry.field("enabled").getOrThrow().asBool()) {
-                        match (product.setPluginEnabled(productRegistryCopyText83(existing.getOrThrow().descriptor.copyText(PluginDescriptorText.Namespace)), true, PluginInstallScope.User)) {
-                            case PluginRegistryResult.Err(error) => return distributionError(error.code)
-                            case PluginRegistryResult.Ok(_) => () }
-                    }
+                    // Startup and explicit management own its activation; a
+                    // distribution default is not permission to enable it.
+                    ()
                 case None =>
                     if (registryEmpty) {
                         // Deferred: the whole tail is imported by one batch

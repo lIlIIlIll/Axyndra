@@ -2423,3 +2423,34 @@ tested source. Generated locks restore exactly after evidence capture. Public
 interfaces, dependency pins, SDK baselines and durable schema are unchanged.
 The result-consumption match is verified unchanged apart from its private
 post-return location. This does not accept the failing full application gates.
+
+
+[E1137–E1140](implementation/plan-execution-reliability.md#preserve-existing-operator-records-during-distribution-defaults)
+retain a withdrawn Core query experiment and the distribution preservation
+fix. The Core experiment still fails capacity and is fully withdrawn. The
+production default branch previously enabled an existing disabled User record
+and resolved a Workspace record in the wrong scope. Three small real Native
+public regressions fail before the fix; their enabled control passes.
+
+The fix preserves existing operator records and leaves fresh default imports
+on the original path. All five final public Product cases pass, including
+real first installation, explicit disable, close/reopen and management
+re-enable. Both lock files retain their previous bytes or absence. A retained
+enabled worker serves its second actual call without restart. Natural Product
+inventory is 1,086; only the five selected cases receive current pass credit.
+The unchanged nine-stage production recipe also passes. Current App SHA-256
+is `47511d9bce1bdef80f1a3fef39cd2af9cd939f9de55e710833e028065df75b56`.
+Minimal is unchanged. The previous packages and performance results remain
+bound to their earlier App, not this new build.
+
+No public interface, dependency pin, SDK, persistent schema or permission
+changes. Source, payload ownership, actual ACK and original deadlines remain.
+Full Core/Product, seven unclassified physical crashes, complete positive
+frontends, Todo/Memory, matched baseline and release gates remain incomplete.
+GC stays deferred. The task is **not complete**; PR #49 remains open and Draft.
+
+
+E1141 records all 129 selected Python regressions and the complete architecture
+gate passing. Generated root lock output is retained separately and restored
+to the reviewed dependency pins. These checks do not close the full acceptance
+gaps above.
