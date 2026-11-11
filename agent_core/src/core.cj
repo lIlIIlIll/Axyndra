@@ -10119,16 +10119,10 @@ private func coreModelToolsFromActiveFrame159(view: ?OwnedActiveRunFrame159, thr
     Result.Ok((owned, definitions))
 }
 
-// Return only the scalar after its complete view consumer has returned. The
-// historical activeRun() getter creates an independent owned lane; dropping
-// that raw view cannot acknowledge its snapshot share.
+// This query consumes only the immutable numeric limit under Runtime's lock.
+// Public ModelLane getters keep their original allocation and return contract.
 func coreActiveModelInputLimit159(runtime: AgentThreadRuntime): Int64 {
-    let view = runtime.activeRunOwned159()
-    try { coreActiveModelInputLimitFrame159(view) }
-    finally { match (view) { case Some(value) => value.returnActiveRunFrame159(); case None => () } }
-}
-private func coreActiveModelInputLimitFrame159(view: ?OwnedActiveRunFrame159): Int64 {
-    match (view) { case Some(value) => value.snapshot159().lane.maxEstimatedInput(); case None => 0 }
+    runtime.activeModelInputLimit240()
 }
 
 func coreActiveRunToolLane159(runtime: AgentThreadRuntime): Result<ModelLane> {

@@ -649,6 +649,13 @@ public class AgentThreadRuntime {
     public func hasActiveRun159(): Bool {
         lock.lock(); try { active.isSome() } finally { lock.unlock() }
     }
+    // Numeric control data only. Reading a limit does not consume a ModelLane
+    // or tool graph and must not allocate another owned outward view.
+    public func activeModelInputLimit240(): Int64 {
+        lock.lock(); try {
+            match (active) { case Some(value) => value.lane.maxEstimatedInput(); case None => 0 }
+        } finally { lock.unlock() }
+    }
     public func activeRunControl159(): ?ActiveRunControl159 {
         lock.lock()
         try {
