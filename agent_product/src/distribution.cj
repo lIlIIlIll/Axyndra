@@ -145,33 +145,28 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
         let firstAssemblyEnabled = ArrayList<Bool>()
         for (index in 0..descriptors.size) {
             let descriptor = descriptors[index]; let entry = entries.items[index]
-            var existing: ?ProductPluginRecord = None
-            for (record in productRegistryRecords83(product.pluginSnapshots()) where productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))) {
-                if (existing.isNone() || distributionPluginScopeRank(record) > distributionPluginScopeRank(existing.getOrThrow())) { existing = Some(record) }
+            // This decision needs only presence, not copied records or their
+            // scope ranking. Keep the original snapshot timing around imports.
+            if (distributionHasInstalledNamespace(product, descriptor)) {
+                // Never update, re-enable or shadow an operator's record.
+                // Startup and explicit management own its activation.
+                continue
             }
-            match (existing) {
-                case Some(_) =>
-                    // Never update, re-enable or shadow an operator's record.
-                    // Startup and explicit management own its activation; a
-                    // distribution default is not permission to enable it.
-                    ()
-                case None =>
-                    if (registryEmpty) {
-                        // Deferred: the whole tail is imported by one batch
-                        // once every missing root is known.
-                        firstAssemblyRoots.add(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)))
-                        firstAssemblyDescriptors.add(descriptor)
-                        firstAssemblyEnabled.add(entry.field("enabled").getOrThrow().asBool())
-                    } else {
-                        let installed = match (product.importLocalPlugin(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)), PluginInstallScope.User)) {
-                            case PluginRegistryResult.Ok(value) => value
-                            case PluginRegistryResult.Err(error) => return distributionError(error.code) }
-                        if (productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.ContentDigest)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) || productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Version)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version))) {
-                            return distributionError("distribution.package_changed") }
-                        if (entry.field("enabled").getOrThrow().asBool()) {
-                            enabledNamespaces.add(productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Namespace)))
-                        }
-                    }
+            if (registryEmpty) {
+                // Deferred: the whole tail is imported by one batch
+                // once every missing root is known.
+                firstAssemblyRoots.add(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)))
+                firstAssemblyDescriptors.add(descriptor)
+                firstAssemblyEnabled.add(entry.field("enabled").getOrThrow().asBool())
+            } else {
+                let installed = match (product.importLocalPlugin(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)), PluginInstallScope.User)) {
+                    case PluginRegistryResult.Ok(value) => value
+                    case PluginRegistryResult.Err(error) => return distributionError(error.code) }
+                if (productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.ContentDigest)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) || productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Version)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version))) {
+                    return distributionError("distribution.package_changed") }
+                if (entry.field("enabled").getOrThrow().asBool()) {
+                    enabledNamespaces.add(productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Namespace)))
+                }
             }
         }
         if (!firstAssemblyRoots.isEmpty()) {
@@ -381,6 +376,20 @@ func seedDistributionWorkspace(product: ProductRuntime, value: AgentValue): Resu
         catch(_:Exception){if(!exists(destination)){return distributionError("distribution.workspace_write_failed")}}
     }finally{if(exists(Path(temporary))){remove(temporary)}}
     Result.Ok(())
+}
+
+// Only a Bool leaves the owned snapshot. No complete record JSON, raw name,
+// or compatibility-copy debt is needed to decide whether to import a default.
+private func distributionHasInstalledNamespace(product: ProductRuntime,
+    descriptor: OwnedPluginPackageDescriptor): Bool {
+    let records = product.pluginSnapshots()
+    try {
+        for (index in 0..records.size) {
+            if (records.at(index).descriptor.sameText(PluginDescriptorText.Namespace,
+                descriptor, PluginDescriptorText.Namespace)) { return true }
+        }
+        false
+    } finally { records.close() }
 }
 
 private func distributionPluginScopeRank(record: ProductPluginRecord): Int64 {
