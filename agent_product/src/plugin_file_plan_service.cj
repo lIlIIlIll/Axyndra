@@ -93,65 +93,67 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        let parentId = prepared.source.parentOperationId.getOrThrow()
-        let parent = match (operations.loadPlan(parentId, context.runId)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let root = prepared.source.operationRoot.getOrThrow()
-        if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) == "" ||
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) != pluginReceiptText(arguments, "package_digest") ||
-            !pluginFilePlanParentIdentity(parent, arguments, namespace, productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest))) ||
-            parent.toolName != root.toolName() || !parent.toolName.startsWith("plugin." + namespace + ".") ||
-            context.workspaceRoot != workspace.rootPath()) {
-            return pluginProcessError("application_plan.source_mismatch", "file plan origin must match the frozen parent and workspace")
-        }
-        let source = objectValue([
-            ValueField("kind", textValue("plugin")),
-            ValueField("run_id", textValue(context.runId.value)),
-            ValueField("root_operation_id", textValue(parentId.value)),
-            ValueField("generation_operation_id", textValue(prepared.operationId.value)),
-            ValueField("plugin_namespace", textValue(namespace)),
-            ValueField("plugin_version", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)))),
-            ValueField("package_digest", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)))),
-            ValueField("contribution", textValue(parent.toolName)),
-            ValueField("instance_generation", textValue(generation.toString())),
-            ValueField("workspace_id", textValue("workspace:sha256:" + artifactSha256(workspace.rootPath().toArray())))
-        ])
-        if (arguments.field("managed_binding").isSome()) {
-            source.put("parent_implementation_fingerprint", textValue(parent.implementation.implementationFingerprint))
-        }
-        let summary = match (generateProductApplicationPlanFromOrigin(proposal, source, workspace, artifacts)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) =>
-                if (error.code != "application_plan.artifact_store_unavailable") { return Result.Err(error) }
-                // The complete concrete generator/storage frame returned this
-                // failure. Workspace application is a separate authorized root;
-                // this is a known failed preview, never a generic Err/Unit ACK.
-                match (context.cancellation.check()) {
-                    case Result.Err(cancelled) => return Result.Err(cancelled)
-                    case Result.Ok(_) => () }
-                match (host.servicePackage(namespace, generation)) {
-                    case Result.Err(stale) => return Result.Err(stale)
-                    case Result.Ok(_) => () }
-                let output = operationErrorValue(error)
-                // Preserve every typed error field and the Program service's
-                // existing error-code projection for its actual failed child.
-                output.put("error_code", textValue(error.code))
-                return Result.Ok(ToolResult(call.callId, output, isError: true))
-        }
-        // Immutable internal artifacts may remain after cancellation, but a
-        // cancelled/revoked invocation never publishes a successful result or
-        // applies workspace writes. Applying needs a separate authorized root.
-        match (context.cancellation.check()) {
-            case Result.Err(error) => return Result.Err(error)
-            case Result.Ok(_) => ()
-        }
-        match (host.servicePackage(namespace, generation)) {
-            case Result.Err(error) => return Result.Err(error)
-            case Result.Ok(_) => ()
-        }
-        Result.Ok(ToolResult(call.callId, summary))
+        try {
+            let parentId = prepared.source.parentOperationId.getOrThrow()
+            let parent = match (operations.loadPlan(parentId, context.runId)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            let root = prepared.source.operationRoot.getOrThrow()
+            if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) == "" ||
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) != pluginReceiptText(arguments, "package_digest") ||
+                !pluginFilePlanParentIdentity(parent, arguments, namespace, productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest))) ||
+                parent.toolName != root.toolName() || !parent.toolName.startsWith("plugin." + namespace + ".") ||
+                context.workspaceRoot != workspace.rootPath()) {
+                return pluginProcessError("application_plan.source_mismatch", "file plan origin must match the frozen parent and workspace")
+            }
+            let source = objectValue([
+                ValueField("kind", textValue("plugin")),
+                ValueField("run_id", textValue(context.runId.value)),
+                ValueField("root_operation_id", textValue(parentId.value)),
+                ValueField("generation_operation_id", textValue(prepared.operationId.value)),
+                ValueField("plugin_namespace", textValue(namespace)),
+                ValueField("plugin_version", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)))),
+                ValueField("package_digest", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)))),
+                ValueField("contribution", textValue(parent.toolName)),
+                ValueField("instance_generation", textValue(generation.toString())),
+                ValueField("workspace_id", textValue("workspace:sha256:" + artifactSha256(workspace.rootPath().toArray())))
+            ])
+            if (arguments.field("managed_binding").isSome()) {
+                source.put("parent_implementation_fingerprint", textValue(parent.implementation.implementationFingerprint))
+            }
+            let summary = match (generateProductApplicationPlanFromOrigin(proposal, source, workspace, artifacts)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) =>
+                    if (error.code != "application_plan.artifact_store_unavailable") { return Result.Err(error) }
+                    // The complete concrete generator/storage frame returned this
+                    // failure. Workspace application is a separate authorized root;
+                    // this is a known failed preview, never a generic Err/Unit ACK.
+                    match (context.cancellation.check()) {
+                        case Result.Err(cancelled) => return Result.Err(cancelled)
+                        case Result.Ok(_) => () }
+                    match (host.servicePackage(namespace, generation)) {
+                        case Result.Err(stale) => return Result.Err(stale)
+                        case Result.Ok(current) => current.close() }
+                    let output = operationErrorValue(error)
+                    // Preserve every typed error field and the Program service's
+                    // existing error-code projection for its actual failed child.
+                    output.put("error_code", textValue(error.code))
+                    return Result.Ok(ToolResult(call.callId, output, isError: true))
+            }
+            // Immutable internal artifacts may remain after cancellation, but a
+            // cancelled/revoked invocation never publishes a successful result or
+            // applies workspace writes. Applying needs a separate authorized root.
+            match (context.cancellation.check()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => ()
+            }
+            match (host.servicePackage(namespace, generation)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(current) => current.close()
+            }
+            Result.Ok(ToolResult(call.callId, summary))
+        } finally { descriptor.close() }
     }
 }
 
