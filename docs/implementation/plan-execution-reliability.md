@@ -3212,3 +3212,404 @@ remain incomplete. `distribution-existing-record-post-package-lock-restoration`
 retains all nine generated locks and restores the reviewed pins before
 publication. Product source and the five E1139 regressions are unchanged.
 PR #49 remains Draft and the task is **not complete**.
+
+## Portable Skills signal-stop evidence
+
+E1146 records `portable-skills-fresh-fixture` and
+`portable-skills-signal-fresh-diagnostic` on source `fd392ba5`.
+The old fixture directories referenced by the private continuation driver are
+absent. That driver fails before starting GDB and receives no execution credit.
+The original Skills preparation entry builds a replacement package, passes its
+16 algorithm cases and 45 protocol cases, and verifies the packaged content.
+Its Native entrypoint SHA-256 is
+`592f855506ae6683f49d856bb3542cf511522d8cdc3d3ff2156aead3c1bc7b26`,
+identical to the earlier Skills fixture. No SDK component is rebuilt.
+
+GDB runs only
+`PluginRuntimeContractTests.importedPortableCodexSkillsUseInstalledContextProvider`
+on the unchanged E1139 Product ELF
+`9bc355c8525d566e5a5cd7af22281b2e2d19f3e7611a9d76de4b29c8d4718a82`.
+The actual test child stops on SIGSEGV in its `gc-main-thread`.
+Function-only frames contain `CheckAndPush`, `GCTib::ForEachBitmapWord`,
+`Mutator::GcPhaseEnum`, `TracingCollector::VisitStackRoots`, and
+`WCollector::DoGarbageCollection`. This current sample has direct Runtime GC
+evidence and enters the existing user-approved deferral, without pass credit.
+The older regional-assertion abort still has no complete backtrace.
+
+The debugger follows the actual test child and retains the original 60-second
+case and 90-second process bounds. It stops at the signal and terminates its
+inferiors after collecting function names. Its exit code 0 does not mean that
+the test passes. The watcher records no surviving, unreaped, or unknown
+processes. Debugging can perturb scheduling. No arguments, locals, object
+contents, or full core dump are collected.
+
+The first local-provider timeout, full Core capacity, remaining Product flows,
+matched baseline, and release gates remain open. PR #49 stays Draft.
+
+## Prepared producer and consumer lifetime states
+
+E1147 records `core-prepared-lifetime-states` on source `fd392ba5`.
+The complete original Core contract rebuilds in 623.66 seconds and fails in
+58.45 seconds at the model-selected readonly Program with
+`input_attachment.capacity`. Both original 900-second bounds remain.
+One temporary source probe records only stable numeric owner IDs, invoices,
+consumer counts, header counts, and producer/unknown/released flags at their
+actual mutation sites. It changes no allocation, Source, ACK, or refund rule.
+The source probe is removed after the run. The cached diagnostic ELF is not a
+production artifact.
+
+The 3,452 events distinguish 63 actual Prepared owners. All 63 record their
+producer return. Ten record full release with no unknown hold. The remaining
+53 have `unknown=true` and remain paid, with a combined recorded base invoice
+of 14,412,280 bytes. Four concrete consumer loans remain across those owners.
+Zero counted loans on the other owners do not prove that raw exported aliases
+have returned. The earlier complete bank reconciliation remains in
+`known-preview-current-role-ledger`. This narrower probe is not a new complete
+bank ledger.
+
+This rules out a missing Prepared producer-return notification in this run.
+The unresolved path is actual raw metadata consumption and alias retirement,
+including the four remaining explicit loans. Neither producer return nor a
+logical terminal state permits clearing an unknown hold. No quota increase,
+guessed consumer ACK, or withdrawn candidate is shipped.
+
+## First local provider startup under trace
+
+E1148 records `provider-profile-retained-writable-diagnostic` and
+`provider-profile-retained-path-diagnostic` against source `fd392ba5` and the
+unchanged Coding ELF
+`eb99840258c3e09ec1e10ca16ba836801414566dac005ee18016feda0a3f6233`.
+Each uses a task-private clone of an actual previously installed operator
+home. Its regular installed package bytes and the provider package digest are
+verified; namespace binding preserves their real installed paths. The original
+home is untouched. The lock hash remains
+`62386514f3fa45eb0b2d0f914ac43cb74b98d617b2abe01375414da227be206d`
+before and after each request.
+
+The actual `--print --model profile-one/shared-model` request reaches the
+original five-second bound in both traced runs. Neither local HTTP fixture
+receives a request. The path trace records repeated opens of installed package
+manifests, libraries, and executables. This establishes work to investigate,
+not the cause of the untraced timeout: tracing adds overhead and a concurrent
+compilation perturbs timing. Both process watchers record closed custody
+without remaining, unreaped, or unknown processes.
+
+Earlier diagnostic attempts failed during setup or cleanup before this
+request and provide no timeout attribution. These retained-home runs do not
+accept fresh installation, matched-baseline performance, or the complete
+provider-profile flow. No new external model call is made. The startup failure
+remains unlocated; there is no new GC classification, integrity bypass,
+cross-transaction verification cache, deadline increase, or passed model flow.
+
+## Unaccepted ownership candidate and Native stack regression
+
+E1149 records two exact-source Core/recovery runs of an uncommitted ownership
+candidate based on `fd392ba5`. Both preserve the original 900-second build and
+case bounds, fixed SDK, 144 MiB bank, 16 MiB floor, and 64 MiB attachment work
+invoice. These elapsed times describe diagnostics, not performance acceptance.
+
+| Evidence directory | Build seconds | Core seconds | Actual result |
+|---|---:|---:|---|
+| `core-opaque-boundary-candidate` | 480.40 | 3.07 | New `StackOverflowError` |
+| `core-opaque-boundary-stack-corrected` | 376.39 | 48.61 | Original model-selected PTC path still rejects `input_attachment.capacity` |
+
+The first Native ELF is
+`3132a7090f9a2f2c8a5d36618bd804c3ebc9bd6cf36d903f0470ed332e849bdc`.
+Its backtrace identifies nested Prepared loan closures around the read-view
+worker. A private counted data holder lets those capture helpers return before
+entering Native code and clears its fields before consumer return. The second
+ELF is
+`5815d14d59438bfd65bedd23c0563138ea1f22fdc72018790fbb93b7f9befbde`.
+It records no stack overflow in that run, but still fails the capacity case.
+Both watchers record closed custody with no remaining, unreaped, or unknown
+processes. Neither source variant accepts Core or the ownership change.
+
+The `core-opaque-boundary-unknown-sites` debugger attempt cannot resolve its
+source-line breakpoint and exits before starting the Native case. It supplies
+no Raw-export callsite or acceptance evidence. Refusal-time state and actual
+first-export callers still require observation; final producer-return totals
+alone cannot establish the state at the earlier refusal.
+
+## Silent untraced provider startup sample
+
+E1150 records `provider-profile-retained-capture-diagnostic` and its separate
+process watcher. The Coding ELF is unchanged from E1148. This request starts
+from another clone of the original retained operator home, not the homes
+modified by the earlier diagnostic requests. Only stale socket nodes are
+omitted; installed regular package and lock bytes are verified.
+
+The original five-second `--print` request times out without strace. Neither
+stdout nor stderr has captured bytes, and both local HTTP fixtures receive
+zero requests. The operator lock hash is unchanged. The saved database has
+zero `runs`, `model_attempts`, and `operations` rows. The watcher records closed
+custody with no remaining, unreaped, or unknown processes. Existing path-trace
+signal records contain no observed SIGABRT or SIGSEGV before truncation.
+
+This narrows the sample to silent work before Run admission. It does not
+identify the blocking phase, prove absence of GC involvement, or establish a
+deadlock. Concurrent compilation still prevents a matched performance claim.
+First local model startup remains incomplete; no integrity check, permission,
+deadline, or acceptance requirement is relaxed.
+
+## Refusal-time metadata and historical high-water attribution
+
+E1151 records `core-opaque-boundary-refusal-sites`. This is a temporary
+mutation-site probe of the unaccepted ownership candidate, not a passing Core
+run. At the actual attachment refusal:
+
+| Accounting field | Bytes |
+|---|---:|
+| Original bank capacity | 150,994,944 |
+| Already charged | 111,628,484 |
+| Requested incremental growth | 50,331,648 |
+| Overshoot | 10,965,188 |
+| Active Prepared base invoices | 3,660,096 |
+
+Sixteen Prepared owners are active at that point. Eleven Workspace owners
+have returned producers, no counted consumers, and unknown exports; four
+preview owners still have counted consumers; the current Program owner has
+not returned. The first-export stacks for all eleven unknown owners identify
+`ToolInvocationContext.executeDerivedFrame` reading `prepared.call.name`.
+This identifies a retention edge, not permission to refund its backing or a
+complete explanation of the bank charge. The temporary probe sources restore
+exactly.
+
+`core-registry-historical-peak-attribution.json` separately replays the
+already-reconciled E1105 ledger from source `ec5fa1d2`. It captures each
+Registry allocation at a consistent derived-ledger observation immediately
+after its final high-water growth:
+
+| Historical allocation | Event line | Charged high-water bytes | Live lease SUM bytes |
+|---|---:|---:|---:|
+| Registry group 1 | 130,621 | 55,630,784 | 55,630,784 |
+| Registry group 214 | 200,348 | 23,286,044 | 23,286,044 |
+
+The private record preserves the role decomposition at those peaks. It is
+historical evidence, not a measurement of the current candidate. Neither
+high-water excess at a later observation nor returned producers establish a
+leak, physical heap size, or an actual consumer ACK.
+
+## Withdrawn independent Core-frame candidate
+
+E1152 records `core-independent-copy-frame`. A same-bank independent DATA
+frame retains the real 16 MiB floor and existing return guards, but its
+458.81-second build is followed by a failing 28.28-second Core run. The ELF is
+`0f09ee3e470cae85f5cab7df0db3581aa8e9bf2a44d6c9247395b2ca5cd2c4db`.
+The first ungranted file-plan scenario raises `NoneValueException` while
+reading its expected error field. This run does not establish that the
+underlying error was a capacity rejection.
+
+That payer change is withdrawn. The original Registry-backed copied-plan
+payer is restored; the cached experimental ELF is not evidence for restored
+source. An unrun scheduler-label candidate is also withdrawn after matching
+the scope of the earlier rejected name-copy experiment. Its patch is retained
+privately, with no build, test, or implementation credit.
+
+## Existing startup phases and unavailable CPU sampling
+
+E1153 records `provider-profile-retained-startup-forwarded-diagnostic` and its
+process watcher. The original fixture filters `AXYNDRA_` variables, so the
+earlier `startup-stage` attempt did not forward the diagnostic flag and is not
+startup-stage evidence. The valid diagnostic forwards only Axyndra's existing
+`AXYNDRA_TUI_PERF_TRACE` switch.
+
+On the unchanged Coding ELF, the frontend emits
+`configuration_loading_completed` at 91,231,563 ns. This stage is emitted by
+`OwnerNativeClientFrontend180`, not by completed server-side Product assembly.
+The request still reaches the original five-second timeout with zero local
+HTTP requests and an unchanged operator lock. It does not locate the
+remaining server work or accept first-model startup.
+
+The `cpu-sample` and `cpu-parent` records preserve denied `perf record`
+attempts. The separate host-parent inherited attempt is also denied before
+launching its command. They contain no usable CPU samples; a successful
+counter-only prerequisite is not sampling permission. No permission setting,
+SDK, deadline, or model-service configuration is changed. These failures
+provide neither GC attribution nor performance acceptance.
+
+## Caller-owned file-plan views and narrowed candidate
+
+E1154 records `core-preview-owned-descriptor-cleanup`. The concrete preview
+executor now closes its initial caller-owned service descriptor on every
+return path and closes both successful post-generation check views. These
+are fresh captured-record views; closing them does not close the installed
+generation, change its Source, or acknowledge result DATA.
+
+With the broader ownership candidate still present, the build passes in
+565.72 seconds. The real Core run completes the file-plan section, including
+the known artifact-store failure, then fails at the original model-selected
+PTC attachment after 65.87 seconds. Its ELF is
+`f83dee780628430823c6eac9ce57022ac57f605cd01e75c9d65a76565a80268a`.
+Process custody closes with no remaining, unreaped, or unknown processes.
+This is scoped execution evidence, not full Core acceptance.
+
+The broader ownership rewrite is then withdrawn, including its three new
+source files. Exact source snapshots, the patch, and withdrawal scope remain
+in private evidence. Only the preview-view closure and an owned scalar
+distribution-presence check remain under implementation.
+
+The latter replaces complete compatibility-record copies used only for a
+presence decision. It preserves the original per-default snapshot timing,
+all package integrity checks, existing operator states and scopes, and the
+empty-Registry-only assembly rule. Effective-record ranking for context and
+workspace selection is unchanged. It is not yet a verified explanation or
+fix for the first-model timeout. These two changes require their own final
+source builds and Native checks; earlier candidate artifacts do not qualify
+them. Core capacity, remaining non-GC flows, matched baseline and release
+acceptance remain open. GC remains deferred and PR #49 remains Draft.
+
+## Narrowed candidate production and Native build bounds
+
+E1155 records `owned-view-nine-production-stages` on the two E1154 source
+changes. All nine original production stages pass within their unchanged
+900-second limits: Runtime, Tool, Store, Core, Host, Product, RPC, App and
+Minimal. The resulting App SHA-256 is
+`459579d5496a60f4306f15f171692c4af97673600a7b32643c276276a9cf9bb6`;
+Minimal is
+`046249471027ccb8ae1b8d59cb47b9c3b23a90887742d8968d3710d71b139537`.
+These are production compilation results, not Core execution, matched
+performance or release acceptance.
+
+E1156 preserves `owned-view-native-regressions` and
+`owned-view-native-regressions-resumed`. Both one-job Product test-profile
+builds hit their original 900-second limits. Neither runs a test or produces
+a current-source Native pass. The first leaves only a few seconds for its
+last observed compiler child; the resumed build still compiles dependencies.
+Those observations do not establish a compiler hang. Both watchers finish
+cleanup with no remaining, unreaped or unknown processes.
+
+The existing eight-stage test-profile build procedure remains applicable,
+with each original stage bound and Product's one-job setting unchanged.
+Any later staged success must retain these two failures and cannot serve as
+cold-build timing acceptance. The current Coding assembly and original
+full Core/recovery still require their own execution evidence. Complete
+Product, first local model request, matched baseline and release acceptance
+remain open. GC is deferred; PR #49 remains Draft and the task is incomplete.
+
+
+## Current Coding smoke and rebuilt complete Core
+
+E1157 records `owned-view-current-coding` and `owned-view-final-core` on the
+same two E1154 source hashes. The fresh Coding9 assembly passes in
+865.88 seconds within its original 2100-second limit. Clean-environment
+relocation, setup, cards and ask pass with closed physical custody. The
+packaged ELF SHA-256 is
+`00ea5a21b024255d8e2aa7dfbd3b5101f6fff3e18f02fc0b7863fd1cf78d690f`.
+Cards and ask create no model Attempt or Run in their fixture databases;
+they are not evidence of a successful provider request.
+
+The dedicated Core cache is rebuilt from the retained two-source candidate,
+not reused from an abandoned ownership experiment. Compilation passes in
+590.55 seconds. Its ELF SHA-256 is
+`bac82f5fc53470443f53385e8eadabea6321c98f5a2197819ac7b99602a6b187`.
+The original complete Core/recovery case runs for 93.15 seconds, passes the
+file-plan scenarios through the known artifact-store failure, then fails at
+the original model-selected read-only Program with `input_attachment.capacity`.
+Both build and execution finish with no remaining, unreaped or unknown
+processes. This is final-source failure evidence, not complete Core acceptance.
+
+E1158 records `provider-profile-retained-owned-view-current-diagnostic`.
+The original local request still times out after 5.003 seconds, with zero
+HTTP requests and an unchanged installed-operator lock. The presence-only
+distribution read has not fixed this boundary.
+
+The associated parent-GDB records are intrusive diagnostics, not acceptance.
+The first stops at an unrelated helper exit. The corrected all-inferior
+capture observes the actual Product owner in `openProductAssembly180`,
+plugin activation and a sandboxed process launch; nested PID namespaces
+produce debugger validity warnings for sandbox children. An owner-only
+handoff attempt fails before launching the program; its replacement loses
+the owner to a later helper, captures no functions, and requires watcher
+cleanup of detached processes. None locates the timeout's cause or provides
+GC, successful-model, fresh-install or performance credit.
+
+The eight-stage Native build, remaining non-GC flows, matched baseline and
+complete release acceptance remain open. GC remains deferred, PR #49 stays
+Draft, and the task is incomplete.
+
+
+## Narrowed candidate Native regressions and static gates
+
+E1159 records `owned-view-unit-dag` and
+`owned-view-native-regressions-after-verified-cleanup`. The original staged
+test-profile builds pass Runtime, Tool, Store, Core and Host, but Product
+again hits 900 seconds. RPC and App are not reached in that attempt. Normal
+dependency compilation still consumes part of Product's stage; the last
+observed compiler child has about 64 seconds left. This does not establish
+a compiler hang or accept the eight-stage build.
+
+After those normal dependencies exist, the same one-job Product command
+passes in 414.90 seconds, still within its original 900-second bound. All
+three preceding timeouts remain failed evidence, not cold-build acceptance.
+A private continuation-precondition error launches neither compilation nor
+tests and receives no credit. The corrected prerequisite verifies physical
+cleanup of the failed build; it does not treat that cleanup as a DATA ACK
+or weaken successful-case custody checks.
+
+The current Product ELF SHA-256 is
+`0d2b7c5c3a40f37e146534f404508401a3e6aa41e0a28c253c08a8de4debdcf2`.
+Natural enumeration finds 1,086 cases. The original five real Native
+`DistributionExistingNativeRecordTests` all pass: explicit User disable,
+imported-but-disabled User state, Workspace scope without User shadowing,
+continuous use of the same enabled process, and fresh startup followed by
+disable/reopen/management re-enable. Each qualified SDK result reports one
+pass, zero failures and zero errors; all physical custody checks pass.
+The other 1,081 cases receive no current-ELF execution credit.
+
+E1160 records `owned-view-final-static`: all 129 selected Python regressions
+and the complete architecture gate pass. The latter checks 2,977 tracked
+paths, 72 Markdown files, 39 workspace packages and 178 local dependency
+edges, with zero remaining baseline boundary violations. Ten generated
+locks are preserved with exact differences and hashes, then restored to
+the reviewed pins; no dependency change ships.
+
+`owned-view-source-newline-restoration` restores untouched mixed line endings
+in `distribution.cj`, avoiding an unrelated whole-file diff. Its published
+SHA-256 is
+`b613d6c882b91565e2a1b4065093e4888ac1d086d19ab9dbe92dfbb92d622e70`.
+Normalizing those line endings exactly reproduces the compiled/tested source
+SHA-256
+`131c29dc93c5847a86768b7c9cb4f68d2963f09dddbe32121e773f0d72f3be33`.
+This is a whitespace-only source-equivalence record, not a new runtime
+execution. The preview executor's source bytes are unchanged. Artifact
+identities and earlier exact-source hashes remain attached to their runs.
+
+The two narrow fixes preserve the existing public API, package integrity
+checks, operator activation state, Source, actual result ACK and original
+resource limits. Their scoped checks do not solve E1157's complete Core
+capacity failure or E1158's first-model timeout. Remaining non-GC Product
+and application flows, matched baseline and release acceptance stay open.
+GC remains deferred, PR #49 stays Draft, and the task is incomplete.
+
+
+## Owner-only startup capture and publication checkpoint
+
+E1161 records `provider-profile-retained-startup-parent-gdb-owner3-diagnostic`
+and `provider-profile-retained-syscall-duration-diagnostic`. The corrected
+debugger handoff follows the actual owner through `setsid`'s fork, then
+stays with that owner instead of following plugin helpers. Its function-only
+sample observes `openProductAssembly180`, plugin activation and native
+sandboxed process launch. This is intrusive startup evidence, not a
+successful model request, a CPU profile or a GC classification.
+
+The separate five-second syscall trace runs without another task build.
+It observes 16,943 completed reads returning 997,674,973 bytes across all
+traced descriptors. Those bytes are not attributed solely to package files.
+Completed clone calls total 14.50 ms and completed exec calls total 13.11 ms;
+durations overlap across threads and do not represent CPU shares. Repeated
+package opens and continued reads at the deadline do not prove which work
+causes the untraced timeout. The original five-second request bound and
+all integrity checks remain unchanged. Every owned process is collected.
+
+The two narrow source changes are committed as `b18c9b7` and `17880ed`.
+Their executed artifacts retain the `fd392ba5` base plus exact working-source
+hashes and the E1160 newline-only equivalence. No database, wire, dependency
+pin, public API, resource limit or DATA-ACK migration is introduced.
+An immutable `4d88fa60` baseline checkout is prepared separately; it has
+not yet produced fixed-SDK comparison artifacts or performance results.
+
+Core capacity, first local model startup, remaining non-GC flows, the
+matching baseline and complete release acceptance remain open. GC stays
+deferred and PR #49 stays Draft. This is a publication checkpoint, not
+completion of Issue #45 or its remaining requirements.
+

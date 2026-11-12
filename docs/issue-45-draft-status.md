@@ -2483,3 +2483,135 @@ remain unclassified. No extra model call, new test execution, SDK build or
 relaxed assertion produces this diagnosis. Nine generated locks restore to
 reviewed pins. Full Core/Product, first model startup, matched baseline and
 release requirements remain incomplete; PR #49 stays open and Draft.
+
+
+[E1146](implementation/plan-execution-reliability.md#portable-skills-signal-stop-evidence)
+captures a new portable Codex Skills sample with direct Runtime GC frames.
+The Product ELF is unchanged. The missing historical fixture is rebuilt through
+the original preparation entry and has the same Native entrypoint hash.
+Its 16 algorithm and 45 protocol cases pass, but these do not accept Product.
+The real test child stops on SIGSEGV in `CheckAndPush`, with
+`GCTib::ForEachBitmapWord`, `Mutator::GcPhaseEnum`, and stack-root traversal
+frames. This sample enters the user-approved GC deferral without pass credit.
+The older regional-assertion abort remains unclassified. Debugger exit 0 is
+not a passed test; its inferiors terminate after function-stack capture.
+Core capacity, first local model startup, remaining Product flows, matched
+baseline, and release acceptance stay open. The task is **not complete**.
+
+[E1147](implementation/plan-execution-reliability.md#prepared-producer-and-consumer-lifetime-states)
+records the complete Core/recovery diagnostic on `fd392ba5`. All 63 Prepared
+owners record producer return; 53 remain paid with unknown exports and four
+outstanding concrete loans. Their recorded base invoices total 14,412,280
+bytes. This rules out a missing producer-return notification in that run,
+not a leak or a right to refund. The temporary numeric probe is removed.
+
+[E1148](implementation/plan-execution-reliability.md#first-local-provider-startup-under-trace)
+records two first-request diagnostics using the unchanged Coding ELF and a
+clone of an actual installed operator home. Installed package bytes are
+verified; its lock does not change. Both hit the original five-second bound
+with zero local HTTP requests. Repeated package reads are observed, but tracing
+and concurrent compilation prevent performance acceptance or a root-cause
+claim. This is not fresh-install proof and does not justify skipping integrity
+checks, cross-transaction verification reuse, or a longer deadline.
+Core ownership changes under investigation have no acceptance credit until
+their own exact-source Native build and complete Core smoke pass. Remaining
+non-GC flows, matched baseline, and release requirements stay open; PR #49
+remains **Draft** and the task is **not complete**.
+
+[E1149](implementation/plan-execution-reliability.md#unaccepted-ownership-candidate-and-native-stack-regression)
+records the unaccepted ownership candidate. Its first build passes but Core
+hits a new stack overflow. Returning private capture helpers before the
+read-view worker removes that observed overflow in the next complete run;
+Core still rejects the model-selected PTC attachment at the unchanged
+aggregate. Both runs close process custody. The failed source-breakpoint
+attempt never starts the Native case and receives no diagnostic or pass
+credit. The candidate remains unaccepted.
+
+[E1150](implementation/plan-execution-reliability.md#silent-untraced-provider-startup-sample)
+preserves an untraced five-second request on another cloned operator home.
+It times out without captured stdout/stderr or a local HTTP request; the saved
+database has no Run, model-attempt, or Operation admission. Installed package
+bytes and lock identity are verified. This is not fresh-install acceptance,
+GC attribution, or a matched timing comparison. The first-model failure
+remains unlocated, and the overall task remains **not complete**.
+
+[E1151](implementation/plan-execution-reliability.md#refusal-time-metadata-and-historical-high-water-attribution)
+separates actual refusal-time owners from a replay of historical Registry
+peaks. The name-only scheduler export is confirmed; neither observation
+authorizes a refund or establishes a complete capacity fix.
+
+[E1152](implementation/plan-execution-reliability.md#withdrawn-independent-core-frame-candidate)
+withdraws the independent Core DATA-frame experiment after an earlier
+file-plan exception. Its experimental ELF must not be reused as proof for
+restored source. The unrun duplicate name-copy candidate has no credit.
+
+[E1153](implementation/plan-execution-reliability.md#existing-startup-phases-and-unavailable-cpu-sampling)
+records the forwarded frontend startup trace and denied CPU-sampling
+attempts. Frontend connection does not mean Product assembly completed.
+The original first local request still times out; no usable CPU profile,
+GC conclusion, fresh-install proof, or matched performance result exists.
+
+[E1154](implementation/plan-execution-reliability.md#caller-owned-file-plan-views-and-narrowed-candidate)
+records the preview descriptor-closure change and another failing complete
+Core run. The broader ownership rewrite is withdrawn. Only descriptor
+closure and an owned presence-only distribution read remain under
+implementation, pending final-source verification. They do not clear Core
+capacity or first-model startup. Full non-GC flow, matched baseline, and
+release requirements remain open; GC is deferred, PR #49 stays **Draft**,
+and the task is **not complete**.
+
+[E1155–E1156](implementation/plan-execution-reliability.md#narrowed-candidate-production-and-native-build-bounds)
+bind the narrowed two-source candidate to nine passing production build
+stages, each within its original 900-second limit. The App hash is
+`459579d5496a60f4306f15f171692c4af97673600a7b32643c276276a9cf9bb6`.
+Two one-job Product Native build attempts still time out at 900 seconds,
+with complete physical cleanup and zero executed cases. Their dependency
+progress is not proof of a compiler hang. The original staged unit build
+does not waive those failures or change their bounds. No current-source
+Native, complete Core, model-startup, matched-baseline or release pass is
+claimed. GC stays deferred, PR #49 stays Draft, and the task is **not complete**.
+
+
+[E1157–E1158](implementation/plan-execution-reliability.md#current-coding-smoke-and-rebuilt-complete-core)
+record a fresh Coding package with passing clean-environment, setup, cards
+and ask checks, but no model Attempt in those two TUI fixture databases.
+The dedicated final-source Core executable is rebuilt and still fails at
+the original model-selected Program with `input_attachment.capacity`, after
+the file-plan section. The current package's original five-second local
+provider request also still times out with zero HTTP requests. Intrusive
+debugger captures observe plugin startup but do not identify the cause;
+invalid or empty captures receive no credit. The staged Native build,
+remaining non-GC flows, matched baseline and release acceptance remain open.
+GC stays deferred, PR #49 stays Draft, and the task is **not complete**.
+
+
+[E1159–E1160](implementation/plan-execution-reliability.md#narrowed-candidate-native-regressions-and-static-gates)
+bind the current Product ELF
+`0d2b7c5c3a40f37e146534f404508401a3e6aa41e0a28c253c08a8de4debdcf2`
+to all five passing real Native existing-record regressions. Natural
+enumeration is 1,086; the other 1,081 cases are not credited. The original
+staged build stops at Product's 900-second cap after five successful
+predecessors. A subsequent dependency-ready Product build passes in 414.90
+seconds without changing that cap; all three earlier timeouts remain failed.
+RPC/App unit compilation is not reached by that staged attempt.
+
+All 129 selected Python regressions and the complete architecture gate pass.
+Ten generated locks return to their reviewed bytes. Untouched source line
+endings are restored with exact normalized-source equivalence, not claimed
+as another execution. Core capacity, first local model startup, remaining
+non-GC Product/application flows, matched baseline and release requirements
+remain incomplete. GC stays deferred and PR #49 stays **Draft**.
+
+
+[E1161](implementation/plan-execution-reliability.md#owner-only-startup-capture-and-publication-checkpoint)
+records a corrected function-only capture of the actual startup owner and
+a separate bounded syscall trace. They observe plugin activation and
+continued package I/O, but do not locate the untraced timeout, establish CPU
+costs or classify it as GC. No integrity check or original bound changes.
+Source commits are `b18c9b7` and `17880ed`; exact build-source and newline
+equivalence records retain the executed artifact scope. An immutable
+`4d88fa60` comparison checkout is prepared but not built or benchmarked.
+The checkpoint leaves Core capacity, model startup, remaining non-GC
+flows, matched baseline and release work open. The task is **not complete**;
+GC stays deferred and PR #49 stays **Draft**.
+
