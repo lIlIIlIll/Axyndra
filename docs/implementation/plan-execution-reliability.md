@@ -4030,3 +4030,34 @@ cleanup rules remain unchanged. Complete Core, current model startup,
 complete Product, matched baseline and release acceptance remain open.
 GC stays deferred and PR #49 stays Draft. The task is not complete.
 
+## Current combined Native distribution regressions
+
+E1176 records `combined-startup-header-current-native-unit` and
+`combined-startup-header-current-native-dependency-ready` on the exact five
+integrated `345c4c6` behavior and regression sources.
+The original Runtime, Tool, Store, Core and Host unit-build predecessors
+pass. The next Product compilation reaches its unchanged 900-second bound
+and fails. That attempt remains failed evidence; all recorded processes
+are collected with no unknown identity or unreaped owner.
+
+After retaining that failure and its completed dependency work, a separate
+dependency-ready Product build passes in 498.23 seconds, still with one job,
+the original 900-second bound and fixed official SDK. This is not a
+cold-build or compilation-performance pass, and process collection is not
+DATA ACK.
+
+The rebuilt Product unittest ELF SHA-256 is
+`96f0671aa39b764bb963edd6dd1e7f21d859ec48050f72a0e2282b882a6d13b8`.
+Its full natural inventory contains 1,086 cases. Exactly five unchanged
+public Native distribution cases pass: explicit User disable, imported
+User disable, Workspace scope without a User shadow, enabled-process
+reuse, and actual first startup followed by operator disable, reopen and
+management re-enable. Each qualified SDK result reports one pass and
+1,085 skipped cases. These five results do not accept the full module.
+
+The current complete Core capacity failure, local model startup,
+complete Product/application flows, matched baseline and final release
+acceptance remain open. No SDK, allowance, stack, timeout, Source, SQL,
+integrity or actual ACK rule changes. GC stays deferred and PR #49 stays
+Draft. The task is not complete.
+

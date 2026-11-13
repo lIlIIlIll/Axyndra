@@ -2772,3 +2772,15 @@ redesign is promoted. Core, model, complete Product, matched baseline and
 release remain open; the task is **not complete**, GC stays deferred and
 PR #49 stays **Draft**.
 
+[E1176](implementation/plan-execution-reliability.md#current-combined-native-distribution-regressions)
+binds the exact current combined sources to rebuilt Product unittest ELF
+`96f0671aa39b764bb963edd6dd1e7f21d859ec48050f72a0e2282b882a6d13b8`.
+The five unchanged real Native distribution cases pass; natural inventory
+is 1,086 and each filtered invocation skips the other 1,085. The initial
+Product build's original 900-second timeout remains a failure. Its
+dependency-ready continuation passes within a separate original bound,
+without cold-build, performance or DATA-return credit.
+Complete Core, model startup, full Product/application flows, matched
+baseline and release remain open. The task is **not complete**; GC stays
+deferred and PR #49 stays **Draft**.
+
