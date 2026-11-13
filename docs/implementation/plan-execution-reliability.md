@@ -3932,3 +3932,101 @@ The fixed bank, floor, attachment invoice, SQL, Source, actual ACK and
 original deadlines remain. Complete Core and the remaining non-GC gates
 are not accepted; GC stays deferred and PR #49 stays Draft.
 
+
+## Current integrated production rebuild
+
+E1173 records `combined-startup-header-nine-production-stages` on the exact
+five-file `345c4c6` behavior source set. All nine original production stages
+pass: Runtime, Tool, Store, Core, Host, Product, RPC, App and Minimal.
+Every stage keeps its original 900-second limit, O2 profile and fixed
+official SDK. The configured task-owned target is used; no old shared
+seed or SDK component is rebuilt.
+
+The current App SHA-256 is
+`7749c083499914706b456f809ca67dbc5503ae4b38e58bba3305d391ca725647`.
+The current Minimal SHA-256 is
+`99d9f92c3008f8aa93e1cc0ffc301071403c371f305fb31c8a03cadcd3c115ba`.
+These supersede older production binaries only for their exact recorded
+source scope. Compilation does not waive the current Core refusal or
+establish current Coding, model, complete Product, matching baseline or
+release acceptance. GC stays deferred and PR #49 stays Draft.
+
+
+## Current Coding smoke and unchanged first-request failure
+
+E1174 records `combined-startup-header-current-coding` and
+`provider-profile-retained-combined-current1174-diagnostic`.
+The original Coding9 production assembly passes in 835.28 seconds within
+its original 2,100-second bound. Clean-environment and setup checks pass.
+The real executable's captured PTY cards and ask scenarios also pass.
+Their actual databases contain zero Runs, Operations, Receipts and Model
+Attempts, so those surfaces provide no model-success credit.
+
+The current Coding ELF SHA-256 is
+`f2e04de6f8e738336a058b53df8f67d7631614980c0b2551cb0ef04a201ffc71`.
+Its App source is E1173's `7749c083` artifact and its behavior sources match
+`345c4c6`. No earlier Coding binary is substituted.
+
+With no concurrent task compilation, the original retained-operator local
+provider request still exceeds its unchanged five-second timeout.
+Observed wall time is 5.005 seconds and the fixture receives zero HTTP POSTs.
+Timeout output is not captured; the operator lock hash stays unchanged.
+The enclosing watcher exits 0 only because the capture driver records the
+failure. The inner result is `FAIL_UNTRACED`, not a successful model request.
+Every recorded process is collected. This is neither DATA ACK nor GC proof.
+
+`current-budget-births-gdb` and its writable-temp follow-up remain failed
+diagnostics. The first nested namespace accidentally leaves task `/tmp`
+read-only and fails before the fixture body. The corrected namespace keeps
+the original disk-backed temporary mount, but GDB exits 255 after observing
+only the initial Registry root reservation. Neither capture identifies the
+late refusal's two live floor owners or earns Core pass credit.
+The original SDK, bank, floor, attachment invoice, Source, SQL, permissions,
+actual ACK and deadlines remain unchanged.
+
+Current model startup, complete Core and Product, matched baseline and
+complete release acceptance stay open. GC stays deferred and PR #49 stays
+Draft. The task is not complete.
+
+## Exact current root births and Prepared unknown exports
+
+E1175 records `current-owner-birth-attribution`. The current integrated
+behavior sources match `345c4c6`; private instrumentation adds only scalar
+root-birth and first-unknown events with function stacks. It stores no owner
+or child references. The original complete Core fixture rebuilds within its
+900-second bound and still fails at the same readonly Program capacity
+assertion. The instrumented ELF SHA-256 is
+`f2b11f0100075d4376c718f968e1aeca2d7ee79dd19eb287a062f446869aa74a`.
+This is diagnostic evidence, not a production or complete-Core pass.
+
+Actual bank/group identities reconcile the refusal without debugger
+ordinals: bank capacity is 150,994,944 bytes, charged capacity 110,610,056,
+and this request's incremental growth 50,331,648. The overshoot is
+9,946,760 bytes. Registry roots contribute 55,559,520 and 21,258,536;
+two floor roots contribute 16,777,216 each; fixed charges contribute
+237,568. All observations through the refusal are included.
+
+The first floor is born in
+`ApplicationSession.reserveOwnedCheckpointSlot113`, before its actual
+client invocation. It pays the copied Run identity and reserved failure
+delivery slot. A transferred failure keeps that slot paid until the
+actual consumer ACKs. The second floor is born in
+`HostToolInputAttachmentSession.init`; its unchanged 64 MiB working invoice
+requests the additional growth. Its output-return and actual output-ACK
+states remain distinct. Neither root is an inferred transport-frame owner.
+These lifetimes do not authorize early retirement, pooling into the
+long-lived Registry, or treating callback return as DATA return. No
+Run-scoped shared-owner redesign has been implemented or accepted.
+
+The 53 first-unknown Prepared metadata events have two concrete call shapes:
+28 export `PreparedToolInvocation.call` through
+`HostJavaScriptPluginServiceBroker.validateChildPlan`; 25 export
+`operationPlan` through the actual legacy executor frame.
+This identifies the export sites, not the last consumers. Their unknown
+custody remains charged; no new ACK or refund is inferred.
+
+The original bank, floor, invoice, SUM, Source, SQL, authority and process
+cleanup rules remain unchanged. Complete Core, current model startup,
+complete Product, matched baseline and release acceptance remain open.
+GC stays deferred and PR #49 stays Draft. The task is not complete.
+

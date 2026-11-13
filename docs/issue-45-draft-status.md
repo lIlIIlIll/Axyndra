@@ -2733,3 +2733,42 @@ opaque DATA return. No refund or capacity change is applied.
 Complete Core and the remaining non-GC gates stay open. The task is
 **not complete**; GC stays deferred and PR #49 stays **Draft**.
 
+
+[E1173](implementation/plan-execution-reliability.md#current-integrated-production-rebuild)
+binds both integrated changes to all nine passing original production
+stages, each within its unchanged 900-second cap and fixed SDK.
+Current App is
+`7749c083499914706b456f809ca67dbc5503ae4b38e58bba3305d391ca725647`;
+current Minimal is
+`99d9f92c3008f8aa93e1cc0ffc301071403c371f305fb31c8a03cadcd3c115ba`.
+These artifacts do not turn the Core failure, current model path, complete
+Product, matched baseline or release gaps into passes. The task remains
+**not complete**, GC stays deferred, and PR #49 stays **Draft**.
+
+
+[E1174](implementation/plan-execution-reliability.md#current-coding-smoke-and-unchanged-first-request-failure)
+records the current real Coding assembly, clean/setup and PTY cards/ask
+passes. Coding ELF is
+`f2e04de6f8e738336a058b53df8f67d7631614980c0b2551cb0ef04a201ffc71`.
+The TUI fixture databases still have no model Attempt or Run.
+The same retained-operator local provider request still times out at the
+original five-second bound with zero HTTP POSTs and an unchanged operator
+lock. The capture wrapper's exit 0 is not inner model success.
+Two debugger attempts do not reach the late floor-owner attribution and
+remain incomplete. Complete Core, Product, model, matched baseline and
+release gates remain open. The task is **not complete**, GC stays deferred,
+and PR #49 stays **Draft**.
+
+[E1175](implementation/plan-execution-reliability.md#exact-current-root-births-and-prepared-unknown-exports)
+rebuilds the current complete Core with numeric-only root-birth and
+first-unknown stacks. The same readonly Program capacity failure remains.
+Actual identities identify the two live 16 MiB floors as the Session's
+pre-reserved failure checkpoint slot and this attachment's working owner.
+Both retain their original distinct ACK contracts. The exact refusal is
+110,610,056 charged plus 50,331,648 incremental growth against 150,994,944.
+All 53 first-unknown Prepared exports have concrete call stacks but no
+last-consumer or refund proof. No quota, owner retirement or lifetime
+redesign is promoted. Core, model, complete Product, matched baseline and
+release remain open; the task is **not complete**, GC stays deferred and
+PR #49 stays **Draft**.
+
