@@ -3805,3 +3805,19 @@ SQL, opaque-consumer debt, actual ACK and process-reaping rules remain.
 Core capacity and the other non-GC acceptance gaps stay open. GC remains
 deferred, PR #49 remains Draft, and the task is not complete.
 
+
+## Historical-header source promotion
+
+E1169 records `store-derived-header-promotion/source.json` and supersedes
+E1167's not-yet-promoted status. The four Store implementation and regression
+files are now in the accepted-source checkout with exact byte equivalence
+to E1167's complete 261/261 Store run and E1168's rebuilt Core artifact.
+No rerun is claimed for copying those identical bytes.
+
+The fix preserves the public codec signature, stored plan representation,
+database schema, dependency identities and original accounting limits.
+It introduces no storage or wire migration. Its narrow completion fix does
+not change E1168's complete Core capacity failure into a pass. Combined
+Product behavior and final production, package, baseline and release gates
+still require their own current-source evidence.
+

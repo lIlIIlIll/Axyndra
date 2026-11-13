@@ -33,7 +33,8 @@ private class ChildStoreFixture111 {
     let epoch: Int64
     let parentPlan: NormalizedOperationPlan
     let childPlan: NormalizedOperationPlan
-    init(waiting!: Bool = false, allocation!: ?(Int64)->LogicalJsonOwnerReservation = None) {
+    init(waiting!: Bool = false, allocation!: ?(Int64)->LogicalJsonOwnerReservation = None,
+        prompt!: String = "perform the frozen task") {
         directory = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         database = SqliteDatabase(directory + "/child.sqlite")
         let sink = SqliteThreadCommitSink(database, knownParentAllocation: allocation)
@@ -68,7 +69,7 @@ private class ChildStoreFixture111 {
         let intent = objectValue([ValueField("id", textValue("start-0")), ValueField("service", textValue("child.start")),
             ValueField("input", objectValue([ValueField("request", objectValue([
                 ValueField("label", textValue("one")), ValueField("description", textValue("one actual child")),
-                ValueField("prompt", textValue("perform the frozen task")), ValueField("system_prompt", textValue("")),
+                ValueField("prompt", textValue(prompt)), ValueField("system_prompt", textValue("")),
                 ValueField("model_alias", textValue("")), ValueField("thinking", textValue("")), ValueField("cache_key", textValue("")),
                 ValueField("capability_ceiling", listValue([])), ValueField("requested_limits", objectValue([])),
                 ValueField("background", boolValue(false))])), ValueField("completion", objectValue([
@@ -183,6 +184,94 @@ class PluginChildScopeTests111 {
                     @Expect(rows[0].required(1), operationOutcomeName(outcome))
                 } finally { f.close(); original.close() }
             }
+        }
+    }
+    @TestCase
+    func PaidDerivedCompletionCommitsWithinTheExistingSharedBank(): Unit {
+        // Fixed-capacity accounting behavior, not the product quota or a
+        // physical-memory benchmark. Both other invoices remain live through
+        // the actual SQLite-backed Run completion.
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 33554432)
+        let original = bank.acquire(131072)
+        let competing = bank.acquire(131072)
+        let allocate = { bytes: Int64 =>
+            let loan = original.deriveRetainedLease()
+            try { loan.ensureRetainedPeak(bytes); loan }
+            catch (error: Exception) { loan.close(); throw error }
+        }
+        let f = ChildStoreFixture111(allocation: Some(allocate),
+            prompt: String.fromUtf8(Array<Byte>(32768, repeat: b'x')))
+        var pressure: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+        try {
+            f.parentHandoff(); f.childHandoff()
+            childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+                "receipt-" + f.child.value, f.child, OperationOutcome.Failed, objectValue([]), objectValue([]), 15)))
+            @Assert(f.commitParentFailure())
+            let held = original.deriveRetainedLease(); pressure = Some(held)
+            held.ensureRetainedPeak(11534336)
+            let completed = f.runtime.finish(RunState.Completed, 1000)
+            match (completed) {
+                case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case Result.Ok(_) => ()
+            }
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs WHERE state='completed'"), 1)
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations o JOIN operation_receipts receipt " +
+                "ON receipt.operation_id=o.id WHERE o.id='primitive-child' AND o.state='failed' AND receipt.outcome='failed'"), 1)
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM items WHERE kind='tool_result'"), 1)
+        } finally {
+            f.close()
+            match (pressure) { case Some(value) => value.close(); case None => () }
+            competing.close(); original.close()
+        }
+    }
+    @TestCase
+    func PaidDerivedCompletionStillValidatesArgumentsAndEveryPlanHeader(): Unit {
+        for (mode in ["argument_tag", "argument_duplicates", "argument_depth", "argument_shape",
+            "capability", "network", "policy", "replay", "eof"]) {
+            let bank = LogicalJsonOwnerBudget()
+            let original = bank.acquire(131072)
+            let allocate = { bytes: Int64 =>
+                let loan = original.deriveRetainedLease()
+                try { loan.ensureRetainedPeak(bytes); loan }
+                catch (error: Exception) { loan.close(); throw error }
+            }
+            let f = ChildStoreFixture111(allocation: Some(allocate))
+            try {
+                f.parentHandoff(); f.childHandoff()
+                childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+                    "receipt-" + f.child.value, f.child, OperationOutcome.Failed, objectValue([]), objectValue([]), 15)))
+                @Assert(f.commitParentFailure())
+                let marker = "projection-argument-canary"
+                let value = storedOperationPlanValue(f.childPlan)
+                value.put("arguments", if (mode == "argument_shape") { listValue([]) }
+                    else { objectValue([ValueField("ignored", textValue(marker))]) })
+                if (mode == "capability") {
+                    value.put("capabilities", listValue([objectValue([
+                        ValueField("kind", textValue("invalid")), ValueField("resource", textValue("fixture"))])]))
+                } else if (mode == "network") { value.put("network", objectValue([ValueField("mode", textValue("invalid"))])) }
+                else if (mode == "policy") { value.put("policy_version", textValue(" ")) }
+                else if (mode == "replay") { value.put("replay", objectValue([ValueField("kind", textValue("invalid"))])) }
+                var raw = encodeStoredValue(value)
+                let encodedMarker = "s" + marker.size.toString() + ":" + marker
+                if (mode == "argument_tag") { raw = raw.replace(encodedMarker, "z") }
+                else if (mode == "argument_duplicates") { raw = raw.replace(encodedMarker, "o1:21:xn1:xn") }
+                else if (mode == "argument_depth") {
+                    let nested = Array<Byte>(261, { index =>
+                        if (index == 260) { b'n' } else {
+                            match (index % 4) { case 0 => b'l'; case 1 | 3 => b'1'; case _ => b':' }
+                        }
+                    })
+                    raw = raw.replace(encodedMarker, String.fromUtf8(nested))
+                } else if (mode == "eof") { raw += "n" }
+                // Fault-inject both equal canonical cells, so the original
+                // byte-equality join cannot stand in for full codec validation.
+                f.database.execute("UPDATE operations SET normalized_plan=? WHERE id=?",
+                    [SqlParameter.Text(raw), SqlParameter.Text(f.child.value)])
+                f.database.execute("UPDATE operation_effect_records SET normalized_plan=? WHERE operation_id=?",
+                    [SqlParameter.Text(raw), SqlParameter.Text(f.child.value)])
+                @Expect(f.runtime.finish(RunState.Completed, 1000).isError())
+                @Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs WHERE state='completed'"), 0)
+            } finally { f.close(); original.close() }
         }
     }
     @TestCase

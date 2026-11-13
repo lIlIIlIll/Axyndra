@@ -24,21 +24,22 @@ class StoredValuePaymentMeter {
     private var liveKeyBytes:Int64=0
     private var finished=false
     private let topFields=HashMap<String,StoredValuePaymentRange>()
-    init(source:String,owner:LogicalJsonOwnerReservation,extraRetained!:Int64=0){
+    private let projectionNames:Array<String>
+    init(source:String,owner:LogicalJsonOwnerReservation,extraRetained!:Int64=0,
+        projectionNames!: ?Array<String> = None){
         if(extraRetained<0){throw IllegalStateException("stored payment retained peak is negative")}
         this.extraRetained=extraRetained
         if(source.size>8388608){throw IllegalStateException("stored value exceeds 8 MiB")}
         owner.ensureRetainedPeak(journalStreamAdd(extraRetained,1048576+source.size*4))
         this.data=unsafe{source.rawData()};this.owner=owner
+        this.projectionNames=match(projectionNames){
+            case Some(names)=>names
+            case None=>["kind","call_id","name","arguments","operation_id","receipt_id","result","is_error","parts","reference_id","summary","provider_id","protocol","item_id","payload","replay_required","hash","mime","size","value","source","run_id","direct_origin","continuation_origin","continuation_history"]}
     }
     private func same(left:StoredValuePaymentRange,right:StoredValuePaymentRange):Bool{
         if(left.end-left.start!=right.end-right.start){return false}
         var at:Int64=0
         while(at<left.end-left.start){if(data[left.start+at]!=data[right.start+at]){return false};at++};true
-    }
-    private func sameText(value:StoredValuePaymentRange,text:String):Bool{
-        if(value.end-value.start!=text.size){return false};let bytes=text.toArray()
-        for(at in 0..bytes.size){if(data[value.start+at]!=bytes[at]){return false}};true
     }
     private func frame():StoredValuePaymentRange{
         let start=offset
@@ -79,10 +80,7 @@ class StoredValuePaymentMeter {
                         let text=String.fromUtf8(data[name.start..name.end])
                         if(names.contains(text)){throw IllegalStateException("stored object has duplicate field")}
                         names[text]=true;let child=value(depth+1)
-                        if(depth==0){
-                            for(field in ["kind","call_id","name","arguments","operation_id","receipt_id","result","is_error","parts","reference_id","summary","provider_id","protocol","item_id","payload","replay_required","hash","mime","size","value","source","run_id","direct_origin","continuation_origin","continuation_history"]){
-                                if(sameText(name,field)){topFields[field]=child}}
-                        }
+                        if(depth==0 && projectionNames.contains(text)){topFields[text]=child}
                     }
                 }finally{liveKeys=prior;liveKeyBytes=priorBytes}
             case _=>throw IllegalStateException("stored value has an unknown type tag")
@@ -137,6 +135,28 @@ class StoredValuePaymentMeter {
         for(name in names){match(topFields.get(name)){case Some(range)=>
             fields.add(ValueField(name,if(name=="arguments" || name=="result"){nullValue()}
                 else if(name=="receipt_id" && data[range.start]==b's'){textValue("")}else{raw(range)}))
+            case None=>()}}
+        objectValue(fields.toArray())
+    }
+    // The original plan decoder only requires arguments to be an Object.
+    // Validate its complete grammar without constructing that unused DOM.
+    // This header is private validation DATA, never an execution plan.
+    func operationPlanHeader240():AgentValue{
+        if(!finished){throw IllegalStateException("stored payment requires full original EOF")}
+        var retained:Int64=1;var retainedBytes:Int64=0
+        for(name in projectionNames){match(topFields.get(name)){case Some(range)=>
+            retained=journalStreamAdd(retained,if(name=="arguments"){1}else{range.nodes})
+            retainedBytes=journalStreamAdd(retainedBytes,if(name=="arguments"){1}else{range.end-range.start})
+            case None=>()}}
+        // Retain the selected DOM and its typed metadata together through
+        // the private digest comparison, on the caller's original payer.
+        owner.ensureRetainedPeak(journalStreamAdd(extraRetained,journalStreamAdd(contextReadMetadataRawPeak(data.size),
+            journalStreamAdd(65536,journalStreamAdd(retainedBytes*8,retained*1024)))))
+        let fields=ArrayList<ValueField>()
+        for(name in projectionNames){match(topFields.get(name)){case Some(range)=>
+            fields.add(ValueField(name,if(name=="arguments"){
+                if(data[range.start]==b'o'){objectValue([])}else{nullValue()}
+            }else{raw(range)}))
             case None=>()}}
         objectValue(fields.toArray())
     }

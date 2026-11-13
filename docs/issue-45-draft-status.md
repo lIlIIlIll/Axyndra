@@ -2682,3 +2682,13 @@ Core acceptance, and old refusal amounts are not reused as new measurements.
 The task remains **not complete**; GC stays deferred and PR #49 stays
 **Draft**.
 
+
+[E1169](implementation/plan-execution-reliability.md#historical-header-source-promotion)
+supersedes the private-only header status. All four Store implementation
+and regression files are promoted with exact byte equivalence to the
+complete **261/261** Store run and the rebuilt, still-failing Core sample.
+No database, wire, dependency, public codec signature or resource-limit
+migration is introduced. Final combined production, package, model,
+baseline and release acceptance remain open. GC stays deferred, PR #49
+stays **Draft**, and the task is **not complete**.
+

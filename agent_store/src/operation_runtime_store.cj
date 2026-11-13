@@ -3200,7 +3200,28 @@ func storedOperationPlanValue(plan: NormalizedOperationPlan): AgentValue {
 }
 
 public func decodeOperationPlan(encoded: String): NormalizedOperationPlan {
-    let value = decodeStoredValue(encoded)
+    decodeOperationPlanValue240(decodeStoredValue(encoded))
+}
+
+// Historical settlement only. The complete original grammar is checked
+// before arguments' unused DOM is elided. No projected plan escapes this
+// comparison frame or becomes an authorization/execution fact.
+func operationPlanHeaderBindingMatches240(encoded: String, expected: String,
+    payment: CompletedInitiatorPayment173e): Bool {
+    // Keep every field read by the shared decoder below, including optional
+    // implementation, replay, context-read and policy metadata.
+    let meter = StoredValuePaymentMeter(encoded, payment.owner,
+        extraRetained: journalStreamAdd(payment.retained, payment.simultaneous),
+        projectionNames: Some(["tool", "arguments", "capabilities", "effect", "retry", "digest",
+            "paths", "hosts", "network", "cwd", "environment", "approval", "idempotency_key",
+            "replay", "tool_version", "implementation_fingerprint", "schema_digest",
+            "effective_arguments_digest", "replay_contract_version", "context_reads",
+            "policy_version", "approved_write_roots"]))
+    let _ = meter.complete()
+    decodeOperationPlanValue240(meter.operationPlanHeader240()).bindingDigest == expected
+}
+
+private func decodeOperationPlanValue240(value: AgentValue): NormalizedOperationPlan {
     let capabilities = ArrayList<Capability>()
     for (item in value.field("capabilities").getOrThrow().items) {
         capabilities.add(Capability(

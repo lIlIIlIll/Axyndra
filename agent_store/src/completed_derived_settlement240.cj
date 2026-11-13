@@ -47,13 +47,10 @@ private func requireCompletedDerivedDigestFrame240(tx: SqliteTransaction, rowid:
     let suffix = " FROM operations o JOIN derived_operation_admissions a ON a.operation_id=o.id WHERE o.rowid=? AND o.run_id=?"
     let args = [SqlParameter.Int64Value(rowid), SqlParameter.Text(run.value)]
     match (payment) {
-        case Some(scope) => scope.raw173e(tx, "o.normalized_plan", suffix, args, { _, raw =>
-            scope.withDecoded173e(raw, { =>
-                let plan = decodeOperationPlan(raw)
-                scope.raw173e(tx, "a.request_digest", suffix, args, { _, expected =>
-                    if (plan.bindingDigest != expected) {
-                        throw IllegalStateException("completed derived Operation changed its original plan binding") }
-                })
+        case Some(scope) => scope.raw173e(tx, "a.request_digest", suffix, args, { _, expected =>
+            scope.raw173e(tx, "o.normalized_plan", suffix, args, { _, raw =>
+                if (!operationPlanHeaderBindingMatches240(raw, expected, scope)) {
+                    throw IllegalStateException("completed derived Operation changed its original plan binding") }
             })
         })
         case None =>
