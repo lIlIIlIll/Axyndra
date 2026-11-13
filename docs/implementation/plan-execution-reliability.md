@@ -4199,3 +4199,259 @@ Core capacity, model startup, complete Product/application flows, matched
 baseline and release acceptance remain open. GC stays deferred, PR #49
 stays Draft, and the task is not complete.
 
+## Earlier high-water phases are not current-owner refunds
+
+E1182 reconciles the original E1175 scalar events again, retaining every
+closed-since-peak lease in `peak-phase-decomposition1182.json`. These are
+different observation times, not simultaneous allocations:
+
+| Original Registry group | Peak SUM/charge | SUM at refusal |
+| --- | ---: | ---: |
+| Main Product | 55,559,520 | 49,153,320 |
+| Fault fixture | 21,258,536 | 9,480,712 |
+
+At the first peak, the largest later-closed lease is a 9,360,096-byte
+file-plan canonicalization frame, with its exact producer stack.
+At the second peak, a later-closed 4 MiB lease derives from the metadata
+generation. Each peak includes other objects and differs from the final
+live set. Neither a closed ledger entry nor the difference between these
+numbers proves actual DATA consumption or permits high-water compaction.
+
+## Independent canonicalization alone still fails complete Core
+
+E1183 records `canonical-independent-frame1183-complete-core`.
+A private one-file candidate gives the temporary canonicalizer outcome an
+independent real message in the same existing bank, using the existing
+allocator. It preserves the 16 MiB floor, original 8 MiB construction
+prepayment and complete producer/copied-consumer retirement protocol.
+That changes transient message occupancy; it does not increase allowance
+or shorten an existing owner's ACK contract.
+
+Build passes in 421.03 seconds. Original complete Core fails after
+47.21 seconds at the same readonly Program `input_attachment.capacity`
+assertion. ELF SHA-256 is
+`6fbf1f7e0b02156b172010dd3fb6a149631c90bfe9dc3396eced691cd2e02448`.
+No reduction in actual refusal-time charge is inferred from static source.
+The source and artifact remain private and unpromoted.
+
+## Actual SDK directory walk and streamed validation candidate
+
+E1184 records `fixed-sdk-directory-walk1184`. The cached main-branch API
+index identifies `std.fs.Directory.walk(Path, (FileInfo) -> Bool): Unit`.
+The fixed SDK's actual filesystem binary has SHA-256
+`ec252fb2dfd8fa6f5d2dc509bc7a95fbf0fd44c8fc19f18ce9ddef11abf5e0c6`.
+Its walk entrypoint opens and iterates a native directory handle, invokes
+the current-entry callback and closes the handle on ordinary and exception
+paths. Its `readFrom` implementation instead materializes an array.
+This is static implementation evidence, not an allocation measurement.
+
+E1185 records `streamed-validation1185-complete-core`. This private
+three-file candidate combines E1183 with streaming publication-marker
+names instead of retaining the whole directory array. Only closed
+generation validation receives a path/header scratch invoice.
+Full Registry loading, decoded records and record matching retain their
+original invoices. Native snapshots still reopen current paths, compare
+all bytes and recheck identity/watch events using their already retained,
+paid observation buffers. No transport buffer stores decoded DATA.
+
+Build passes in 619.89 seconds. Original complete Core still fails after
+50.54 seconds at the same readonly Program capacity assertion.
+ELF SHA-256 is
+`95bf0aa2c843ee549a82cab1095f3f024a36daaea564062b01d83ca6177241c4`.
+Both E1183 and E1185 keep their original 900-second bounds and unchanged
+fixture/assertions. All observed process identities close; this is not DATA
+ACK. Neither candidate is promoted or earns complete Core/Product credit.
+No compiler, runtime, std, stdx or SDK is built or replaced.
+
+The next diagnostic must measure the candidate's actual remaining refusal,
+not assume that reducing one earlier phase removes the final bottleneck.
+Core, model startup, full Product/application flows, matched baseline and
+release remain open. GC stays deferred, PR #49 stays Draft, and the task
+is not complete.
+
+## Candidate refusal reconciled with numeric owners
+
+E1186 records `streamed-validation1186-probe`. The private E1185 source
+receives the retained scalar-only allocator observer; it does not change
+DATA retirement. Build passes in 505.62 seconds. Original complete Core
+still fails in 50.91 seconds at the readonly Program capacity assertion.
+The full acquisition/growth/refund ledger reconciles with bank occupancy
+and each shared generation's SUM at the actual refusal:
+
+| Diagnostic | Bank capacity | Charged | Requested growth | Overshoot |
+| --- | ---: | ---: | ---: | ---: |
+| E1186 allocator observer | 150,994,944 | 108,536,448 | 50,331,648 | 7,873,152 |
+| E1187 allocator and caller-role observers | 150,994,944 | 108,535,320 | 50,331,648 | 7,872,024 |
+| E1189 exact model-task/private-caller candidate with observers | 150,994,944 | 108,381,480 | 50,331,648 | 7,718,184 |
+| E1192 combined lifetime candidate with observers | 150,994,944 | 104,410,832 | 50,331,648 | 3,747,536 |
+
+E1187 records `streamed-validation1187-roles`. Five retained caller-role
+observers are byte-identical to E1175's diagnostic sources. They retain
+numeric identities, not owners or children. Build passes in 624.83 seconds;
+complete Core still fails in 70.57 seconds. Neither diagnostic is a
+performance comparison or acceptance pass.
+
+At E1187's refusal, the main Registry generation has SUM 49,152,216,
+charge 53,993,416 and 460 leases. The separate fault-fixture generation
+has SUM 9,480,768, charge 20,749,904 and 119 leases. Together with the
+two actual 16 MiB roots and 237,568 fixed bytes, these reconcile exactly
+to the bank's charge. Different observer runs are not interchangeable
+snapshots and their small differences are not attributed to a source fix.
+
+The earlier main-generation peak includes two model-input children of
+1,657,968 and 1,287,712 bytes, two prepared-metadata children of 1,437,720
+and 1,436,696 bytes, and still-live shared snapshot copies. The earlier
+fault-fixture peak includes a 4,356,888-byte loading child. All later-closed
+leases and their ancestry remain in `peak-phase-decomposition.json`;
+these earlier phases are not summed into refusal-time live ownership.
+No generic opaque context is retired, no high-water charge is compacted,
+and no observer result is treated as an actual consumer ACK.
+
+All observed process identities close. Both diagnostics and the underlying
+candidate remain private and unpromoted. Accepted behavior is unchanged;
+complete Core, model startup, Product/application flows, matched baseline
+and release remain open. GC stays deferred, PR #49 stays Draft, and the
+task is not complete.
+
+## Precise model-task and private-caller candidate still fails Core
+
+E1188 records `model-task-caller1188-complete-core` and
+`model-task-caller1188-runtime-unit`. The seven-file private candidate
+starts from accepted behavior, without the E1183/E1185 allocation changes.
+It exposes a DATA-only witness over the same canonical admitted task
+record and its actual target/observer Futures. The prepared model caller
+also has to return its complete raw-request helper and clear its private
+request, tools and plan fields. Provider ACK, actual action/Future return,
+opaque-input retention and independent consumer loans remain mandatory.
+Recovery/internal callers retain their original whole-Run witness because
+their outer request frames have no corresponding precise return contract.
+
+The production build passes in 511.02 seconds. Original complete Core
+still fails in 50.58 seconds at the same readonly Program
+`input_attachment.capacity` assertion. Its ELF SHA-256 is
+`82a0eeae02e4516449b0962d60e0970e651b3a8248a91a7edabd1c780a1dbca1`.
+The original fixture, assertions, limits and 900-second bounds are unchanged.
+No Core acceptance credit is granted.
+
+The Runtime unit build passes in 147.78 seconds. Natural inventory changes
+from 43 to 45 cases by adding exactly two actual-Future regressions:
+one task's DATA witness can return while an unrelated owned task remains
+pending; a physically returned failed task does not claim successful Run
+termination. Both pass, as do all three existing pending/failed/cancelled
+post-canonical scope cases. Each filtered run executes one case and skips
+44. This is five-case credit, not a full Runtime or Product pass.
+The Runtime unittest ELF SHA-256 is
+`5a61b29e50658d7027a0a328192bf6b87e64264927fc55a9cf609e5763940da4`.
+
+Observed process custody closes in the build and run records, separately
+from DATA consumption. The candidate and tests remain private and
+unpromoted while its actual remaining refusal is investigated.
+Accepted behavior is unchanged. The task remains not complete, GC stays
+deferred and PR #49 stays Draft.
+
+## Returned model inputs do not erase Registry high-water charge
+
+E1189 records `model-task-caller1189-probe`. It adds only the six retained
+scalar/caller-role observers to E1188, not the earlier canonicalizer or
+Registry changes. Build passes in 480.49 seconds; complete Core still
+fails in 79.04 seconds. ELF SHA-256 is
+`009ae5f8f2f194721267d691b88f6af551b623950a1897c4827881c7c5a5f962`;
+the event log SHA-256 is
+`e2dfb3a66ecbc7856939a10107d6507200fcb0e3424972aefa95cb8b2b42fe23`.
+The actual bank refusal is included in the diagnostic table above.
+
+| Registry generation | SUM at refusal | Charged high-water | Live leases |
+| --- | ---: | ---: | ---: |
+| Main Product | 47,038,096 | 55,340,608 | 457 |
+| Separate fault fixture | 9,480,776 | 19,248,872 | 119 |
+
+The complete acquisition/growth/refund and shared SUM ledgers reconcile.
+The peak reconstruction uses these actual generation IDs, not the earlier
+probe's IDs, and retains every later-closed lease without threshold filtering.
+At the earlier main peak, a 9,252,688-byte canonicalizer frame is largest;
+at the earlier fault-fixture peak, a 4,194,304-byte validation child is largest.
+Both close before refusal. The current and earlier observations remain
+separate: completed model DATA retirement does not compact the still-live
+Registry generation's high-water charge. Opaque contexts remain retained.
+No source is promoted and no Core acceptance is granted.
+
+## Independent path checks are small beside standalone hashing
+
+E1190 records `digest-path-micro1190`, a standalone std/stdx O2 caller on
+the same fixed SDK. Its generic input is 22 ordinary files totaling
+34,649,056 bytes. It needs no Axyndra API. Collection/sorting occurs
+outside measurement; five complete samples retain the first result.
+
+| Standalone work | Observed milliseconds |
+| --- | ---: |
+| Before/after canonical-root, path-component and file metadata checks; no content read | 1.979–2.679 |
+| 64 KiB file hashing and before/after file metadata; no path-component checks | 69.347–90.554 |
+| Both sets of work | 71.484–83.102 |
+
+Every full per-file digest feeds an independently verified aggregate,
+identical in every hashing sample. ELF SHA-256 is
+`d89646533dbcab165306f688f2d7692d679ded05ed4dedde94fa260abc914db7`.
+The control does not reproduce Product concurrency, Registry billing,
+whole-tree policy, GC or startup. It does not justify removing path
+validation or replacing SDK crypto, and earns no model/performance gate
+credit. No SDK is built or replaced.
+
+## Measured peak-lifetime combination still fails complete Core
+
+E1191 records `scoped-peak-lifetimes1191-complete-core`. E1189's actual
+largest peak holders motivate combining the private exact model-task/
+caller contract with the independently owned canonicalizer and streamed
+closed-generation validation. The ten source files are exactly E1188
+plus E1185; there are no observers or new invoice experiments. In particular,
+full Registry loading and record comparison retain their original 4 MiB
+invoices. The canonicalizer keeps its real 16 MiB floor, original 8 MiB
+working invoice and complete producer/copied-consumer return requirements.
+
+Build passes in 495.57 seconds; original complete Core still fails in
+52.12 seconds at the same readonly Program `input_attachment.capacity`
+assertion. ELF SHA-256 is
+`3b06f4e155cdb090a7d59749f572b7ff91a6a3f6c1e21c63f40059ff9ebc8755`.
+The original fixture, assertions, limits and 900-second bounds remain.
+Observed process custody closes, which is not DATA ACK. The combination
+remains private and unpromoted; the remaining actual refusal must be
+measured rather than inferred from the sum of earlier peak holders.
+The same ten-file source also passes the complete local architecture gate,
+including dependency pins, 15 plugin-boundary regressions, SDK compatibility
+baselines and package inventory. Only its generated support-contract
+`cjpm.lock` is restored before that check; behavior source hashes are unchanged.
+These static results do not replace the failed complete Core smoke.
+Complete Core and all other outstanding acceptance requirements remain
+open. The task is not complete, GC stays deferred and PR #49 stays Draft.
+
+## Combined candidate still needs actual copy-lifetime attribution
+
+E1192 records `scoped-peak-lifetimes1192-probe`. The six retained observers
+measure E1191 without altering billing or DATA return. Build passes in
+585.91 seconds; original complete Core still fails in 68.95 seconds.
+ELF SHA-256 is
+`1d24475fe9c756558656e1c3eef57bda01b4d55c7fae63992690a9e23119be2c`;
+the event log SHA-256 is
+`c89126b9c77c21e07332861a1d43f130a2a58147609a35d633bb780f639a78a0`.
+The actual remaining refusal is included in the diagnostic table above.
+
+| Registry generation | SUM at refusal | Charged high-water | Live leases |
+| --- | ---: | ---: | ---: |
+| Main Product | 47,037,048 | 51,878,904 | 457 |
+| Separate fault fixture | 9,480,776 | 18,739,928 | 119 |
+
+All bank and shared-ledger transitions reconcile. At the earlier main
+peak, two model-input children of 1,657,968 and 1,287,712 bytes overlap
+two Prepared copies of 1,437,720 and 1,436,696 bytes. All four later close.
+At the earlier fault-fixture peak, a 4,356,888-byte full loading child is
+largest. These are historical custody observations, not evidence that
+the consumers had already returned when new allocations were admitted.
+
+The actual bottleneck has changed since the earlier canonicalizer and
+closed-validation peaks. Its copy producers need exact call-site evidence
+before another lifetime change; a later close is not permission to refund
+earlier. Generic opaque contexts, full loading/comparison invoices, the
+bank/floor/SUM and actual ACK rules remain unchanged. Source is private
+and unpromoted. Core, model startup, full Product/application flows,
+matched baseline and release remain open. The task is not complete,
+GC stays deferred and PR #49 stays Draft.
+

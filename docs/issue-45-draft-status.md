@@ -2810,3 +2810,68 @@ quota increase or deadline relaxation is introduced. Complete Core, model,
 full Product/application flows, matched baseline and release remain open.
 The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
 
+[E1182](implementation/plan-execution-reliability.md#earlier-high-water-phases-are-not-current-owner-refunds)
+separates the original earlier high-water phases from the refusal-time
+live owners. Their differences are not leak or refund proof.
+
+[E1183](implementation/plan-execution-reliability.md#independent-canonicalization-alone-still-fails-complete-core)
+and [E1185](implementation/plan-execution-reliability.md#actual-sdk-directory-walk-and-streamed-validation-candidate)
+record two private lifetime/streaming candidates. Both build, but both
+still fail original complete Core at the same readonly Program
+`input_attachment.capacity` assertion. Neither source is promoted.
+The latter uses the actual fixed-SDK streaming directory API verified
+under E1184, without replacing the SDK or skipping byte validation.
+Static source is not evidence of lower actual refusal-time charge.
+
+Accepted behavior remains unchanged. Core capacity, model startup,
+complete Product/application flows, matched baseline and release remain
+open. The task is **not complete**, GC stays deferred and PR #49 stays
+**Draft**.
+
+[E1186 and E1187](implementation/plan-execution-reliability.md#candidate-refusal-reconciled-with-numeric-owners)
+reconcile the private candidate's actual remaining refusal, including
+every shared generation and both real attachment/checkpoint roots.
+Both original complete Core runs still fail capacity. Caller-role
+observers identify earlier model-input, prepared-metadata and loading
+phases without retaining owner references or granting DATA refunds.
+These diagnostic sources remain private; accepted behavior is unchanged.
+Complete Core and the remaining model, Product/application, baseline
+and release requirements remain **not complete**. GC stays deferred
+and PR #49 stays **Draft**.
+
+[E1188](implementation/plan-execution-reliability.md#precise-model-task-and-private-caller-candidate-still-fails-core)
+records a private same-task/private-request return candidate, independently
+of E1183/E1185. Its original complete Core smoke still fails the same
+capacity assertion. Five real task-scope cases pass on a freshly rebuilt
+Runtime unittest ELF; only the two new protocol cases and three existing
+adjacent cases receive credit. This does not complete Core, Runtime,
+Product or release acceptance. The candidate remains unpromoted,
+GC stays deferred and PR #49 stays **Draft**.
+
+[E1189](implementation/plan-execution-reliability.md#returned-model-inputs-do-not-erase-registry-high-water-charge)
+reconciles the precise-caller candidate's actual remaining refusal.
+Returned model input DATA does not erase the Registry's earlier
+high-water charge; opaque contexts are not refunded.
+
+[E1190](implementation/plan-execution-reliability.md#independent-path-checks-are-small-beside-standalone-hashing)
+separates fixed-SDK path checks from hashing in an independent caller.
+All hashing outputs match independent digests, but the control is not
+Product startup or matched performance evidence.
+
+[E1191](implementation/plan-execution-reliability.md#measured-peak-lifetime-combination-still-fails-complete-core)
+combines only the measured model/canonicalizer/closed-validation lifetime
+candidates. Build passes, but original complete Core still fails the
+same capacity assertion. None of these private sources is promoted.
+Accepted behavior remains unchanged; Core, model startup, complete
+Product/application flows, matched baseline and release remain open.
+The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1192](implementation/plan-execution-reliability.md#combined-candidate-still-needs-actual-copy-lifetime-attribution)
+reconciles the combined candidate's remaining capacity failure.
+The largest earlier holders are now overlapping model-input/Prepared
+copies and full loading work, not the previous canonicalizer/closed
+validation frames. Later closure does not prove earlier ACK. The sources
+remain private and unpromoted; complete Core and every other outstanding
+requirement remain **not complete**. GC stays deferred and PR #49
+stays **Draft**.
+
