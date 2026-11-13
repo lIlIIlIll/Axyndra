@@ -3821,3 +3821,48 @@ not change E1168's complete Core capacity failure into a pass. Combined
 Product behavior and final production, package, baseline and release gates
 still require their own current-source evidence.
 
+
+## Caller-owned startup records and Native regression bounds
+
+E1170 records `startup-record-scope-candidate`,
+`startup-record-scope-original-unit-dag` and
+`startup-record-scope-dependency-ready-native`.
+Serial startup now consumes `OwnedPluginRecordList` directly and closes each
+transferred record and the list. The first-install-only batch keeps its
+original control invoice and width, uses fixed Future slots, joins every
+started producer, and closes its requested-record list after the complete
+private helper returns or unwinds. Installed generations keep their own
+separately captured execution pins. This does not return an opaque Context,
+acknowledge plugin DATA or treat process exit as a DATA ACK.
+
+Two dependency-heavy Product builds and the later staged Product build each
+hit their original 900-second limit. All remain failures with zero Native
+case credit. The five preceding original unit stages pass. After the staged
+attempt produces the normal Product artifacts, a dependency-ready one-job
+Product build passes in 391.53 seconds with the same 900-second limit.
+No concurrent task compilation runs beside that final build. These warm
+dependency observations are not cold-build or performance acceptance.
+
+All five unchanged real Native public Product regressions pass: disabled
+User, imported disabled User, Workspace without User shadow, enabled
+same-process reuse, and first startup followed by disable, reopen and
+management re-enable. Natural enumeration is 1,086; the other 1,081 cases
+receive no pass credit. The Product unittest ELF SHA-256 is
+`ebfa5d234c989ec0f8c2c47d8ffb60ac39b6740b4e0d3ad2c870698a15d2b166`.
+This component build includes the startup-record change, not the later
+combined Store/header source set.
+
+The startup implementation is promoted by exact byte equivalence. It keeps
+the original empty-registry-only batch fence and does not extend content
+verification reuse or `serialize: false` to retained startup.
+`combined-startup-header-source` binds both source changes separately;
+combined Core, Product, production and package acceptance still need their
+own artifacts. The original 129 selected Python regressions and complete
+architecture gate pass on the integrated five-file source set in
+`combined-startup-header-static`. Architecture checks cover 2,977 tracked
+paths, 72 Markdown files, 39 packages and 178 local dependency edges.
+
+These are narrow lifecycle and static results, not complete Core capacity,
+first-model startup, matching baseline or release acceptance. GC stays
+deferred, PR #49 stays Draft, and the task is not complete.
+

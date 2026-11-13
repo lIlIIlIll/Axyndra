@@ -2692,3 +2692,21 @@ migration is introduced. Final combined production, package, model,
 baseline and release acceptance remain open. GC stays deferred, PR #49
 stays **Draft**, and the task is **not complete**.
 
+
+[E1170](implementation/plan-execution-reliability.md#caller-owned-startup-records-and-native-regression-bounds)
+records explicit caller-owned startup record closure without compatibility
+array export. First assembly keeps the original empty-registry fence,
+control invoice and width, joins every started Future, then closes its
+requested-record list. Installed generations retain their own captured pins;
+this is not an opaque Context return or plugin DATA ACK.
+
+The dependency-ready one-job build passes in 391.53 seconds under the original
+900-second limit. All three earlier 900-second failures remain failures.
+All five unchanged real Native public Product cases pass; natural inventory
+1,086 is not full Product credit. That component ELF predates the combined
+Store/header source set. Both changes are integrated by exact source bytes.
+All 129 selected Python regressions and the complete architecture gate pass
+on the integrated sources. Current combined Core, Product, production,
+package, model, matched baseline and release acceptance remain open.
+The task is **not complete**, GC stays deferred, and PR #49 stays **Draft**.
+

@@ -376,31 +376,37 @@ public class ProductRuntime {
     }
 
     func activateStartupPlugins(): Result<Unit> {
-        for (record in productRegistryRecords83(pluginRuntime.startupEffectiveRecords())) {
-            match (activateProductPlugin(record)) {
-                case PluginRegistryResult.Ok(_) => ()
-                case PluginRegistryResult.Err(activationError) =>
-                    match (setPluginEnabled(
-                        productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), false, record.scope
-                    )) {
+        let records = pluginRuntime.startupEffectiveRecords()
+        try {
+            for (index in 0..records.size) {
+                let record = records.take(index)
+                try {
+                    match (activateProductPlugin(record)) {
                         case PluginRegistryResult.Ok(_) => ()
-                        case PluginRegistryResult.Err(persistenceError) =>
-                            return Result.Err(AgentError(
-                                AgentErrorKind.Configuration,
-                                "plugin.startup_disable_failed",
-                                "failed to persist startup quarantine for " +
-                                    productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + ": " +
-                                    persistenceError.code,
-                                fields: [
-                                    ErrorField("plugin", productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))),
-                                    ErrorField("activation_error", activationError.code),
-                                    ErrorField("persistence_error", persistenceError.code)
-                                ]
-                            ))
+                        case PluginRegistryResult.Err(activationError) =>
+                            match (setPluginEnabled(
+                                productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), false, record.scope
+                            )) {
+                                case PluginRegistryResult.Ok(_) => ()
+                                case PluginRegistryResult.Err(persistenceError) =>
+                                    return Result.Err(AgentError(
+                                        AgentErrorKind.Configuration,
+                                        "plugin.startup_disable_failed",
+                                        "failed to persist startup quarantine for " +
+                                            productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + ": " +
+                                            persistenceError.code,
+                                        fields: [
+                                            ErrorField("plugin", productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))),
+                                            ErrorField("activation_error", activationError.code),
+                                            ErrorField("persistence_error", persistenceError.code)
+                                        ]
+                                    ))
+                            }
                     }
+                } finally { record.close() }
             }
-        }
-        Result.Ok(())
+            Result.Ok(())
+        } finally { records.close() }
     }
 
     public func reviewExecutionPlan(document: String, sessionId!: ?SessionId = None<SessionId>): Result<String> {
@@ -1458,7 +1464,20 @@ public class ProductRuntime {
         // and the broker answers only `ping` until `frontend180` waits on this
         // assembly. Mounting independent packages can therefore overlap; any
         // failure still aborts the whole assembly and rolls the batch back.
-        let records = productRegistryRecords83(pluginRuntime.startupEffectiveRecords())
+        let records = pluginRuntime.startupEffectiveRecords()
+        try {
+            let size = records.size
+            if (size == 0) { return PluginRegistryResult.Ok(()) }
+            if (size > (134217728 - 8192) / 256) {
+                throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity") }
+            // Preserve the original control invoice without exporting an
+            // unowned record array into the compatibility debt collection.
+            let control = records.deriveCopiedDataPayment(size * 256 + 8192)
+            try { activateFirstDistributionRecords(records) }
+            finally { control.close() }
+        } finally { records.close() }
+    }
+    private func activateFirstDistributionRecords(records: OwnedPluginRecordList): PluginRegistryResult<Unit> {
         // Measured: width 1 costs 12.4 s (nine serial mounts), width 3 costs
         // 2.4-2.8 s per window, width 9 costs 5.9 s for one window. Total wall
         // clock is 10.0-12.6 s either way because the mounts contend on the
@@ -1468,21 +1487,36 @@ public class ProductRuntime {
         while (index < records.size) {
             var end = index + width
             if (end > records.size) { end = records.size }
-            let futures = ArrayList<Future<PluginRegistryResult<Unit>>>()
-            for (position in index..end) {
-                let record = records[position]
-                futures.add(spawn { => activateProductPluginVerified(record, verifyContent: false, serialize: false) })
-            }
+            // Fixed slots are allocated before any producer starts; no later
+            // ArrayList growth can lose a successfully spawned Future.
+            let futures = Array<?Future<PluginRegistryResult<Unit>>>(end - index, repeat: None)
             var firstFailure: ?PluginRegistryOwnedError = None<PluginRegistryOwnedError>
             var firstThrown: ?Exception = None<Exception>
-            for (future in futures) {
-                try {
-                    match (future.get()) {
-                        case PluginRegistryResult.Err(error) => if (firstFailure.isNone()) { firstFailure = Some(error) }
-                            else { error.close() }
-                        case PluginRegistryResult.Ok(_) => ()
+            try {
+                for (position in index..end) {
+                    let record = records.at(position)
+                    futures[position - index] = Some(spawn { =>
+                        activateProductPluginVerified(record, verifyContent: false, serialize: false) })
+                }
+            } catch (error: Exception) { firstThrown = Some(error) }
+            finally {
+                // A later spawn failure also joins every producer that did
+                // start. The outer owner cannot clear requested records until
+                // this complete private helper has returned or unwound.
+                for (position in 0..futures.size) {
+                    match (futures[position]) {
+                        case Some(future) =>
+                            try {
+                                match (future.get()) {
+                                    case PluginRegistryResult.Err(error) => if (firstFailure.isNone()) { firstFailure = Some(error) }
+                                        else { error.close() }
+                                    case PluginRegistryResult.Ok(_) => ()
+                                }
+                            } catch (error: Exception) { if (firstThrown.isNone()) { firstThrown = Some(error) } }
+                            finally { futures[position] = None }
+                        case None => ()
                     }
-                } catch (error: Exception) { if (firstThrown.isNone()) { firstThrown = Some(error) } }
+                }
             }
             match (firstThrown) { case Some(error) =>
                 match (firstFailure) { case Some(failure) => failure.close(); case None => () }
