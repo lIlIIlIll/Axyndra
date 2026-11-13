@@ -4061,3 +4061,97 @@ acceptance remain open. No SDK, allowance, stack, timeout, Source, SQL,
 integrity or actual ACK rule changes. GC stays deferred and PR #49 stays
 Draft. The task is not complete.
 
+## Current startup cost inside complete package verification
+
+E1177 records `package-inspection-phase1176-build`,
+`package-inspection-phase1176-package-proof-continued` and
+`provider-profile-retained-package-inspection1177-diagnostic`.
+A separate two-file scalar probe measures Registry load, paid row,
+package inspection and content digest wall spans. Its behavior sources
+match `345c4c6`; all nine original bounded production stages rebuild.
+The diagnostic App SHA-256 is
+`dd85ae813fdf3940f1bfb5ddb1a11b45a528618053b4ead524b4be79e5421461`;
+the derived Coding ELF is
+`250458c6cc8a81225569a026f4cd08f93dfce1cc8d362a823fd27ded870ee4fb`.
+Only the host, truthful host provenance and ldd report differ from the
+current complete Coding package. Every plugin, SDK and library byte is
+unchanged.
+
+The first derivative assembly correctly fails provenance publication:
+its caller supplies the post-RPATH native hash where the helper requires
+the observed raw-copy hash. That failed receipt and caller source remain.
+The continuation performs a genuine raw repository-native bridge copy,
+records that copy before the unchanged RPATH transformation, and passes
+the original before/copy/after checks. Its final bridge bytes equal the
+seed. No SDK input or provenance check is replaced or bypassed.
+
+The original local request still times out at five seconds: observed
+caller wall time is 5.004 seconds, zero HTTP POSTs, unchanged operator lock.
+All 352 scalar events form a valid nested prefix. In 58 complete paired
+inspection spans, total wall time is 4,825 ms: 4,806 ms inside content
+digest and 19 ms elsewhere in package inspection. The raw capture includes
+five completed inspection pairs whose UTC end marker is beyond the nominal
+caller deadline; reconciliation marks them explicitly. These sums describe
+complete captured spans, not work wholly inside the caller's five seconds.
+The enclosing watcher's exit 0 means successful failure capture, not model
+success or DATA ACK.
+
+This locates the startup hotspot in repeated full content verification.
+It does not identify CPU versus GC time, accept production latency, permit
+verification caching, or waive any byte, path, type or integrity check.
+
+## Fixed-SDK digest controls without Product startup
+
+E1178 records `digest-file-micro1178`: an independent O2 single-file caller
+compiled and run with the same fixed official SDK. All five raw repetitions,
+including the first, remain. Every digest matches an independently computed
+expected SHA-256.
+
+| Fixed-SDK control | Bytes per sample | Observed wall range |
+| --- | ---: | ---: |
+| File read, 64 KiB buffer | 12,121,857 | 1.217–2.853 ms |
+| Same file read plus SHA-256 | 12,121,857 | 23.608–24.779 ms |
+| In-memory SHA-256, 256 writes | 16,777,216 | 30.852–31.810 ms |
+
+Probe ELF is
+`970160df540b33cffe2d9c83834c6e2ef005cea88406e52e12e22eb46dda0dee`.
+A separate host Python/OpenSSL control hashes the same file bytes in
+22.988–31.350 ms. That is a different execution shape, not an SDK or
+matched-product performance gate. The installed stdx digest binary already
+references OpenSSL SHA and EVP bindings; no replacement digest library or
+SDK change is justified by these controls.
+
+## Same-width digest work and allocation controls
+
+E1179 records `digest-parallel-micro1179` and
+`actual-byte-partitions.json` under the E1177 local-request evidence.
+The second fixed-SDK O2 probe has ELF SHA-256
+`1e3501e34a1e68dcff4dbd67d55a929b4988d67374959f059458c58dd1fa7a91`.
+Five serial pairs of 16 MiB hashes take 70.407–116.708 ms; five pairs with
+one spawn plus the caller take 35.895–60.048 ms. The variation prevents a
+fixed speedup claim. Both digests in every pair match.
+Hashing 1,000 32-byte messages with fresh contexts takes 1.256–2.126 ms;
+reusing one context for those 1,000 messages takes 0.975–1.878 ms. The reused
+context's initial constructor is outside its timed interval. These controls
+do not establish useful application savings from a context-reuse change.
+
+The exact unchanged retained operator packages contain 335,039,342 bytes.
+Their heavier-reader byte totals for one complete package set are:
+
+| Two-reader assignment | Heavier-reader bytes, summed across packages |
+| --- | ---: |
+| Current largest file versus remaining files | 219,365,502 |
+| Withdrawn largest plus at most one companion | 174,915,626 |
+| Hypothetical all-file longest-first partition | 167,526,040 |
+
+These are file-size calculations, not observed startup times. A private
+all-file candidate is distinct from the withdrawn one-companion experiment.
+It has no model or production acceptance credit. It must retain the same
+two readers, two 64 KiB buffers, original paid invoice, complete byte checks,
+ordered v2 digest, error precedence, joined worker and actual private-frame
+clearing. No quota, deadline or verification-reuse policy changes.
+
+Complete Core, the original model-request gate, full Product/application
+flows, matched baseline and final release acceptance remain open. GC stays
+deferred, PR #49 stays Draft, and the task is not complete.
+

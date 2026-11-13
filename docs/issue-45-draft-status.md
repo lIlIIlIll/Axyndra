@@ -2784,3 +2784,20 @@ Complete Core, model startup, full Product/application flows, matched
 baseline and release remain open. The task is **not complete**; GC stays
 deferred and PR #49 stays **Draft**.
 
+[E1177](implementation/plan-execution-reliability.md#current-startup-cost-inside-complete-package-verification)
+locates the retained-operator startup hotspot: 58 complete instrumented
+package inspections contain 4,806 ms of content-digest work out of 4,825 ms.
+Post-deadline markers are retained and distinguished from the original
+five-second caller interval. The actual request still times out with zero
+HTTP POSTs and an unchanged operator lock; no model pass is recorded.
+
+[E1178](implementation/plan-execution-reliability.md#fixed-sdk-digest-controls-without-product-startup)
+and [E1179](implementation/plan-execution-reliability.md#same-width-digest-work-and-allocation-controls)
+retain independently checked same-SDK digest controls and the exact
+retained packages' byte partitions. They neither authorize SDK replacement
+nor prove production performance. The private all-file two-reader candidate
+remains unverified; no caching, quota, worker-count, buffer or deadline
+increase is accepted. Complete Core, model, full Product/application flows,
+matched baseline and release remain open. The task is **not complete**,
+GC stays deferred and PR #49 stays **Draft**.
+
