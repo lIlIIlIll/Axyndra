@@ -3613,3 +3613,195 @@ matching baseline and complete release acceptance remain open. GC stays
 deferred and PR #49 stays Draft. This is a publication checkpoint, not
 completion of Issue #45 or its remaining requirements.
 
+
+## Fixed-SDK baseline artifacts and first-request comparison limits
+
+E1162 supersedes E1161's unbuilt-baseline checkpoint. The separate immutable
+`4d88fa60` checkout now passes all eight original production build stages.
+Each stage keeps its original 900-second limit and the fixed official SDK.
+The baseline App SHA-256 is
+`7f2423b7a00b24dcd89f85b7f599d808eda7faaaa0d30b4cb504a8ea6df750ea`.
+Evidence is `matched-baseline-fixed-sdk-build`,
+`matched-baseline-normalized-lock-build` and
+`matched-baseline-original-package-profile`.
+
+The original version-0 lock fails before compilation against an incompatible
+cached yjson checkout. The annotated tag object
+`c91859feb77aeba392a1fad0f99d731df66be831` peels to the expected commit
+`54b4965dee0f0b96710cbc678ec5ec9a126b055c`.
+Baseline-only lock normalization to version 1 preserves all three peeled
+dependency identities. It changes neither tracked behavior sources nor the
+SDK, and does not run `cjpm update`. This is not evidence of a moved tag.
+
+The original package and two-profile localhost fixture pass:
+
+| Baseline profile | Observed request wall time |
+| --- | --- |
+| `profile-one` | 0.814285 s |
+| `profile-two` | 0.843435 s |
+
+Exactly two localhost HTTP POSTs occur and physical process custody closes.
+The package ELF SHA-256 is
+`a85907b7df0bb579ceb9b68339eadbc1c43b165616571187921bd6debd3af498`.
+These are local deterministic responses, not external model calls.
+The baseline's fresh built-in setup differs from the candidate's retained
+nine-plugin Native setup. These two observations do not complete the
+same-condition activation, concurrency, output, memory, cancellation or
+performance matrix.
+
+## First-request startup phase attribution
+
+E1163 records `provider-profile-retained-numeric-phases1165-diagnostic`.
+Temporary outer Product and finer JavaScript-host probes use the
+`d66fd3f7` behavior sources plus their recorded observer hashes. The original
+five-second local request still times out with zero HTTP POSTs. The operator
+lock stays unchanged and physical process custody closes.
+
+The eight completed activations spend 461–534 ms each in capture before
+launch, compared with 22–37 ms in spawn and handshake. The complete activation
+ranges are 547–653 ms. Initial Registry loading takes 464 ms. Activation 7
+finishes at 5,406 ms, after the original request deadline.
+Pin lookup, generation construction, metadata getters and sandbox planning
+do not account for the large capture interval in this sample.
+
+`HostJavaScriptPluginHost.mount` calls
+`PluginRegistry.captureInstalledOwnedFrame101` through `captureExecutionPin`.
+That path reloads and re-inspects the complete User and Workspace Registry
+for each activation. This identifies a repeated verification boundary,
+not CPU attribution, a deadlock or a GC failure. Source, lock, inode, path
+and complete-byte verification remain required. No broader verification
+cache or first-install-only serialization exception is applied.
+The instrumented package is diagnostic, not a release artifact.
+
+## Reconciled Core charges and legitimate retained Contexts
+
+E1164 records `core-growth-attribution/run` and
+`core-snapshot-custody-attribution`. Both rebuild temporary numeric observers
+over the original `d66fd3f7` Core behavior. The complete original Native Core
+still reaches the model-selected readonly Program and fails
+`input_attachment.capacity`. Every observed bank total and derived-lease SUM
+reconciles at the refusal:
+
+| Sample | Bank capacity | Charged | Actual requested growth | Overshoot |
+| --- | ---: | ---: | ---: | ---: |
+| Initial owner attribution | 150,994,944 | 112,563,228 | 50,331,648 | 11,899,932 |
+| Snapshot custody attribution | 150,994,944 | 112,563,084 | 50,331,648 | 11,899,788 |
+
+The initial sample binds a 9,360,096-byte peak invoice to
+`ownedProductFilePlanCanonical204` and a 4,537,260-byte peak invoice to
+`requireCompletedDerivedSettlement240`. The first factory funds its existing
+8 MiB construction allowance before loading the plan. The second constructs
+a full arguments DOM and typed plan only to compare `bindingDigest`.
+These are accounting and call-stack observations, not physical-memory
+measurements or permission to lower invoices without removing actual work.
+
+The second sample has three live toolset producer graphs at refusal. Two
+earlier preflight Contexts each retain one snapshot share, with no observed
+Raw export or active loan. Those facts do not prove that an opaque policy,
+resolver or executor has returned its original Context. E1058's real public
+`CapabilityPolicy` counterexample still applies. No unknown debt is refunded.
+The bank, floor, attachment working invoice and actual owner-return rules
+remain unchanged.
+
+## Withdrawn allocation and Context-retirement experiments
+
+E1165 records the dispositions of `catalog-scalar-name-candidate` and
+`digest-balanced-candidate`. The scalar-name experiment still fails complete
+Core capacity and the original local request deadline. The two-reader
+balanced-file digest experiment compiles all nine production stages but its
+request still times out at five seconds with zero HTTP POSTs. Neither is
+promoted as a fix.
+
+The balanced digest follow-up debugger capture observes only the outer
+launcher waiting for `chmod`. It never reaches the actual-owner handoff.
+That capture receives no owner CPU, GC, deadlock or request-success credit.
+No package verification, original timeout or resource limit changes.
+
+E1166 records
+`core-typed-result-context-return-source/disposition.json`.
+A blanket private-helper return on typed `Result.Err` is unsafe and withdrawn.
+E1058 already proves that a public `CapabilityPolicy` can retain the real
+Context through such a failure. Scoped hook completion is not that policy's
+ACK. The experiment's smaller bill is therefore invalid retirement evidence;
+its complete Core also still fails capacity. Its separate uninstrumented
+build reaches the original 900-second limit without executing Core.
+
+The accepted and observer Core sources are restored to their exact original
+bytes. Restoration does not restore a previously built ELF: every target
+containing this withdrawn candidate is ineligible until rebuilt from the
+retained source. No Context-retirement candidate is committed.
+
+Core capacity, first local model startup, remaining non-GC flows, matched
+baseline acceptance and complete release acceptance remain open. GC stays
+deferred, PR #49 stays Draft, and the task is not complete.
+
+
+## Historical plan validation without the unused arguments DOM
+
+E1167 records `store-derived-header-red` and `store-derived-header-green`
+on a private `d66fd3f7` checkout. The new real SQLite regression reaches
+`Runtime.finish(Completed)` with a settled failed derived Receipt and an
+actual canonical parent ToolResult. Two original floor reservations and an
+11 MiB retained invoice stay live in its fixed 32 MiB test bank.
+The original production codec fails
+`thread.durable_commit_failed: logical payload aggregate decoded capacity is exhausted`.
+This is a fixed-capacity accounting test, not a product-quota change or
+physical-memory measurement.
+
+The three-source candidate removes the full arguments DOM only from the
+private historical digest check. `StoredValuePaymentMeter` still validates
+every original frame, count, depth, UTF-8 sequence, number, duplicate field
+and final EOF. Its private projection preserves the required Object kind of
+`arguments` and selects every metadata field read by the original decoder.
+The public full codec and the Boolean-only historical comparison share that
+same metadata decoder. No projected `NormalizedOperationPlan` escapes the
+private comparison frame.
+
+The original payer funds the complete raw text, meter and selected typed
+metadata before allocation. The same-transaction exact-byte SQL joins,
+Source, ancestry, Receipt, unknown-consumer handling and standalone full
+codec remain unchanged. No invoice is refunded because a callback or typed
+error returned.
+
+The unchanged regression passes after the change and observes the completed
+Run, original failed child Receipt and exactly one canonical parent result.
+The nine malformed argument and metadata variants pass their rejection case
+both before and after the change. Both equal canonical plan cells are
+tampered, so SQL self-equality cannot replace decoder validation.
+Full natural Store execution passes **261/261**, with no skipped cases,
+errors or failures. The one-job build takes 421.76 seconds within its original
+900-second limit; full Store execution takes 38.18 seconds.
+The Store unittest ELF SHA-256 is
+`63e39d50a1af1816502b82e8eb4cf65d01d9fd4b4169ffd745cadb36e6fc8139`.
+Exact source hashes and original failed receipts remain in the evidence.
+
+This proves the SQLite completion fix, not complete Core, installed-worker
+launch, model startup, performance or release acceptance. The candidate is
+not yet promoted to the PR behavior sources. Complete original Native
+Core/recovery must be rebuilt and executed separately. The task remains
+incomplete, GC stays deferred, and PR #49 stays Draft.
+
+
+## Rebuilt Core after the historical-header fix
+
+E1168 records `store-derived-header-core-seed` and
+`store-derived-header-complete-core`. The private candidate rebuilds from
+the verified retained Core seed, not a withdrawn or instrumented ELF.
+Its unchanged complete Native Core/recovery build passes in 837.30 seconds
+within the original 900-second limit. The rebuilt ELF SHA-256 is
+`10592462e0265f79cf147fc54bb0c6a12fd5ddac58cc8e99c9f1f3e653e1947e`.
+
+The real execution runs for 59.06 seconds, reaches all original logged
+file-plan scenarios through artifact-store failure, and still fails the
+model-selected readonly Program at the original fixture line 2446 with
+`input_attachment.capacity`. Physical process custody closes.
+The strict historical-header fix therefore has a passing SQLite consumer
+regression and complete Store module, but does not close complete Core
+capacity. No reduction in the unobserved refusal-time invoice is inferred
+from the earlier attribution samples.
+
+The original bank, floor, attachment working invoice, fixture, Source,
+SQL, opaque-consumer debt, actual ACK and process-reaping rules remain.
+Core capacity and the other non-GC acceptance gaps stay open. GC remains
+deferred, PR #49 remains Draft, and the task is not complete.
+

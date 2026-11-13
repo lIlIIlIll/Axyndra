@@ -2615,3 +2615,70 @@ The checkpoint leaves Core capacity, model startup, remaining non-GC
 flows, matched baseline and release work open. The task is **not complete**;
 GC stays deferred and PR #49 stays **Draft**.
 
+
+[E1162](implementation/plan-execution-reliability.md#fixed-sdk-baseline-artifacts-and-first-request-comparison-limits)
+supersedes the unbuilt-baseline checkpoint. Immutable `4d88fa60` behavior
+sources pass all eight original fixed-SDK production stages. Baseline-only
+lock-format normalization preserves all peeled dependency identities.
+The original localhost two-profile package fixture passes, with exactly two
+HTTP POSTs and complete physical process custody. Fresh baseline setup and
+retained candidate setup differ, so matched activation, concurrency, output,
+memory, cancellation and performance acceptance remain open.
+
+[E1163](implementation/plan-execution-reliability.md#first-request-startup-phase-attribution)
+locates the five-second request failure before HTTP admission. Temporary
+phase probes observe 461–534 ms per activation in capture before launch.
+The path reloads and fully inspects the User and Workspace Registry for each
+plugin. This is wall-phase attribution, not a CPU profile, deadlock or GC
+classification. Full content, Source, inode, path and lock checks remain.
+The diagnostic package is not a release artifact.
+
+[E1164](implementation/plan-execution-reliability.md#reconciled-core-charges-and-legitimate-retained-contexts)
+reconciles original-behavior Core bank and derived-lease SUM observations.
+The actual 50,331,648-byte growth request still exceeds the original bank.
+Peak invoice stacks identify full file-plan construction and full plan
+decoding for a historical digest comparison. Three toolset producer graphs
+remain live at refusal. Earlier Context shares with no Raw export or active
+loan are not proof that opaque consumers returned their inputs.
+
+[E1165–E1166](implementation/plan-execution-reliability.md#withdrawn-allocation-and-context-retirement-experiments)
+record withdrawn scalar-name, balanced-digest and blanket typed-error
+Context-retirement candidates. The first two do not solve their target
+failures. The last violates E1058's real `CapabilityPolicy` retention
+contract. Its smaller bill is not a valid ACK or refund. Original Core
+source bytes are restored; withdrawn ELFs remain ineligible until rebuilt.
+No such candidate is committed.
+
+Core capacity, first local model startup, remaining non-GC Product and
+application flows, matched baseline and complete release acceptance remain
+open. The task is **not complete**. GC stays deferred and PR #49 stays
+**Draft**.
+
+
+[E1167](implementation/plan-execution-reliability.md#historical-plan-validation-without-the-unused-arguments-dom)
+records a real SQLite completion RED/GREEN on a private `d66fd3f7` candidate.
+The same fixed-bank regression fails on the original full codec, then commits
+the completed Run after removing its unused arguments DOM. Complete Store
+passes **261/261**. Malformed argument and metadata rejection still passes
+before and after the change. The private projection validates the complete
+original grammar and shares the original metadata decoder without exporting
+a projected execution plan.
+
+This candidate changes neither product quota, floor, attachment invoice,
+original payer, Source, exact-byte SQL, Receipt nor unknown-consumer debt.
+It has not yet been promoted to the PR behavior sources. Complete Native
+Core/recovery, model startup, remaining non-GC flows, matched baseline and
+release acceptance stay open. The task is **not complete**, GC stays
+deferred, and PR #49 stays **Draft**.
+
+
+[E1168](implementation/plan-execution-reliability.md#rebuilt-core-after-the-historical-header-fix)
+binds the private candidate to a fresh complete Core/recovery ELF. Its
+837.30-second build passes the original 900-second bound. Real execution
+still fails at the original model-selected readonly Program with
+`input_attachment.capacity` after the logged file-plan scenarios.
+Physical process custody closes. Complete Store success is not complete
+Core acceptance, and old refusal amounts are not reused as new measurements.
+The task remains **not complete**; GC stays deferred and PR #49 stays
+**Draft**.
+
