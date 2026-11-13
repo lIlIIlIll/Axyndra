@@ -2875,3 +2875,79 @@ remain private and unpromoted; complete Core and every other outstanding
 requirement remain **not complete**. GC stays deferred and PR #49
 stays **Draft**.
 
+[E1193](implementation/plan-execution-reliability.md#exact-remaining-copy-producers-identified)
+binds the actual peak Prepared owners to approval loading and authorization,
+and binds the input-copy children to real fixture request copies.
+The original complete Core run still fails; no later close is treated
+as an earlier refund.
+
+[E1194](implementation/plan-execution-reliability.md#initial-private-approval-producer-is-not-acceptance-evidence)
+records a failed private approval-scope prototype, not a shipped or
+accepted lifetime fix. A no-input notification alone is insufficient:
+actual registered execution must retain its original whole-Core contract
+unless separate DATA-return evidence exists. Sources remain private;
+all outstanding acceptance items remain **not complete**, GC stays
+deferred and PR #49 stays **Draft**.
+
+[E1195](implementation/plan-execution-reliability.md#guarded-private-approval-producer-passes-natural-tool-units)
+records all 75 natural Tool unit cases actually passing on the guarded
+private source, including three new real paid-ledger lifetime cases.
+The initial empty CJPM cache discovery is rejected with zero credit;
+the rebuilt inventory preserves every seed case. Registered exposure
+and opaque callbacks keep their original lifetime requirements.
+This is Tool-unit evidence, not complete Core/Product/release acceptance.
+Source remains unpromoted, the task remains **not complete**, GC stays
+deferred and PR #49 stays **Draft**.
+
+
+The guarded E1195 source's observer-free full Core run still fails the
+readonly Program capacity assertion; Tool-unit passes do not override it.
+[E1196](implementation/plan-execution-reliability.md#guarded-sources-own-refusal-remains-reconciled-and-unresolved)
+records that exact source's own refusal and unfiltered scalar ledger.
+It provides no full Core credit or basis for an early refund.
+
+[E1197](implementation/plan-execution-reliability.md#streamed-rows-and-typed-projection-match-pass-all-registry-units)
+removes actual all-lines and requested-projection allocations and executes
+all 38 natural Registry unit cases, including real rollback and changed
+capability matching regressions. Original complete Core still fails.
+Its separate detached-state holder is not declared returned or removed.
+[E1198](implementation/plan-execution-reliability.md#exact-fixed-sdk-line-slicing-smoke-passes-independently)
+passes eleven exact standalone string fixtures, not a product capacity,
+startup or release gate.
+
+All new sources remain private and unpromoted. The remaining Core,
+model startup, complete Product/application, matched baseline and final
+release requirements are **not complete**. GC stays deferred and PR #49
+stays **Draft**.
+
+[E1199](implementation/plan-execution-reliability.md#detached-state-work-correction-remains-incomplete)
+corrects the separate detached-state caller work and removes the now-obsolete
+line-array accounting scan, without changing DATA return or the original
+bank/floor. Original complete Core still fails capacity.
+The current natural Registry inventory preserves all 38 names: 37 execute
+and pass, while one executes and crashes with a direct
+`GCTib::ForEachBitmapWord` Runtime frame. Only this current sample joins the
+GC deferral; zero pass credit and the failed full-module summary remain.
+None of the private changes is promoted, and no charge saving is inferred
+merely from a lower child invoice. The task remains **not complete** and
+PR #49 stays **Draft**.
+
+[E1200](implementation/plan-execution-reliability.md#corrected-holder-refusal-still-has-actual-copied-data-peaks)
+measures the corrected holder's own remaining refusal and every peak
+lease. Actual main/fault copied-data high-water still prevents the
+attachment claim. Later owner collection and zero snapshot loans are not
+used to retire opaque Context or invent an earlier refund. The complete
+Core gate remains failed; no source is promoted and the task is
+**not complete**. GC stays deferred and PR #49 stays **Draft**.
+
+[E1201](implementation/plan-execution-reliability.md#private-approval-data-move-passes-tool-but-not-complete-core)
+preserves one actual DATA producer while moving a private approval
+intermediate into its Approved wrapper. All 75 natural Tool cases pass,
+including three paid-ledger move/consumer/export cases; public and retained
+Prepared values keep their old copying contract. Original complete Core
+still fails capacity. The private mechanism's unit success is not evidence
+that the real sequence had an eligible move or a lower peak. Initial
+compilation failures remain recorded with zero runtime credit.
+Source remains unpromoted; the task is **not complete**, GC stays deferred
+and PR #49 stays **Draft**.
+

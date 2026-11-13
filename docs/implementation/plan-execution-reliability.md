@@ -4455,3 +4455,342 @@ and unpromoted. Core, model startup, full Product/application flows,
 matched baseline and release remain open. The task is not complete,
 GC stays deferred and PR #49 stays Draft.
 
+## Exact remaining copy producers identified
+
+E1193 records `metadata-peak-producers1193`. Two observer additions capture
+every Prepared-owner constructor stack and every fixture request-copy
+payment origin, without filtering amounts or retaining object references.
+No allocation or retirement behavior changes. Build passes in 583.58
+seconds; original complete Core still fails in 71.47 seconds.
+ELF SHA-256 is
+`afa55dc47658761072526d133c4a93134bd23665fbfbfa0970f6a939c56f0b82`;
+event log SHA-256 is
+`f0ee7d14025bab5007b34475bcb3336558e2a08745f1427c9d1a2a995a8f7ca7`.
+
+The reconciled ledger and exact stacks identify the two main-peak
+Prepared owners separately:
+
+- `ToolPipeline.loadPreparedForApproval` retains the first through
+  `decideCommitted` during the actual Product file-plan recovery contract.
+- `ToolPipeline.authorize` retains the second through `decidePrepared`
+  in that same committed-approval continuation.
+
+Both request-copy children originate in `copyFixtureRequest159` through
+the real `FixtureModelPort.executeReturningInput159` action Future.
+Thus the earlier model-input ancestry includes actual old/new fixture
+request copies, not merely Core's input wrapper. Their overlap remains
+funded; later replacement is not evidence that the old copy could already
+be refunded. Full constructor stacks and all peak leases remain private
+in `peak-phase-decomposition.json`.
+
+## Initial private approval producer is not acceptance evidence
+
+E1194 records `private-approval-producer1194-complete-core`. A private
+prototype scopes approval intermediates around a no-input handoff
+notification while retaining the existing full-Prepared notification
+contract for actual data consumers. Both delegate to the same canonical
+committed-source/authorization/executor implementation.
+
+Build passes in 474.39 seconds. Original complete Core still fails after
+55.14 seconds at the same readonly Program capacity assertion.
+ELF SHA-256 is
+`9e2635864892d130b39ad1f448184cd1027627ed2bd2269b96e6c0e1f23e225a`.
+The prototype is not promoted or accepted as a safe lifetime fix:
+a no-input notification alone does not certify that a raw executor
+returned its Prepared aliases, including an executor that stores the
+object without invoking a public getter.
+
+The guarded follow-on must preserve the original whole-Core producer
+contract before any actual registration can expose Prepared to descriptor,
+handoff or executor code. Parent-held/unknown state and independent
+consumer ACKs remain required. Neither a returned callback, a typed Err
+nor a completed process proves DATA consumption. No opaque Context,
+full loading invoice, Source/SQL or authorization rule is weakened.
+Complete Core and all other outstanding requirements remain open.
+The task is not complete, GC stays deferred and PR #49 stays Draft.
+
+## Guarded private approval producer passes natural Tool units
+
+E1195 records `private-approval-guarded1195-tool-unit-ready`.
+The guarded source keeps the original whole-Core producer lifetime as
+soon as an actual registration is selected, before descriptor, handoff
+or executor callbacks. A raw executor may store Prepared without reading
+a getter; a no-input notification is not its return witness.
+Only newly constructed, still-private pre-registration intermediates
+can use the complete helper-return contract. Existing parent-held/unknown
+state and all independent metadata consumers still prevent retirement.
+The fixed frame header remains prepaid in the original Core scope.
+
+The first CJPM skip-build seed discovery exits zero but reports `TOTAL 0`.
+The driver rejects that empty inventory before compilation or case credit;
+its output remains in `private-approval-guarded1195-tool-unit`.
+The continuation enumerates the exact retained ELF directly, then rebuilds
+the actual Tool module and uses natural CJPM discovery for real case runs.
+This is a runner/cache-discovery correction, not a zero-test pass or a
+relaxed inventory assertion.
+
+The unit build passes in 184.10 seconds. The seed enumerates 72 cases;
+the rebuilt inventory is exactly those names plus three paid-ledger
+lifecycle regressions, with no removals. **All 75 natural Tool unit cases
+execute and pass.** Each filtered process executes one case and skips 74.
+The added cases prove:
+
+- A returned private producer keeps DATA while its actual consumer is
+  still live; the last real consumer returns one actual lease without
+  compacting the still-live shared message's high-water charge.
+- Registered Prepared exposure retains the original whole-Core producer,
+  even after the counted consumer returns.
+- An actual unsupported raw resolver still blocks private retirement.
+
+Tool unittest ELF SHA-256 is
+`899c2ae8376accfc7b884088b311ceae306ad039a3b8ec7ed8eaa1e07fc2568b`.
+The fourteen-file guarded source includes the earlier lifetime combination
+and the three new tests. The 144 MiB bank, 16 MiB floor, SUM, 64 MiB
+attachment work invoice, real ACKs, Source/SQL, permission, deadline and
+stack requirements remain intact. Its additional private frame header is
+prepaid in the existing Core scope. No source is promoted.
+
+The observer-free `private-approval-guarded1195-complete-core` build passes
+in 690.52 seconds, but original complete Core still fails after 61.21
+seconds at the readonly Program `input_attachment.capacity` assertion.
+ELF SHA-256 is
+`824873371536beb5ce2b670e56a8f645d75d5372186d8369b9f0b759ec4012fb`.
+The 75 Tool passes do not fix or replace this failed full Core gate.
+Product/application, matched baseline and release validation remain open.
+No compiler/runtime/std/stdx/SDK or external model change is made.
+The task remains not complete, GC stays deferred and PR #49 stays Draft.
+
+
+## Guarded source's own refusal remains reconciled and unresolved
+
+E1196 records `private-approval-refusal1196`. It adds only the retained
+scalar allocator observer to the exact guarded E1195 source; no caller-role
+file overwrites the new exposure guard or private producer links.
+Build passes in 730.56 seconds. Original complete Core still fails after
+56.32 seconds at the same readonly Program assertion.
+Diagnostic ELF SHA-256 is
+`93241381830c20a2cc9139a053ce772d3829630b8ec4595ce310b1d87954c804`.
+
+The original refusal point records:
+
+| Bank field | Actual bytes |
+| --- | ---: |
+| Capacity | 150,994,944 |
+| Charged | 104,412,824 |
+| Requested incremental growth | 50,331,648 |
+| Overshoot | 3,749,528 |
+
+| Live shared group | SUM bytes | Charged high-water bytes | Actual leases |
+| --- | ---: | ---: | ---: |
+| 1 | 47,038,072 | 51,880,888 | 457 |
+| 221 | 9,480,776 | 18,739,936 | 119 |
+
+All ledger events and every peak lease/closed-since-peak entry are
+reconciled without a size threshold. Other bank occupancy is not inferred
+from these two SUM rows. These are this run's observations, not numbers
+copied from the earlier unguarded source. They demonstrate neither a
+refund opportunity nor a leak. No producer change earns full Core credit.
+The source remains private; the task is not complete and PR stays Draft.
+
+## Streamed rows and typed projection match pass all Registry units
+
+E1197 records the private fourteen-file
+`streamed-typed-registry1197-source.json` candidate. It retains E1191's ten
+functional sources, not E1194/E1195's new Tool API or producer protocol.
+The loader now keeps one JSONL row rather than a full split array.
+Requested-record matching compares the exact old lock-line/diagnostic
+projection fields without constructing two JSON graphs and strings.
+Order of capabilities, contributions and component dependencies remains
+significant; no metadata field is silently added to that comparison.
+
+The capture caller prepays handles, complete path copies, bounded getter
+copies, unchanged full typed DATA and four additional 8x pointer-slot
+occurrences per retained record. The latter follows from each record's
+unchanged minimum header invoice. Snapshot/source bytes, per-row
+DOM/tree/digest work, full native/package verification and actual return
+rules keep their existing owners. This is not a blanket lower work invoice:
+the still-allocating matching-pin path retains its original 4 MiB scratch.
+
+Observer-free build passes in 534.85 seconds. Original complete Core still
+fails after 49.19 seconds at the same readonly Program capacity assertion.
+ELF SHA-256 is
+`ddf5f70cbc85ac089adad044bc77fcdc8f26def8a4d55f91ceb52896d080977b`.
+Its refusal amounts have not been measured; E1196's values are not reused.
+
+The actual rebuilt Registry unittest ELF and natural CJPM discovery agree
+on **38 cases, all executed and passed**, including two added regressions:
+
+- Mixed blank/CRLF rows and a final unterminated history row still permit
+  a real installed pin and rollback to the original version/content lock.
+- Changed, reordered, truncated or extended requested capability metadata
+  cannot match the approved record.
+
+The suite also executes actual saturation, owner/fence retention, complete
+package-byte reinspection, same-length rewrite, inode/path replacement,
+symlink, workspace grant, writer, rollback and malformed-row cases.
+Unit build takes 169.47 seconds; ELF SHA-256 is
+`de27478591d1b874e0e6c69e8a89d47cf8ab4f17c097b0d821e44c0c07231089`.
+Evidence is `streamed-typed-registry1197-registry-unit`.
+The input Core cache has no prior Registry unittest ELF; no historical
+Registry count or prior-source pass is invented.
+An initial private runner syntax error occurs before compilation; it
+earns zero test credit. Correcting that runner does not alter Cangjie
+source or assertions.
+
+Remaining detached loading/management state still prepays its original
+fixed 4 MiB in a separate actual owner. The capture-only change does not
+establish that this holder disappeared or that its DATA was returned.
+No source is promoted; Core and all other outstanding acceptance remain
+open. GC stays deferred and PR #49 stays Draft.
+
+## Exact fixed-SDK line slicing smoke passes independently
+
+E1198 records `line-iteration1198`, a standalone std-only O2 caller.
+Eleven independently specified fixtures exercise actual SDK `indexOf`
+byte offsets and slicing: empty/blank input, leading/consecutive lines,
+CRLF, final unterminated rows, multibyte UTF-8 and an escaped newline
+inside JSON text. Every expected line's bytes and order match.
+Compilation takes 1.38 seconds; execution takes 0.50 seconds.
+ELF SHA-256 is
+`34da9a5923f690cde2d6bae7c25a1453b2edcca0e2b94751a7bae40e35c0269b`.
+This uses no Axyndra API or model. It proves string iteration semantics,
+not Registry billing, complete Core, startup performance or release
+acceptance. Accepted behavior remains unchanged; the task is not complete.
+
+## Detached-state work correction remains incomplete
+
+E1199 records the private sixteen-file
+`detached-state-work1199-source.json` candidate. The still-existing
+ordinary loading/management `PluginRegistryStateMemory` holder is distinct
+from E1197's capture caller. All four production constructor sites and its
+real digest regression now explicitly prepay caller path/handle/bounded
+getter work; public inspection includes the supplied package root.
+No old constructor overload or default invoice remains.
+
+Because the loader now streams rows, the obsolete whole-source byte copy,
+line-count scan and split-array invoice are removed. Every immutable
+snapshot/source, parser/node, tree/digest, adopted/copy/mutation DATA
+charge retains its existing lifetime. Loaded records additionally prepay
+the same four 8x caller pointer-slot occurrences. No owner is cleared,
+refunded or merged early; the original shared bank, per-owner floor,
+attachment work invoice, SUM and real ACK requirements stay intact.
+
+The observer-free original complete Core build passes in 626.49 seconds,
+but execution still fails after 49.82 seconds at the same readonly Program
+`input_attachment.capacity` assertion. ELF SHA-256 is
+`662ea4217ef81f882766bcc0e89a046fca5743adbc2a96b47e6f2c0a0390fa43`.
+No remaining refusal amount or floor saving is inferred from the earlier
+source. A smaller logical child invoice need not lower a live message's
+charged floor/high-water.
+
+The rebuilt Registry unit inventory preserves all 38 actual E1197 seed
+names. All execute: **37 pass; one crashes with direct Runtime GC frames**.
+The failed case is
+`RegistryStateCustodyTests.actualReloadAndCaptureShareOneCustodyButPreserveIndependentGenerationRevocation`.
+Its current stderr shows
+`GCTib::ForEachBitmapWord -> CJ_MCC_C2NStub -> FileInfo.isSymbolicLink -> inspectPluginPackage`.
+That direct frame, not a thread name or region assertion alone, places this
+sample in the user-deferred GC scope. It receives zero pass credit and is
+not rerun. The original `FAIL_NO_ACCEPTANCE` summary stays unchanged;
+`classification-review.json` preserves the evidence and limited conclusion.
+No root cause or SDK-only causation is claimed.
+
+Unit build takes 209.54 seconds; unittest ELF SHA-256 is
+`2ed3c4530a4a101ea834ce8076aa12051a08dfa4648cbf2d361ae0bb064e9943`.
+The 37 successes do not replace the failed full module or Core gate.
+Evidence is `detached-state-work1199-complete-core` and
+`detached-state-work1199-registry-unit`.
+All source remains private and unpromoted. The task is not complete,
+the other non-GC requirements remain open and PR #49 stays Draft.
+
+## Corrected-holder refusal still has actual copied-data peaks
+
+E1200 records `detached-state-refusal1200`: exact E1199 source plus seven
+retained numeric/function-origin observers. Every diagnostic file replaces
+an unchanged original file, not new functional code. Build passes in
+454.04 seconds; original complete Core still fails after 69.29 seconds
+at the same readonly Program assertion.
+Diagnostic ELF SHA-256 is
+`fa3f09f4128ee5a36629d055ca543bf64afb8f6db21c71bbfca300fd5a5fd724`.
+
+| Refusal field | Actual bytes |
+| --- | ---: |
+| Bank capacity | 150,994,944 |
+| Charged | 103,777,060 |
+| Requested incremental growth | 50,331,648 |
+| Overshoot | 3,113,764 |
+
+| Shared group | SUM at refusal | Charged high-water | Actual leases |
+| --- | ---: | ---: | ---: |
+| 1 | 47,038,160 | 51,879,968 | 457 |
+| 221 | 9,480,784 | 18,105,092 | 119 |
+
+The complete unfiltered peak report retains all 416 and 161 peak leases,
+respectively, plus every closed-since-peak entry. Main peak still overlaps
+the two approval Prepared copies from private loading and authorization,
+old/new real fixture request copies, and actual snapshot/data loans.
+The fault-phase largest paid child is now a host Registry data copy;
+it is not the earlier fixed 4 MiB loading invoice.
+
+Later collection of those owners cannot be used as an earlier ACK.
+The smaller child work invoices do not establish an equal reduction in
+either message's charged floor/high-water. Three snapshot producers remain
+live at refusal; zero raw exports/loans on a snapshot alone does not prove
+its enclosing opaque Context has returned. No such Context is retired.
+Numeric reconciliation and complete ancestry remain private in
+`reconciled-custody.json` and `peak-phase-decomposition.json`.
+The source is diagnostic and unpromoted; complete Core is still failed,
+the task is not complete and PR #49 stays Draft.
+
+## Private approval DATA move passes Tool but not complete Core
+
+E1201 records the private twenty-one-file
+`private-approval-move1201-callers-source.json` candidate.
+It avoids a second independent metadata graph only for a freshly privately
+reloaded approval intermediate. After the unchanged canonical Source,
+current-plan, capability, policy and persisted approval checks, an eligible
+Core-owned producer moves its already copied fields into the Approved
+wrapper. The old private wrapper is cleared; the same DATA payment,
+producer, frozen plan, Source and actual consumer/return rules remain.
+An extra control-only wrapper is prepaid in the original scope.
+There is no early producer return, DATA refund or new execution authority.
+
+Public `authorize`, retained context-read decisions and all three retained
+owned-parent/child authorization helpers keep their original independent
+copy semantics. Opaque/held Context, exported metadata, an actual live
+consumer or changed producer prevents the private move. Those guards are
+not relaxed to obtain a pass.
+
+The initial attempt omits the explicit copying-mode argument at the three
+owned-parent/child helpers and fails compilation. No test or runtime
+credit is given. The corrected attempt migrates every such caller and
+preserves the initial failed output.
+
+The actual Tool build then passes in 56.83 seconds, with dependency-ready
+cache from the failed attempt, not a cold-build performance result.
+The rebuilt natural inventory preserves all 72 original seed cases and
+adds exactly three real paid-ledger cases. **All 75 execute and pass**:
+
+- Moving the private wrapper does not create another DATA lease; the
+  payload stays live through the actual last independent consumer.
+- An existing consumer prevents transfer until its own frame returns.
+- A real raw metadata export or opaque Context keeps the original
+  independent-copy route and paid debt.
+
+Tool unittest ELF SHA-256 is
+`86ec64378323a98100ed200fc980dc77557c8ac6e0ca6d08564d2b0bc1b78f33`.
+Evidence is `private-approval-move1201-callers-tool-unit`.
+
+Original complete Core build passes in 420.94 seconds, but execution still
+fails after 46.03 seconds at the readonly Program capacity assertion.
+ELF SHA-256 is
+`ffee2a062bf53674615d17c55ec5046a6783b1da3690c4c1125923a529b35e52`.
+Evidence is `private-approval-move1201-callers-complete-core`.
+Successful isolated transfer cases are not proof of eligible transfers
+or lower peak charge in that actual production sequence.
+No previous-source refusal amount or earlier ACK is substituted.
+
+No source is promoted. The original Core and remaining non-GC gates are
+still open; GC stays deferred, the task is not complete and PR #49 stays
+Draft.
+
