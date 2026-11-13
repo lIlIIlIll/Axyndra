@@ -2795,9 +2795,18 @@ HTTP POSTs and an unchanged operator lock; no model pass is recorded.
 and [E1179](implementation/plan-execution-reliability.md#same-width-digest-work-and-allocation-controls)
 retain independently checked same-SDK digest controls and the exact
 retained packages' byte partitions. They neither authorize SDK replacement
-nor prove production performance. The private all-file two-reader candidate
-remains unverified; no caching, quota, worker-count, buffer or deadline
-increase is accepted. Complete Core, model, full Product/application flows,
-matched baseline and release remain open. The task is **not complete**,
-GC stays deferred and PR #49 stays **Draft**.
+nor prove production performance.
+
+[E1180](implementation/plan-execution-reliability.md#all-file-two-reader-candidate-fails-the-original-request-gate)
+records the all-file two-reader candidate's nine passing build stages and
+failed original five-second request: zero HTTP POSTs and no durable Run,
+Attempt, Operation or Receipt. The private source and package are not
+promoted or accepted as current Core/Product evidence.
+
+[E1181](implementation/plan-execution-reliability.md#empty-spawn-control-does-not-justify-a-persistent-worker)
+retains all five fixed-SDK empty-spawn controls: each 1,000 joined Futures
+takes 2.521–3.290 ms. No persistent worker, verification cache, extra buffer,
+quota increase or deadline relaxation is introduced. Complete Core, model,
+full Product/application flows, matched baseline and release remain open.
+The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
 

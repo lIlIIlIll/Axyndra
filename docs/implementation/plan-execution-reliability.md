@@ -4155,3 +4155,47 @@ Complete Core, the original model-request gate, full Product/application
 flows, matched baseline and final release acceptance remain open. GC stays
 deferred, PR #49 stays Draft, and the task is not complete.
 
+## All-file two-reader candidate fails the original request gate
+
+E1180 records `digest-all-file-two-reader1180-build`,
+`digest-all-file-two-reader1180-package` and
+`provider-profile-retained-all-file1180-first-diagnostic`.
+The private one-file candidate compiles all nine original production
+stages within their unchanged bounds. It preserves the two readers,
+two 64 KiB buffers, original invoice, full file checks, ordered v2 digest,
+joined worker and private-frame clearing. Candidate App SHA-256 is
+`9b87f81d6ac29ae6efe73bcbfc47a3463dbffc1bf3cf6a623e85f9fd96effd77`.
+
+The derivative package changes only the host, truthful host provenance and
+ldd report; every plugin, SDK and library byte matches the current seed.
+Its ELF SHA-256 is
+`e6afa294644b42ac508dea8bf16805c442092233cf007f958a4cf46e7e13cada`.
+The unchanged local request still times out after 5.003 seconds with zero
+HTTP POSTs and an unchanged operator lock. Read-only comparisons of both
+session databases find zero Runs, Attempts, Operations and Receipts in
+both the seed and failed candidate. Observing more processes does not prove
+Run admission. Physical cleanup closes all observed identities; it is not
+DATA ACK. The failure capture did not retain stdout or stderr.
+
+The candidate is not promoted. Its build and package are not eligible as
+accepted-source Core, Product or release evidence. Better byte partitions
+alone do not satisfy the request gate. Complete pin acquisition publishes
+fresh state for the whole Registry; loading only the selected record would
+change that contract and is not implemented. No cache, worker-count,
+buffer, quota, integrity-check or deadline relaxation is accepted.
+
+## Empty spawn control does not justify a persistent worker
+
+E1181 records `digest-spawn-micro1181`, an independent O2 caller built and
+run with the same fixed official SDK. Probe ELF SHA-256 is
+`1c51a46bd96e338a5ebffc1915cc660469d38b9bfe0dadb63b3faec240532327`.
+All five raw batches remain, including the first. Each starts and joins
+1,000 empty Futures and verifies the accumulated result is 1,000.
+Observed batch wall time is 2.521–3.290 ms. This control does not establish
+useful startup savings from introducing a persistent digest worker;
+none is added. It is not a Product or matched-baseline performance gate.
+
+Core capacity, model startup, complete Product/application flows, matched
+baseline and release acceptance remain open. GC stays deferred, PR #49
+stays Draft, and the task is not complete.
+
