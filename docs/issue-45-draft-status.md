@@ -2710,3 +2710,26 @@ on the integrated sources. Current combined Core, Product, production,
 package, model, matched baseline and release acceptance remain open.
 The task is **not complete**, GC stays deferred, and PR #49 stays **Draft**.
 
+
+[E1171](implementation/plan-execution-reliability.md#integrated-complete-core-still-refuses-attachment-capacity)
+records an actual rebuilt complete Core/recovery run with both changes.
+The build passes in 579.22 seconds within the original 900-second cap; the
+new ELF still fails `input_attachment.capacity` at the original readonly
+Program after 49.14 seconds. Physical process custody closes. Exact working
+source bytes now correspond to fixups `91ea759` and `345c4c6`, not a new
+runtime execution or complete Core pass. Current complete Product, packages,
+model startup, matched baseline and release acceptance remain open.
+The task is **not complete**; GC stays deferred and PR #49 stays **Draft**.
+
+
+[E1172](implementation/plan-execution-reliability.md#current-source-refusal-and-live-owner-decomposition)
+reconciles all 256,191 observations on the current `345c4c6` behavior.
+The actual refusal has capacity 150,994,944, occupancy 110,610,312, requested
+growth 50,331,648 and overshoot 9,947,016 bytes. These are fresh simultaneous
+measurements, not reused earlier charges or physical-memory claims.
+All live owner invoices and original unknown prepared states are preserved.
+Snapshot shares, zero loans and completed Operations still do not prove
+opaque DATA return. No refund or capacity change is applied.
+Complete Core and the remaining non-GC gates stay open. The task is
+**not complete**; GC stays deferred and PR #49 stays **Draft**.
+

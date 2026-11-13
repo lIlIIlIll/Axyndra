@@ -3866,3 +3866,69 @@ These are narrow lifecycle and static results, not complete Core capacity,
 first-model startup, matching baseline or release acceptance. GC stays
 deferred, PR #49 stays Draft, and the task is not complete.
 
+
+## Integrated complete Core still refuses attachment capacity
+
+E1171 records `combined-startup-header-complete-core`. The original complete
+Native Core/recovery is rebuilt and executed with both integrated fixes.
+The build passes in 579.22 seconds under its original 900-second bound.
+The new ELF SHA-256 is
+`4443850d0e868af1e1fd81c006d45a9cec240319c69b280d8bf47711121aab58`.
+Execution takes 49.14 seconds and still fails the original model-selected
+readonly Program at fixture line 2446 with `input_attachment.capacity`.
+All owned processes are collected. No GC classification or pass is claimed.
+
+The build records the `4009baa` parent plus the exact five-file working-source
+hashes. Those bytes are now committed as `91ea759` and `345c4c6`; later
+differences are documentation and commit metadata. The exact-source
+equivalence preserves this evidence without claiming another runtime run.
+The commits are fixups of the original settlement and first-assembly changes,
+not a Ready declaration.
+
+The Store and startup-record fixes retain their independent narrow evidence.
+Combined complete Core capacity, current complete Product, current release
+packages and model startup remain unaccepted. No earlier refusal charge is
+substituted for this run's unobserved invoice. GC stays deferred, PR #49
+stays Draft, and the task is not complete.
+
+
+## Current-source refusal and live owner decomposition
+
+E1172 records `combined-current-custody-source` and
+`combined-current-custody-attribution` on the `345c4c6` behavior sources.
+The original six numeric observers are reused with an isolated trace path.
+The safe uninstrumented E1171 Core is the only COW seed. Original Core
+Context-retention bytes are verified; no withdrawn typed-error ELF is used.
+The diagnostic build passes in 591.82 seconds. Its actual 110.16-second
+execution still fails complete Core and exits 1. Neither run is performance
+or acceptance evidence.
+
+All 256,191 bank, lease, SUM and custody observations reconcile. The fresh
+refusal records these values together:
+
+| Capacity | Charged at refusal | Actual requested growth | Overshoot |
+| ---: | ---: | ---: | ---: |
+| 150,994,944 | 110,610,312 | 50,331,648 | 9,947,016 |
+
+The complete live-owner decomposition freezes every invoice, including zero
+invoices, at this refusal. Group 1 has 460 live leases and a 49,153,248-byte
+SUM. Group 214 has 119 and a 9,480,784-byte SUM. Their high-water charges,
+two other original 16 MiB reservations and fixed transport charges reconcile
+with total occupancy. No unmatched count is described as a leak.
+
+The original three toolset producer graphs remain live. The two earlier
+Context shares still do not prove opaque consumer return. Prepared metadata
+also remains explicitly unknown: group 1 has 49 live prepared owners with
+13,539,368 invoiced bytes; group 214 has four with 878,832. These are original
+retention states, not authorization to clear fields, acknowledge consumers
+or refund completed Operations.
+
+The diagnostic ELF SHA-256 is
+`8f6b9ba8108b133310efb9ca89bca36da9f70e98788efd10eb871c74dcf7ea4a`.
+Exact sources, all raw events, refusal-time owner ancestry and prepared
+states remain in the private evidence. The collector retains numeric IDs,
+amounts and function names, not application owner or child references.
+The fixed bank, floor, attachment invoice, SQL, Source, actual ACK and
+original deadlines remain. Complete Core and the remaining non-GC gates
+are not accepted; GC stays deferred and PR #49 stays Draft.
+
