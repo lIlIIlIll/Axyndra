@@ -4,6 +4,8 @@ import std.fs.*
 import std.collection.*
 import std.unittest.*
 import std.unittest.testmacro.*
+import agent_domain.*
+import agent_extension_runtime.{reserveNativeObservationBuffer}
 
 // Diagnostic only: existing native path stat, no new Source gate or C API.
 foreign func axyndra_read_view_probe(path:CString,output:CPointer<UInt8>,capacity:Int64):Int32
@@ -144,5 +146,38 @@ class RegistryExecutionPinTests {
             @Expect(pinCode(pin.current()),"plugin.registry_execution_stale")
             @Expect(File.readFrom(external),original)
         }finally{pin.close();f.close()}
+    }
+    @TestCase
+    func unchangedOwnedBytePinValidatesUnderBankPressureButRejectsMutation1234():Unit {
+        let f=RegistryPinFixture()
+        try{
+            let pin=f.pin()
+            try{
+                let pressure=f.record.descriptor.deriveCopiedDataPayment(4096)
+                let guards=Array<?LogicalJsonFixedBufferReservation>(16,repeat:None<LogicalJsonFixedBufferReservation>)
+                try{
+                    let path=f.root+"/settings/plugins/lock.jsonl"
+                    let changed=(String.fromUtf8(File.readFrom(path))+" ").toArray()
+                    for(index in 0..guards.size){guards[index]=Some(reserveNativeObservationBuffer())}
+                    var refused=false
+                    for(step in 1..257){
+                        try{pressure.ensureRetainedPeak(step*1048576)}
+                        catch(_:LogicalJsonPayloadError){refused=true;break}
+                    }
+                    @Expect(refused)
+                    // Unfilled, caller-owned guard reservations accepted no DATA.
+                    // Returning them leaves room for the real short admission,
+                    // not another decoded Registry-load working graph.
+                    for(index in 0..guards.size){
+                        guards[index].getOrThrow().close();guards[index]=None<LogicalJsonFixedBufferReservation>}
+                    @Expect(pin.current().isOk())
+                    File.writeTo(path,changed)
+                    @Expect(pinCode(pin.current()),"plugin.registry_execution_stale")
+                }finally{
+                    for(guard in guards){match(guard){case Some(value)=>value.close();case None=>()}}
+                    pressure.close()
+                }
+            }finally{pin.close()}
+        }finally{f.close()}
     }
 }

@@ -5918,3 +5918,316 @@ Host and public Native Product passes remain narrowly valid, not full
 Core or broader acceptance. The task remains incomplete, GC stays
 deferred and PR #49 stays Draft.
 
+## Current refusal reconciles every root and its actual peak
+
+E1231 instruments published `78ba31d` with only the established temporary
+numeric allocator observer. There is no functional candidate or SDK
+change. The unchanged full Core gate again fails
+`input_attachment.capacity`; intrusive execution timing is not performance
+evidence. Actual diagnostic ELF SHA-256 is
+`91fec6e472ded678917f5ad7eed5f860c06cf2a6f1fb616710c2b292f7bda24f`.
+
+| Original refusal fact | Bytes |
+| --- | ---: |
+| Bank capacity | 150,994,944 |
+| Charged at the actual decision | 102,454,672 |
+| Actual incremental request | 50,331,648 |
+| Overshoot | 1,791,376 |
+
+The requesting root is 225 in actual bank 2. Full acquisition, growth and
+return events exactly reconcile both charge and root/buffer counts.
+Derived invoices plus the original 1,024-byte per-lease header exactly
+reconcile every live SUM, without threshold filtering.
+
+| Actual owner | Charged bytes | Current derived SUM | Live derived entries |
+| --- | ---: | ---: | ---: |
+| Root 1 | 50,179,248 | 43,772,848 | 460 |
+| Root 214 | 18,483,424 | 6,917,632 | 119 |
+| Root 224, actual checkpoint slot | 16,777,216 | Standalone | Not applicable |
+| Root 225, actual input attachment | 16,777,216 | Standalone | Not applicable |
+| 29 actual fixed buffers | 237,568 | Not applicable | Not applicable |
+
+Checkpoint and attachment identities come from their actual constructor
+stacks, not equal floor amounts. All 17,323 derived constructors retain
+their first actual non-budget funding frame, immediate next caller and
+full original stack. Every currently live paid child has an origin.
+Prepared and Catalog invoices remain real retained DATA, not inferred
+leaks or refund authority.
+
+Actual root-growth events also identify the earlier peak separately from
+current SUM. Root 1's last growth occurs while file-plan canonical child
+11290 retains a 9,360,096-byte invoice. Its constructor is the real
+`ownedProductFilePlanCanonical204` path. Its later ledger close precedes
+the refusal, but the original Catalog root remains alive and retains its
+high-water. Root 214's last growth includes the actual 4,194,304-byte
+Registry validation scratch. These observations do not permit lowering
+high-water, clearing unknown debt or inventing any consumer ACK.
+
+`main-refusal1231` retains the complete bank balance, unfiltered numeric
+events, first-funder/full-stack attribution, actual peak leases and exact
+canonical close/standalone-root identities. All 184 observed execution
+processes are reaped without surviving, unreaped or unknown processes.
+Physical cleanup remains not DATA ACK.
+
+This new source-specific balance replaces no earlier artifact's facts.
+It supports evaluating a separately paid same-bank canonical construction
+frame on the current source; it does not turn the failed E1224 candidate,
+current complete Core, or any broader gate green. The task remains
+incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Current isolated canonical message still fails complete Core
+
+E1232 tests published `78ba31d` with only the private
+`file_plan_canonical_owner204.cj` payment-scope change. It retains the
+original 131,072-byte header, 8,388,608-byte work invoice and complete
+retained-DATA meter, but places that canonical carrier on a real separate
+message in the same bank with the original floor and consumer-ACK guards.
+There is no observer or Registry working-scope candidate.
+
+Build passes in 565.16 seconds. The original complete Core gate still
+fails after 57.62 seconds with `input_attachment.capacity` at the same
+model-selected Program assertion. Actual ELF SHA-256 is
+`35546098a10468a21efb1de6e8a478c2d8d103c961a7945e69af2250049acd89`.
+All 198 observed execution processes are reaped with no surviving,
+unreaped or unknown processes. Physical cleanup remains not DATA ACK.
+
+`canonical-frame-current1232-complete-core` retains the exact one-file
+diff, source binding and actual failure. No numeric savings, new refusal
+amount, full Core pass or acceptance is inferred. The candidate remains
+private and ineligible; Main remains unchanged. A separate diagnostic
+observes its actual refusal rather than retrying it unchanged for a pass.
+The task is incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Private canonical diagnostic still exceeds the original bank
+
+E1233 adds only the established numeric observer to the failed private
+E1232 source. Actual diagnostic ELF SHA-256 is
+`61c92df9edff931d9737d3bef7cca8e9d51a9dd45573dfbc2a5017ac7be73dec`.
+The original Core gate still fails `input_attachment.capacity`.
+
+| This private artifact's original refusal | Bytes |
+| --- | ---: |
+| Actual charged amount | 100,832,504 |
+| Actual incremental request | 50,331,648 |
+| Original bank capacity | 150,994,944 |
+| Overshoot | 169,208 |
+
+Root 1 is charged 48,556,768 with live SUM 43,773,024. Root 221 is
+charged 18,483,736 with live SUM 6,917,688. Standalone roots 231 and 232
+each hold 16,777,216; 29 fixed buffers hold 237,568. All amounts and counts
+exactly reconcile at this refusal. No other artifact receives these values.
+This is not permission to refund either live DATA or retained high-water.
+
+The physical census also records one `process_stat_malformed` observation.
+Empty known-survivor and unreaped lists do not resolve that unknown
+identity or grant process-closure credit. The original failed diagnostic
+summary remains failed. `canonical-refusal1233` retains the exact source,
+trace, balance and bounded identity diagnostic. No candidate is promoted
+from this attempt.
+
+## Native admission validates owned bytes without a decoded load
+
+E1234 isolates a different Registry defect. Non-loading pin validation
+opens the 4 MiB JSON-loader scratch despite comparing already-funded
+native frozen bytes. The native implementation reads into its retained
+`observation_buffer`, compares exact bytes/inodes and drains the original
+watches. It publishes no decoded row or new descriptor.
+
+The correction requires the original real 65,536-byte admission frame,
+keeps every native snapshot/path/watch/buffer owner paid and uses that
+closed validation path. The full 4 MiB scratch remains on actual JSON
+load, capture and matching paths. No existing invoice is refunded or
+high-water reduced.
+
+Publication checks previously materialize a whole `Array<FileInfo>`.
+They now use `Directory.walk` with the original typed recovery error.
+The exact fixed SDK's filesystem ELF is read, not rebuilt: its walk uses
+one directory handle, reads the next entry and closes on both ordinary
+return and callback exception. Dangling markers and `lock.jsonl.txn-*`
+entries remain fail-closed; no pending file is interpreted as authority.
+`native-validation1234-api-source` binds this implementation evidence to
+the readonly SDK filesystem SHA-256
+`ec252fb2dfd8fa6f5d2dc509bc7a95fbf0fd44c8fc19f18ce9ddef11abf5e0c6`
+and unchanged native backend source.
+
+| Evidence | Actual result | ELF SHA-256 |
+| --- | --- | --- |
+| `native-validation1234-red-unit` | Real bank-pressure pin regression fails; ordinary writer-contention control passes | `58ac456960bbed2b772d3298b3abe5da3866ce288275f5d1c6d4c137ad600b71` |
+| `native-validation1234-green2-unit` | All 36 eligible Native Registry cases pass | `095707a83c91eb3fbb51d7c4a02fd0193727776247bf707f3eae58e460709772` |
+| `native-validation1234-native-smoke` | Standalone public Native Registry observes real saturation, valid unchanged pin, rejected byte mutation and both dangling recovery-entry kinds | `474f336c6563efbd58f54cd103992c284e8f0a4ab011b76bef2ab5d85c1cdfd7` |
+
+All 39 natural cases remain: the original 38 and one addition. Three
+specifically GC-deferred cases are not rerun and retain zero pass credit.
+The regression keeps a real paid pressure loan live, returns only
+unfilled caller-owned guard reservations, validates the unchanged pin and
+then proves that an actual lock-byte mutation is still rejected.
+Existing inode/ABA, grant, shared-fence, full package-byte capture,
+publication, raw-publisher and original-floor regressions also pass.
+
+The first GREEN compile rejects a mutable local captured by a callback.
+That failed build is preserved separately; the final callback directly
+throws the original recovery error, with SDK exception-handle cleanup
+verified. No assertion or bound is changed.
+
+The actual standalone executable builds in 60.19 seconds and runs
+dependency-ready in 0.54 seconds, with exact expected output and closed
+process custody. Both dangling publication-marker and transaction-prefix
+symlinks return `plugin.registry_recovery_required`. Caller and output
+bytes are retained before removing only that task's caller scaffold.
+These are not cold-start, five-second, model, plugin-execution or
+matching-baseline results.
+
+The same Native source passes all 129 selected Python regressions and the
+complete architecture entrypoint. `native-validation1234-static` retains
+the original commands and exact source binding. Only three Registry
+production files and the actual pressure regression differ; no generic
+cache, SDK/native backend source, permission, Source, SQL, recovery,
+unknown Context/Prepared debt, bank/floor/SUM or final-ACK rule changes.
+
+These independently exercised Registry files are still private at this
+checkpoint. A separate unchanged complete Core gate evaluates their
+combination with the canonical payment scope. Component and public
+Registry passes do not preclaim that result. The task remains incomplete,
+GC stays deferred and PR #49 stays Draft.
+
+## Combined source reaches inspection but full Core remains failed
+
+E1235 builds published `78ba31d` plus exactly three E1234 Registry
+production files and the private canonical payment-scope file. There is
+no allocator observer, unit fixture or other private source.
+Build passes in 554.74 seconds. The unchanged full Core gate fails after
+53.16 seconds at the next Program inspection assertion, not the earlier
+returned-Run assertion. Actual ELF SHA-256 is
+`b188942beee42537eae482919e58a8dafb54b18d53b592cbc18a6f63255c5557`.
+
+The Run is Completed, but that is not proof that its Program tool or
+input consumption succeeded. The required SDK/content/argument fields
+do not satisfy the original inspection check. Canonical Operation,
+Receipt and attachment evidence must determine the actual tool outcome;
+the SQL/provenance join and expected fields remain unchanged.
+
+All 198 observed execution processes are reaped without surviving,
+unreaped or unknown processes. Physical cleanup remains not DATA ACK.
+`native-canonical1235-complete-core` preserves the exact four-file diff,
+source, actual failure and census. No complete Core, Program, Product,
+release or performance pass is claimed. The combination remains private
+pending diagnosis. The task is incomplete, GC stays deferred and PR #49
+stays Draft.
+
+## Actual canonical receipts explain the failed Program inspection
+
+E1236 replays the exact already-built E1235 ELF only to retain previously
+unavailable actual SQLite evidence. No rebuild, source, assertion,
+fixture path, environment, allowance or SQL change is made. The original
+gate fails at the same inspection check after 57.38 seconds; no repeated
+failure or Completed Run is counted as acceptance.
+
+An event-driven external observer opens SQLite files read-only at
+creation. It performs no live query or content read, takes no SQLite
+lock, creates no hardlink and does not intercept deletion. After the
+actual case returns, it copies six original DB/WAL/SHM inodes already
+unlinked by the original fixture. Inode identity is checked; all observer
+FDs close and its thread returns without errors. All 203 actual execution
+processes are reaped with no unknown, surviving or unreaped processes.
+
+The actual canonical rows show a failed `plugin.axyndra:workspace.grep`
+derived Receipt with `plugin.snapshot_stale`: Pi package verification
+failed or its bytes differ. Its parent `plugin.axyndra:program.run`
+Receipt is failed with `tool_program.subcall_failed`; the Run is
+Completed. An actual input-attached audit exists, but the successful
+completed-attachment provenance join correctly rejects that failed
+Receipt. No inspection metadata is synthesized or join condition relaxed.
+
+`native-canonical1236-retained-store` preserves the retained store, inode
+manifest, exact read-only canonical receipt/audit projections and scope.
+The primary DB passes `quick_check`. Both DB and WAL byte images remain
+identical after offline analysis; the copied primary SHM read marks
+change, explicitly recorded with before/after hashes. Original application
+files are already unlinked and closed. The underlying package-verification
+failure remains to be distinguished from a genuine byte change. This is
+diagnosis, not a Program, Core or release pass. GC stays deferred, the
+task is incomplete and PR #49 stays Draft.
+
+## New-source refusal is the additional package digest worker
+
+E1237 adds only the frozen scalar/constructor observer to the exact E1235
+four-production-file combination. Build passes in 601.78 seconds.
+The original full Core still fails its Program inspection after 121.29
+seconds. Diagnostic ELF SHA-256 is
+`b655d315259bb1b6c94e9e1f19703fafd3d7ead54a9a07f5f8de3df9c238b617`.
+This intrusive observer provides no acceptance or performance credit.
+
+The observer writes scalar events to its existing append-only disk-mapped
+temporary sink, not stderr. The two actual process-start boundaries
+separate old E1233 events from this run; both segments are preserved.
+Every one of 13,988 unique current derived births matches exactly one
+constructor stack in current stderr. No run was repeated to recover the
+sink and no custody-growth threshold is applied.
+
+The first actual refusal is now on Registry root 1:
+
+| Refusal fact | Actual bytes |
+| --- | ---: |
+| Existing shared-bank charged amount | 150,972,536 |
+| Actual additional requested growth | 98,304 |
+| Unchanged shared-bank capacity | 150,994,944 |
+| Overshoot | 75,896 |
+| Root 1 charge and live SUM | 48,792,176 |
+| Other Registry root 221 charge | 17,974,792 |
+| Root 221 live SUM | 6,917,688 |
+| Actual checkpoint root 231 charge | 16,777,216 |
+| Actual input root 232 charge | 67,108,864 |
+| All 32 actual fixed buffers | 319,488 |
+
+All roots plus buffers exactly equal the bank charge; each derived invoice
+plus its original header exactly equals its live SUM. The refusing child
+13039 is the original `PluginRegistryStateMemory` inside `Registry.inspect`
+called by Pi `startThreadHost` for the actual nested Program service path.
+Its paid amount is 4,226,984 bytes before its header. The next required
+98,304 bytes fund the actual additional package digest reader, retained
+file records and Future/control. Original current-byte package inspection
+remains mandatory.
+
+The exact capacity failure is caught by `Registry.inspect` and the Pi
+launch match converts that inspection error to `plugin.snapshot_stale`.
+It is not evidence that package bytes changed. Neither this exact
+reconciliation nor a retired lease permits lowering a high-water mark,
+refunding a live owner or treating the input's logical state as ACK.
+All 203 actual execution processes are known and reaped. The separate
+build census is also clean. `native-refusal1237-complete-core` preserves
+all events, source, constructor coverage, balance, raw stderr and scope.
+No complete Core, Product or release pass is claimed.
+
+## Qualified Native Registry validation promoted to Main
+
+E1238 migrates exactly the E1234 three Registry production files and its
+genuine-pressure/source-mutation regression to the delivery checkout.
+All four raw SHA-256 identities equal their actual Native-qualified
+sources, without a line-ending exception. The private canonical payment
+change and all allocator observers are excluded.
+
+Only non-decoding Native admission uses its already-paid original
+65,536-byte frame and retained snapshot/path/observation buffers.
+Full 4 MiB scratch remains on JSON loading, capture and matching paths.
+Publication-name checking streams entries and still rejects dangling
+pending-marker and transaction-prefix symlinks. Actual inode/watch/byte
+checks, writer fences, recovery errors and immutable admission remain.
+No existing DATA owner is returned or billed less.
+
+Exact-source evidence carries forward the real failing-before pressure
+case, 36 passing eligible Native regressions and standalone public
+Registry pressure/mutation/dangling-record smoke. Natural inventory is
+39; its three known GC cases remain unexecuted and get zero credit.
+Native unit ELF is
+`095707a83c91eb3fbb51d7c4a02fd0193727776247bf707f3eae58e460709772`;
+public smoke ELF is
+`474f336c6563efbd58f54cd103992c284e8f0a4ab011b76bef2ab5d85c1cdfd7`.
+
+The actual delivery checkout additionally passes the original 129 Python
+cases in 18.93 seconds and complete architecture gate in 43.80 seconds.
+`native-validation1238-promoted-main` records those commands/results and
+all four exact source identities. This is not the full Core combination,
+nor whole Product, startup, matching-baseline or release acceptance.
+Core's non-GC gap remains open. GC stays deferred, the task remains
+incomplete and PR #49 stays Draft.
+

@@ -119,9 +119,11 @@ func pluginRequireRegistryPublicationComplete(settingsRoot: String, workspaceRoo
     pluginRequireWorkspaceStorage(workspaceRoot, workspaceRoot + "/.axyndra", directory)
     // Enumerating the entry also detects a dangling link. No pending record is
     // interpreted as authority and no automatic recovery rewrites either file.
-    for (entry in Directory.readFrom(directory) where entry.name == ".registry-publication.pending" ||
-        entry.name.startsWith("lock.jsonl.txn-")) {
-        throw PluginRegistryWriteError("plugin.registry_recovery_required",
-            "workspace registry publication was interrupted; preserve and review the lock/grant pair and backups")
-    }
+    Directory.walk(directory, { entry: FileInfo =>
+        if (entry.name == ".registry-publication.pending" || entry.name.startsWith("lock.jsonl.txn-")) {
+            throw PluginRegistryWriteError("plugin.registry_recovery_required",
+                "workspace registry publication was interrupted; preserve and review the lock/grant pair and backups")
+        }
+        true
+    })
 }

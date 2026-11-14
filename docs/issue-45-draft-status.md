@@ -3252,3 +3252,90 @@ no unknown identity; physical return is not DATA ACK, and no earlier
 numeric refusal is assigned to this new artifact. Host and standalone
 Native Product passes do not satisfy full Core. The task is **not
 complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1231](implementation/plan-execution-reliability.md#current-refusal-reconciles-every-root-and-its-actual-peak)
+reconciles the actual published `78ba31d` refusal with only a temporary
+numeric observer: charged `102,454,672`, actual incremental request
+`50,331,648`, original capacity `150,994,944`, overshoot `1,791,376`.
+Every root, fixed buffer and derived SUM matches the original events,
+with complete current constructor origins and actual peak/closed-child
+separation. These are accounting facts, not a leak, physical-memory
+measurement or refund/ACK authority.
+
+The unchanged complete Core gate still fails. A current-source isolated
+canonical payment-scope candidate is evaluated separately, without
+credit from the failed older E1224 candidate. The task is **not complete**,
+GC stays deferred and PR #49 stays **Draft**.
+
+[E1232](implementation/plan-execution-reliability.md#current-isolated-canonical-message-still-fails-complete-core)
+tests only the same-bank canonical message scope on current `78ba31d`.
+The unchanged full Core gate still fails `input_attachment.capacity`.
+The failed one-file candidate stays private/ineligible, with no numeric
+savings or pass inferred and no Main behavior change. The task is **not
+complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1233](implementation/plan-execution-reliability.md#private-canonical-diagnostic-still-exceeds-the-original-bank)
+reconciles the failed private canonical candidate's actual incremental
+request and remaining 169,208-byte overshoot. Its physical census has one
+unknown process identity, so empty known-survivor lists do not grant
+cleanup credit. The attempt remains failed/private and changes no Main
+behavior.
+
+[E1234](implementation/plan-execution-reliability.md#native-admission-validates-owned-bytes-without-a-decoded-load)
+separately corrects Native pin validation billing and streams publication
+entries without a full directory array. Actual JSON loading keeps its
+full 4 MiB scratch; the real funded native admission, owned snapshot
+buffers, byte/inode/watch/fence and recovery checks remain.
+
+The pressure regression fails before the correction and passes after;
+all 36 eligible Native Registry cases pass. All 39 natural cases remain,
+with three GC-deferred cases not rerun and zero credit. A standalone
+public Native Registry executable verifies valid admission under genuine
+bank pressure, byte-mutation rejection and fail-closed dangling
+publication-marker/transaction entries. The same source also passes
+129 selected Python regressions and complete architecture checks.
+
+These three production files and one pressure regression remain private
+pending integration; their combined full Core evaluation is separate.
+No whole Registry/Core/Product/App, five-second request, release or
+matching-baseline result is inferred. The task is **not complete**, GC
+stays deferred and PR #49 stays **Draft**.
+
+[E1235](implementation/plan-execution-reliability.md#combined-source-reaches-inspection-but-full-core-remains-failed)
+tests the exact four-production-file combination without an observer.
+The unchanged full Core gate reaches the later Program inspection check
+and fails there. A Completed Run is not tool-success or input-consumption
+evidence; the actual canonical Receipt and attachment state must explain
+the missing SDK/content fields. No SQL/provenance condition is relaxed.
+The combination remains private and full Core remains failed. The task
+is **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1236](implementation/plan-execution-reliability.md#actual-canonical-receipts-explain-the-failed-program-inspection)
+retains the original failed ELF's actual canonical SQLite without a
+product/test/SQL change or live database query. Actual receipts distinguish
+the Completed Run from failed Program and derived Workspace tools.
+The derived Pi package check reports `plugin.snapshot_stale`; its underlying
+cause remains unproven. The successful attachment-provenance join correctly
+gives no metadata credit. All original evidence-observer FDs and its thread
+close; DB/WAL identities and the copied SHM read-mark change are recorded.
+No Core or release pass is claimed. The task is **not complete**, GC stays
+deferred and PR #49 stays **Draft**.
+
+[E1237](implementation/plan-execution-reliability.md#new-source-refusal-is-the-additional-package-digest-worker)
+reconciles the actual new-source first refusal: 98,304 additional bytes
+for the package digest worker exceed the unchanged bank by 75,896 bytes.
+All live SUMs, 32 buffers and 13,988 unique constructor identities agree.
+The original Pi launch path masks that capacity error as snapshot-stale.
+No actual Source byte change, leak, owner refund or complete Core pass is
+inferred. The observer is private and provides no performance credit.
+
+[E1238](implementation/plan-execution-reliability.md#qualified-native-registry-validation-promoted-to-main)
+migrates only the independently qualified three Native Registry production
+files and real pressure/mutation regression to Main. All four raw source
+identities match actual Native qualification: 36 eligible cases and the
+public API pressure/mutation/dangling-record smoke pass; three known GC
+cases remain unexecuted with zero credit. Actual Main also passes the
+original 129 Python cases and complete architecture gate. The canonical
+payment experiment and observers are excluded. Whole Core, Product,
+startup, matching-baseline and release remain unaccepted. The task is
+**not complete**, GC stays deferred and PR #49 stays **Draft**.

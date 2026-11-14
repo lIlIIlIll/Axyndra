@@ -219,7 +219,7 @@ public class PluginRegistryExecutionPin {
     private func validateSnapshots(): Unit {
         match (loadingPayment103) {
             case Some(actual) => generation.validateLoad103(actual)
-            case None => generation.validate()
+            case None => generation.validateAdmission103()
         }
     }
     private func releaseSnapshots(): Unit {

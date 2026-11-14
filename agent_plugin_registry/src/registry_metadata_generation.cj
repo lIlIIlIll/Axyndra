@@ -172,12 +172,17 @@ class PluginRegistryMetadataGeneration {
             if (references == 0) { closeLocked() } else { pay() }
         } finally { lock.unlock() }
     }
-    func validate(): Unit {
-        let scratch = openScratch103()
-        try { validateFrame103() } finally { scratch.close() }
-    }
-    private func validateFrame103(): Unit {
-        lock.lock(); try { validateLocked() } finally { lock.unlock() }
+    func validateAdmission103(): Unit {
+        // This path only compares already-funded native snapshot bytes and
+        // streams publication entry names. It neither decodes nor publishes
+        // Registry rows; their full 4 MiB load scratch remains on load paths.
+        // Snapshot/path/observation storage stays on this generation's owner.
+        lock.lock()
+        try {
+            if (fenceCost < 65536) {
+                throw IllegalStateException("native metadata validation has no funded admission frame") }
+            validateLocked()
+        } finally { lock.unlock() }
     }
     func validateLoad103(actual: PluginRegistryMetadataPayment): Unit {
         lock.lock(); try { requireLoad103(actual); validateLocked() } finally { lock.unlock() }
