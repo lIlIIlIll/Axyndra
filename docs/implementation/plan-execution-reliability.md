@@ -4794,3 +4794,417 @@ No source is promoted. The original Core and remaining non-GC gates are
 still open; GC stays deferred, the task is not complete and PR #49 stays
 Draft.
 
+## Production private moves succeed but the peak shifts
+
+E1203 records `private-move-eligibility1203`. The exact E1201 production
+source keeps every guard, with retained scalar allocator observation and
+numeric/function-origin labels at the private Scope/metadata-owner
+eligibility points. Build passes in 539.33 seconds. Original complete
+Core still fails after 48.55 seconds at the same readonly Program claim.
+Diagnostic ELF SHA-256 is
+`e07e000412ec941ad27350cfc0238d771cb491512ef073fa2b66e64747a4283b`.
+
+Both actual production attempts have an open Scope, no unknown export,
+zero consumers and an unreturned producer; **both DATA moves succeed**.
+There are no held-Scope attempts or owner refusals. This evidence does
+not support removing the opaque Context guard; it remains unchanged.
+Successful moves are not DATA returns.
+
+| Refusal field | Actual bytes |
+| --- | ---: |
+| Bank capacity | 150,994,944 |
+| Charged | 103,255,188 |
+| Requested incremental growth | 50,331,648 |
+| Overshoot | 2,591,892 |
+
+| Shared group | SUM at refusal | Charged high-water | Peak leases |
+| --- | ---: | ---: | ---: |
+| 1 | 47,038,024 | 51,358,192 | 449 |
+| 221 | 9,480,752 | 18,104,996 | 161 |
+
+The main high-water moves to a later phase. Its largest unnamed derived
+children include several overlapping megabyte-scale allocations; specific
+producers are not guessed from an invoice size. All peak leases, ancestry
+and closed-since-peak entries
+remain in the full private reconciliation, with `disposition.json`
+recording the observed eligibility counts and the unchanged-guard decision.
+The earlier copied graph's invoice is not substituted for an actual bank
+saving or an earlier refund. No source is promoted; complete Core and the
+other outstanding requirements remain open. GC stays deferred and
+PR #49 stays Draft.
+
+## Derived constructor origins identify canonical configuration holders
+
+E1204 records `private-derived-origins1204`. The E1203 diagnostic adds one
+constructor-origin trace for every actual derived reservation, with stable
+bank/group/child IDs and function stacks. All 17,237 captured origins and
+the complete numeric ledger are retained; there is no size threshold or
+application owner/child reference retained by the observer.
+
+Build passes in 494.34 seconds. Original complete Core still fails capacity
+after 117.13 seconds. Diagnostic ELF SHA-256 is
+`28cf3f64ccb791306e8b2aa24e0aee63cb118a74a54ff7f052ffc8d735890baf`.
+The intrusive all-constructor stacks change timing; this is not a performance
+result or a reason to reuse E1203's different refusal amounts.
+
+| Refusal field | Actual bytes |
+| --- | ---: |
+| Bank capacity | 150,994,944 |
+| Charged | 105,161,720 |
+| Requested incremental growth | 50,331,648 |
+| Overshoot | 4,498,424 |
+
+| Shared group | SUM at refusal | Charged high-water | Peak leases |
+| --- | ---: | ---: | ---: |
+| 1 | 47,038,072 | 53,472,536 | 452 |
+| 221 | 9,480,768 | 17,897,184 | 162 |
+
+Actual constructor stacks now identify two previously unnamed main-group
+holders, both still live at the peak and refusal:
+
+| Child | Parent | Actual invoice bytes | Actual creation path |
+| --- | --- | ---: | --- |
+| 1845 | 1844 | 1,074,464 | `HostCanonicalProjectionConfigurationCache173.loadOwned186` |
+| 1855 | 1854 | 1,074,432 | `HostCanonicalProjectionConfigurationCache173.loadOwned186` |
+
+Both are installed compaction selections created through
+`OwnedPluginPackageDescriptor.deriveCopiedDataPayment`, not fixture request
+copies inferred from similar invoice sizes. Source inspection confirms that
+the same payment funds private parser/FD work and remains attached to the
+published scalar/text selection. The selection stores path, encoded text,
+witness, scalar identities and its payment; it does not store the parser DOM.
+Its later complete-byte validation still requires paid UTF8/native scratch.
+
+`peak-phase-decomposition.json` binds every peak and closed-since-peak lease
+to available actual constructor stacks. Different high-water timing is not
+called a leak, physical memory or an earlier ACK. A private follow-on explores
+separate original-bank work and retained-data lifetimes, keeping the full
+original parser invoice, all FD/symlink/byte checks and unknown-failure debt.
+It has no acceptance credit in this entry. No source is promoted; complete
+Core and other non-GC requirements remain open. GC stays deferred and PR #49
+stays Draft.
+
+## Canonical parser work returns separately but complete Core still fails
+
+E1205 records the private `canonical-config-work1205` candidate. The owned
+configuration cache now registers separate retained DATA and private load
+work in the same original shared group. The complete original one-MiB
+working invoice, names, FD-copy bytes, parser nodes and identity-copy charges
+remain unchanged. A published selection prepays its actual encoded text,
+scalar identities and serialized complete-byte/native validation scratch
+before construction. It does not keep the parser DOM's working lease.
+
+Only the caller outside the complete private load method returns that work.
+The cached DATA payment stays live for its actual views, mounted consumers
+and public copied exports. An active load blocks owner retirement.
+Unknown construction or close keeps both actual indexed leases; exception
+unwinding and a mistaken normal-return notification cannot acknowledge them.
+All path, symlink, size, FD witness and full-byte checks remain in place.
+No Context, provider or retained metadata consumer receives an invented ACK.
+
+Original complete Core rebuild passes in 867.16 seconds and executes for
+54.85 seconds, then still fails the same model-selected readonly Program
+attachment-capacity assertion. ELF SHA-256 is
+`77b2ba25cdc955555eee0d23dd298ad594704f680cf1830678801ce8f6cede16`.
+Evidence is `canonical-config-work1205-complete-core`.
+There is no new measured refusal amount or inferred bank saving.
+
+The Host unit fixture follows the same real private work/retained-data
+construction boundary. Three initial compile attempts fail: an invalid
+default-argument declaration, missing extension import, then missing base
+`JsonNode` class visibility. Their outputs and zero test credit are retained
+in `canonical-config-work1205-host-unit`,
+`canonical-config-work1205-callers-host-unit` and
+`canonical-config-work1205-imports-host-unit`.
+The corrected explicit argument and both imports affect test source only;
+the production source used by complete Core is unchanged.
+
+The dependency-ready Host build then passes in 48.35 seconds.
+`canonical-config-work1205-classes-host-unit` naturally enumerates 276 cases;
+**only four execute and pass**:
+
+- Independent configuration views retain backing until the whole last action
+  and actual last consumer return.
+- An active Catalog consumer refuses early retirement and permits the same
+  original-bank retry after its complete frame returns.
+- Public text exports keep their independently prepaid copies after private
+  configuration return.
+- An actual private constructor exception leaves parser work and retained
+  DATA indexed, even after a normal-return notification is attempted.
+
+Host unittest ELF SHA-256 is
+`4c903339c3070a44556d3892cd43d4e99fcc2b3b614eb4a23966ab6c3e2dfa05`.
+These are configuration DATA/lifetime tests, not Native execution,
+permission, Source or Receipt proofs. No full Host, Core, Product or release
+pass is claimed. No source is promoted; the task is not complete, GC stays
+deferred and PR #49 stays Draft.
+
+## Actual model-definition copy fields pass full Runtime RED/GREEN
+
+E1206 corrects another concrete copied-DATA field-set mismatch.
+`SharedToolSnapshotLoan159.copyModelTools159` independently creates only
+available `ModelToolDefinition` names, descriptions and deep-copied schemas,
+but previously measured the entire source snapshot: unavailable entries,
+execution identities, required capabilities and hook handlers as well.
+Those fields remain owned and fully paid by the original snapshot; the
+independent model-definition copy does not retain them.
+
+The private correction keeps the existing 131,072-byte (128-KiB) header,
+slot/text/schema tariffs, deep structural copy, order, availability and
+numeric subtype. It measures only fields actually copied, using the same
+field set as the existing selected-definition copy. No source payment is
+refunded or request-wide provider invoice subtracted. Actual Prepared,
+provider, storage and unknown-consumer return rules remain unchanged.
+
+Two real fixed-capacity regressions use one original 16-MiB bank, with the
+complete source prepaid before construction, including large uncopied
+execution metadata and an unavailable tool. Pressure leaves room for actual
+small definition copies, not another copy of the complete source.
+This is a fixed-capacity behavior test, not a new product-capacity target.
+
+The initial test build fails because object construction requires
+`JsonObjectEntry`, not a tuple; it receives zero runtime credit.
+The corrected fixture uses the existing empty-object/`put` API.
+`model-definition-copy1206-red-schema-runtime-unit` then executes both
+regressions against unchanged production copying:
+
+| Case | Original production result | Corrected production result |
+| --- | --- | --- |
+| Uncopied metadata/unavailable tool must not block real small independent copies | FAIL: actual aggregate refusal in `addSnapshot159` | PASS: copies survive source retirement and schema/array mutation remains isolated |
+| An actual large available definition must still reject saturation in the same bank | PASS: rejects | PASS: rejects |
+
+The corrected source naturally preserves all 47 names from the executable
+RED build. **All 47 Runtime cases execute and pass**, including the actual
+task-return witnesses, opaque checkpoint retention, full-bank rejection,
+independent consumers and error/frame ACK regressions.
+Dependency-ready rebuild takes 48.47 seconds, not a cold-build performance
+result. Evidence is `model-definition-copy1206-green-runtime-unit`.
+Runtime unittest ELF SHA-256 is
+`27e9a0ffd0476c6303c01b07152a9b699a42751f5082046216ba3d7ff0f05369`.
+The RED ELF is
+`c6c0e0424d74f697f4c1424f9eeb701ea74a533b7eed70c480e1326c3d552f52`.
+
+This is full Runtime-unit credit for the exact private twenty-six-file
+candidate, not complete Core, Product or release acceptance. The original
+complete Core remains a separate required gate; no previous-source
+capacity result or predicted bank saving is substituted. No source is
+promoted. The task remains not complete, GC stays deferred and PR #49
+stays Draft.
+
+## Portable Codex case has a new directly evidenced GC crash
+
+E1207 captures the still-unclassified
+`PluginRuntimeContractTests.importedPortableCodexSkillsUseInstalledContextProvider`
+under the original qualified CJPM invocation, all seventeen original Native
+fixtures and unchanged per-case/process bounds. The accepted production
+behavior is still `345c4c68`; Product ELF SHA-256 is
+`96f0671aa39b764bb963edd6dd1e7f21d859ec48050f72a0e2282b882a6d13b8`.
+This is not the private E1206 candidate's Product evidence.
+
+A parent-launch debugger observes fatal execution; it does not attach or
+sample running tasks. The first launch fails before the case because the
+pinned stdx loader environment is missing. The next direct-executable launch
+fails SDK internal option parsing. Neither receives case credit.
+The corrected launch keeps the original CJPM argv and reaches the actual
+Product worker, which crashes with SIGSEGV. The debugger's exit callbacks
+then fail before a qualified test summary; that diagnostic wrapper is not
+reported as a passing or complete test runner.
+
+The independent system crash receipt binds the actual worker signal,
+executable and this exact single-case filter. Its saved core is
+797,110,272 bytes, SHA-256
+`bfb9a4eabc08c5c0e3fb994f781185166ec3deddc040ce56af70544a31c3a940`.
+Offline symbolization of the same bytes and original executable name yields:
+
+`CheckAndPush → GCTib::ForEachBitmapWord → BaseObject::ForEachRefField →
+Mutator::GcPhaseEnum → TracingCollector::VisitStackRoots →
+WCollector::TraceHeap → CollectorResources::GCMainThreadEntry`.
+
+Another thread is in `InstalledSkillsMigrationHost` Product opening and
+default-package inspection. This does not establish that portable import
+itself ran. The initial saved `.elf` filename produces a GDB executable-name
+warning; loading the hash-identical original executable name removes it.
+Both outputs are retained.
+
+Evidence is `portable-codex-fatal1207-cjpm` and
+`portable-codex-fatal1207-core-original-name-review`, including the independent
+receipt, full symbolized threads and reviewed classification. Raw cores and
+machine metadata remain private; no payload is published.
+**Only this current sample** joins the user-approved GC deferral, with zero
+pass credit. The earlier incomplete SIGABRT is not retroactively
+reclassified; debugger timing and an observed GC stack do not prove a root
+cause or a fix. No known GC scenario is rerun after this classification.
+Complete Product and the PR remain not complete, and PR #49 stays Draft.
+
+## Corrected copied fields still leave a measured capacity refusal
+
+E1208 first records the observer-free E1206 candidate's original complete
+Core gate. Rebuild passes in 444.90 seconds; execution still fails after
+48.88 seconds at the same model-selected readonly Program attachment claim.
+ELF SHA-256 is
+`9895e48b70add072494f3713e9a5bedbfe313f1ad538aa9ac572ebc7d4c3aff8`.
+Evidence is `model-definition-copy1206-complete-core`.
+Full Runtime-unit success does not override this failed original gate.
+
+`definition-refusal1208` retains the same production source with complete
+scalar allocator events and labels at actual payer creation sites.
+Derived births remain unfiltered numeric events; E1204's intrusive
+all-constructor stacks are not used. Build passes in 649.21 seconds;
+original Core still fails after 51.03 seconds. Diagnostic ELF SHA-256 is
+`95291008cf07db487c15058120fb7c7cfcb176066eb444b8158c161859edda24`.
+
+| Refusal field | Actual bytes |
+| --- | ---: |
+| Bank capacity | 150,994,944 |
+| Charged | 100,817,884 |
+| Requested incremental growth | 50,331,648 |
+| Overshoot | 154,588 |
+
+| Shared group | SUM at refusal | Charged high-water | Peak leases |
+| --- | ---: | ---: | ---: |
+| 1 | 45,057,152 | 49,132,872 | 449 |
+| 221 | 9,480,768 | 17,893,012 | 161 |
+
+The two main canonical configuration DATA holders retain actual invoices
+of 83,984 and 83,920 bytes. Their separate private working children retain
+the complete original 1,074,464 and 1,074,432-byte invoices through parsing,
+then emit actual close events before the main high-water. The DATA holders
+remain live; no view or opaque Context is declared consumed.
+`canonical-work-disposition.json` binds these exact children and close
+positions to the raw ledger. Its initial private opcode lookup was corrected
+against actual `C` close events before this record was written.
+
+The peak's actual independent model-definition copy is 891,856 bytes.
+The full source snapshots remain separately paid, including the two
+historical opaque-Context owners. They are not retired from zero loans,
+callback return or terminal state. The same peak also retains five
+622,336-byte mount-descriptor copy holders, identified by actual payer
+labels rather than invoice-size inference. Their private byte/String/DOM
+scratch is cleared after decoding, while the original combined invoice
+stays attached to retained typed descriptors.
+
+`peak-phase-decomposition.json` retains every peak and closed-since-peak
+lease, role and ancestry. The small remaining refusal is still a failure,
+not a waiver, a promised saving or permission to lower the fixed attachment
+invoice. A separate private mount-work granularity correction remains
+unaccepted in this entry. No source is promoted; remaining non-GC gates
+are open, the task is not complete, GC stays deferred and PR #49 stays Draft.
+
+## Mount parser work separation reaches a later Core inspection failure
+
+E1209 records the private twenty-eight-file
+`mount-copy-work1209-original-tariff` candidate. Mount descriptor copying
+registers retained typed DATA and a separate private construction lease in
+the same original bank. `hostRegistryCopyInvoice81` still pays the complete
+original byte/String/parser/DTO construction before copying. The retained
+owner prepays all typed fields and seven collections, nested strings,
+scalars/enums and the dependency's two bounded semantic-version values
+before the complete decode/measurement scratch can return.
+
+Retained pricing keeps the original mount-copy 16x text rate, 2,048-byte
+structural rate and 65,536-byte header. A preliminary private version uses
+the separate Catalog's 64x text rate and passes thirteen ownership tests,
+but is not retained: it changes the mount pricing contract. The original
+Catalog helper is restored exactly and the mount path uses its original
+tariff. No Core or product-capacity credit is taken from that preliminary
+unit-only artifact.
+
+Only the caller outside both complete private helpers clears their
+byte/String/DOM scratch and closes working custody. Actual legacy raw DTOs,
+Catalog consumers and independent errors retain their DATA. An active copy
+blocks public borrow and early retirement. Unknown decode/close keeps both
+actual leases and partial fields; neither callback return, process exit nor
+a mistaken normal-return notification acknowledges them.
+
+`mount-copy-work1209-original-tariff-host-unit` naturally enumerates 277
+cases: the prior 276 names plus one actual unknown-parser-debt regression.
+**All thirteen selected adjacent Host cases execute and pass**, including
+the existing repeated Registry copies, independent Catalog backing,
+construction staging, generation/error shares, HTTP and canonical views.
+Rebuild takes 206.43 seconds. Host unittest ELF SHA-256 is
+`b0e7124abb7489358a013e5663230d0aeaaa44c2cb32e935ce60303427185ff8`.
+This is not a full Host-module pass.
+
+The current lower Runtime also executes all **75 natural Tool cases**
+successfully, preserving the 72 seed names and the three actual private
+move/consumer/export cases. Build takes 64.09 seconds.
+Evidence is `mount-copy-work1209-original-tariff-tool-unit`; Tool unittest
+ELF SHA-256 is
+`28a84af167e64cc6dfaebb3b17aa9a4efc5ead48533ec0d2d47ed3fc28301c50`.
+The E1206 Runtime sources and their lower dependencies are unchanged by
+this Host-only follow-on; its 47-case evidence remains applicable there.
+
+Original full Core rebuild passes in 587.08 seconds and executes for
+55.51 seconds. It passes the formerly failing capacity/Run-completion
+assertion, then **fails the next Run-inspection assertion** requiring the
+Program SDK, artifact identity and canonical-arguments digest.
+ELF SHA-256 is
+`65501facceb806d25c08efc8a1fef9b5ca3bc5a5dd561735a5f33eb648756782`.
+Evidence is `mount-copy-work1209-original-tariff-complete-core`.
+Run completion alone does not prove a successful Program tool Receipt or
+independent worker execution; the later inspection/result failure is not
+waived or rewritten as success.
+
+No new refusal amount, bank saving, whole Core/Product/release pass or
+source promotion is inferred. The actual inspection output is the next
+non-GC investigation. The task remains not complete, GC stays deferred
+and PR #49 stays Draft.
+
+## Actual failed Receipts explain the absent successful Program evidence
+
+E1210 adds a fixture-only inspection diagnostic to the unchanged E1209
+production candidate. Original full Core builds in 564.95 seconds and
+fails in 55.47 seconds at the same metadata assertion. Inspection itself
+returns `Result.Ok` with three operations: `host.process.readview`,
+`plugin.axyndra:workspace.grep` and `plugin.axyndra:program.run`.
+All have a 64-byte canonical-arguments digest and empty SDK/artifact
+summaries. That first observation does not establish a projection defect
+or successful execution. Evidence is `inspection-diagnostic1210`; its ELF
+SHA-256 is
+`99c44d1935d085b8ea2d7f8602bd66c245eba7d3de4c4824051ae1e761116ade`.
+
+E1211 keeps the original assertions, adds actual state/Receipt outcomes to
+that bounded diagnostic, and preserves only this private filesystem fixture
+after normal product/process cleanup. It does not change runtime cleanup,
+watchers, SQL, Source, permissions, DATA ACKs, capacity, SDK or the original
+900-second build/execution limits. Original full Core builds in 416.78
+seconds and fails in 55.78 seconds. Its 209 observed owned processes return
+with no surviving, unknown or unreaped identities. Physical return is not
+DATA consumption. ELF SHA-256 is
+`1f74d36f6ce4bb30c070b7facbfa95dc167858bd9c3050d87f1f84bea088f0b2`.
+
+The actual canonical SQLite, read offline without mutation after watcher
+closure, records this failure chain:
+
+| Actual operation | State / Receipt | Canonical result |
+| --- | --- | --- |
+| `host.process.readview` | `failed` / `failed` | `read_view.output_capacity`: shared logical JSON output capacity is exhausted |
+| `plugin.axyndra:workspace.grep` | `failed` / `failed` | `workspace.protocol`: the worker returned invalid JSON |
+| `plugin.axyndra:program.run` | `committed` / `failed` | Partial result, `tool_program.subcall_failed`: sub-operation returned an error |
+
+The failed Program result contains the actual native SDK and artifact
+metadata, but its Receipt is not completed. The strict completed-input
+attachment query requires a completed Receipt and therefore does not admit
+this failed root as successful historical evidence. No SDK/hash fallback,
+success predicate, canonical join or acceptance assertion is relaxed.
+The actionable failure is the actual read-view output reservation, not a
+missing SDK field or proof of a successful worker. Its refusal amount and
+retaining owners still need their own decision-time observation; the older
+input-attachment refusal numbers do not apply to it.
+
+Private evidence is `inspection-diagnostic1211`, including
+`canonical-receipt-review.json`, exact source/ELF binding, unchanged original
+failure and physical watcher receipts. Both diagnostic variants receive
+zero production acceptance credit and are not promoted.
+
+Separately, the observer-free original-tariff E1209 source set passes the
+same selected **129 Python regressions** and the **complete architecture
+entrypoint**. That entrypoint also passes its fifteen plugin-boundary tests,
+documentation, dependency pins and package graph checks. Only the two
+generated dependency locks are restored to their original bytes before
+these checks; no dependency changes are retained. Evidence is
+`mount-copy-work1209-original-tariff-static`. These static passes do not
+waive the failed Core, Product, startup, baseline or release requirements.
+No behavioral source is promoted; the task remains not complete, GC stays
+deferred and PR #49 stays Draft.
+

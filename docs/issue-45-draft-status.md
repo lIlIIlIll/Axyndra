@@ -2951,3 +2951,92 @@ compilation failures remain recorded with zero runtime credit.
 Source remains unpromoted; the task is **not complete**, GC stays deferred
 and PR #49 stays **Draft**.
 
+[E1203](implementation/plan-execution-reliability.md#production-private-moves-succeed-but-the-peak-shifts)
+observes two actual successful production DATA moves under unchanged
+guards. The new remaining refusal is independently reconciled; the main
+peak has shifted later, so earlier graph removal does not establish full
+Core success or an equal bank saving. No held-Scope attempt occurs;
+the opaque Context guard is not removed. Source remains unpromoted and
+the task is **not complete**. GC stays deferred and PR #49 stays **Draft**.
+
+[E1204](implementation/plan-execution-reliability.md#derived-constructor-origins-identify-canonical-configuration-holders)
+retains every actual derived-reservation constructor stack and reconciles
+that diagnostic run's own refusal. Two still-live megabyte-scale holders
+are now bound to installed canonical configuration selections, not guessed
+from invoice size. Parser/FD work and retained text share their existing
+long-lived payment. Separating actual work/data lifetimes is a private
+follow-on, not a passed capacity gate. Intrusive stack tracing is not a
+performance result; no source is promoted. The task remains **not complete**,
+GC stays deferred and PR #49 stays **Draft**.
+
+[E1205](implementation/plan-execution-reliability.md#canonical-parser-work-returns-separately-but-complete-core-still-fails)
+separates actual private parser/FD work from cached configuration DATA in
+the original bank, preserving the full original working invoice and every
+file/consumer/unknown-debt guard. Four real original-bank Host DATA cases
+pass after test-only compile corrections; 276 enumerated cases are not a
+full Host pass. The unchanged production candidate's complete Core still
+fails the readonly Program capacity assertion. No measured bank saving,
+new ACK, source promotion or complete-PR credit is inferred. The task
+remains **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1206](implementation/plan-execution-reliability.md#actual-model-definition-copy-fields-pass-full-runtime-redgreen)
+matches independent model-definition billing to actual copied fields,
+while the complete source snapshot remains paid. The real small-copy
+capacity regression fails on original production and passes after the fix;
+genuine large-copy saturation rejects on both. All 47 natural Runtime
+cases execute and pass on the private twenty-six-file candidate.
+Header, full-schema tariffs, source authority and actual consumer/unknown
+ACK rules are unchanged. This is not full Core, Product or release credit;
+no source is promoted. The task remains **not complete**, GC stays deferred
+and PR #49 stays **Draft**.
+
+[E1207](implementation/plan-execution-reliability.md#portable-codex-case-has-a-new-directly-evidenced-gc-crash)
+obtains an actual system core for the current accepted-source portable Codex
+case invocation. The signal, exact ELF/filter and full
+`CheckAndPush → GCTib::ForEachBitmapWord → GcPhaseEnum → VisitStackRoots`
+chain provide direct GC evidence for this new sample. It joins the approved
+GC deferral with **zero pass credit**; the older incomplete SIGABRT remains
+unclassified. Debugger callback failures, intrusive timing and the distinct
+private candidate receive no acceptance credit. The private core/receipt and
+reviewed classification are retained; no GC fix or full Product pass is
+claimed. The task remains **not complete** and PR #49 stays **Draft**.
+
+[E1208](implementation/plan-execution-reliability.md#corrected-copied-fields-still-leave-a-measured-capacity-refusal)
+records the E1206 candidate's failed original complete Core gate and its
+own independently reconciled refusal: 154,588 bytes beyond the unchanged
+bank cap. Actual full parser-work close events coexist with still-paid
+canonical DATA; complete source snapshots and opaque Context debt remain
+funded. Actual payer labels identify retained mount-descriptor combined
+work/DATA invoices for the next private investigation. Neither a small
+overshoot nor all Runtime-unit passes waives the failed gate. No source is
+promoted; the task remains **not complete**, GC stays deferred and PR #49
+stays **Draft**.
+
+[E1209](implementation/plan-execution-reliability.md#mount-parser-work-separation-reaches-a-later-core-inspection-failure)
+separates actual mount-copy scratch from still-paid typed/legacy DATA,
+keeping the original complete working invoice and original mount tariff.
+Thirteen adjacent Host and all 75 natural Tool cases pass on that exact
+candidate; unchanged lower Runtime evidence remains scoped to its 47 cases.
+Original complete Core passes its former capacity/Run-completion assertion,
+then fails the next structured Run-inspection requirement. Run completion
+does not establish successful worker execution or a Tool Receipt. That
+later failure remains actionable; no assertion is deleted, source is not
+promoted and no whole-gate credit is claimed. The task remains
+**not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+
+[E1210–E1211](implementation/plan-execution-reliability.md#actual-failed-receipts-explain-the-absent-successful-program-evidence)
+read actual operation states and canonical Receipts after the unchanged
+Core assertion fails. The read-view child rejects `read_view.output_capacity`,
+Workspace reports a protocol error and the Program returns a partial
+subcall failure. All three Receipts are failed: `Run Completed` is not
+successful tool execution. The completed-attachment historical query
+correctly does not admit that root as successful evidence; no metadata
+fallback, SQL/Source rule or assertion is relaxed. All observed processes
+are reaped, without treating physical exit as DATA ACK. The new refusal
+needs its own numeric attribution, not the older attachment refusal amount.
+The observer-free E1209 candidate separately passes the original selected
+129 Python regressions and complete architecture gate. Neither static
+passes nor fixture-only diagnostics establish full Core/Product/release
+acceptance. No behavioral source is promoted; the task remains
+**not complete**, GC stays deferred and PR #49 stays **Draft**.
