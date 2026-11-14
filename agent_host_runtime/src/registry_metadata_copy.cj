@@ -533,6 +533,8 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
     private var tools159: ?HostRegistryCatalogToolData159 = None
     private var temporary159: ?HostRegistryCatalogTemporary159 = Option<HostRegistryCatalogTemporary159>.None
     private var schemaConstructionPeak159: Int64 = 0
+    private var schemaConstructionWork159: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var schemaConstructionUnknown159 = false
     var nextRetained159: ?HostRegistryCatalogIdentity159 = None
     prop namespace: String { get() { namespaceValue } }
     prop contentDigest: String { get() { contentDigestValue } }
@@ -677,7 +679,7 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
         paymentLock159.lock()
         try {
             let next = hostRegistryAdd81(retainedInvoice159, bytes)
-            payment.getOrThrow().ensureRetainedPeak(hostRegistryAdd81(next, schemaConstructionPeak159))
+            payment.getOrThrow().ensureRetainedPeak(next)
             retainedInvoice159 = next
         } finally { paymentLock159.unlock() }
     }
@@ -794,10 +796,36 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
     func beginCatalogConstruction159(): Unit {
         paymentLock159.lock()
         try {
-            if (constructionReturned159 || constructionFrames159 != 0 || payment.isNone()) {
+            if (constructionReturned159 || constructionFrames159 != 0 || payment.isNone() ||
+                schemaConstructionWork159.isSome() || schemaConstructionUnknown159) {
                 throw LogicalJsonPayloadError("catalog construction data has no unused borrow")
             }
             constructionFrames159 = 1
+        } finally { paymentLock159.unlock() }
+    }
+    func retainCatalogConstructionFailure159(): Unit {
+        paymentLock159.lock()
+        try {
+            schemaConstructionUnknown159 = true
+            catalogAliases159 = true; otherAliases204 = true
+        } finally { paymentLock159.unlock() }
+    }
+    private func returnedPrivateSchemaConstruction159(): Unit {
+        paymentLock159.lock()
+        try {
+            if (schemaConstructionUnknown159 || schemaConstructionWork159.isNone()) { return }
+            if (constructionReturned159 || constructionFrames159 != 1) {
+                throw IllegalStateException("private schema construction frame has not returned")
+            }
+            try {
+                schemaConstructionWork159.getOrThrow().close()
+                schemaConstructionWork159 = None<LogicalJsonOwnerReservation>
+                schemaConstructionPeak159 = 0
+            } catch (error: Exception) {
+                schemaConstructionUnknown159 = true
+                catalogAliases159 = true; otherAliases204 = true
+                throw error
+            }
         } finally { paymentLock159.unlock() }
     }
     func retainCatalogAliases159(): Unit {
@@ -843,6 +871,7 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
     }
     func returnedCatalogConstruction159(): Unit {
         // Called only after the actual Host construction helper returned.
+        returnedPrivateSchemaConstruction159()
         producerReturned159.returned159.store(true)
         let retired = clearReturnedConstruction159()
         retireReturnedTemporaries159()
@@ -889,13 +918,19 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
             // Parent owns the linked carrier metadata; the independent child
             // owns this declaration's schema/text/callback graph only.
             let metadata = hostRegistryAdd81(retainedInvoice159, 4096)
-            // Schema scanners/decoders run serially in this exact mount
-            // construction frame. Their DATA does not escape that helper;
-            // published schemas have the separate tool child paid below.
-            // Keep the largest working extent in the original mount owner,
-            // not a child that can be stranded by a still-live old backing.
+            // The original full recursive framing/digest workspace remains
+            // paid through this actual private construction. Published flat
+            // schemas and captured declarations have their own DATA child.
             let schemaPeak = max(schemaConstructionPeak159, hostRegistryAdd81(schemaInvoice[1], 4096))
-            payment.getOrThrow().ensureRetainedPeak(hostRegistryAdd81(metadata, schemaPeak))
+            let work = match (schemaConstructionWork159) {
+                case Some(value) => value
+                case None =>
+                    let value = payment.getOrThrow().deriveRetainedLease()
+                    schemaConstructionWork159 = Some(value)
+                    value
+            }
+            work.ensureRetainedPeak(max(8192, schemaPeak))
+            payment.getOrThrow().ensureRetainedPeak(metadata)
             retainedInvoice159 = metadata; schemaConstructionPeak159 = schemaPeak
             let child = payment.getOrThrow().deriveRetainedLease()
             try { child.ensureRetainedPeak(invoice) }
@@ -904,6 +939,10 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
             value.next159 = tools159
             tools159 = Some(value)
             value
+        } catch (error: Exception) {
+            schemaConstructionUnknown159 = true
+            catalogAliases159 = true; otherAliases204 = true
+            throw error
         } finally { paymentLock159.unlock() }
     }
     private func takeUnpublishedTool159(): ?HostRegistryCatalogToolData159 {

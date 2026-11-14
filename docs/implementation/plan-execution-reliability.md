@@ -5328,3 +5328,218 @@ This isolated fix is not full Core/Product, current App, matching baseline,
 startup or release acceptance. Those final-source gates remain open, GC
 stays deferred and PR #49 stays Draft.
 
+## Actual Prepared exports remain unknown and are not refunded
+
+E1215 adds stable-ID labels to actual Prepared metadata payment creation,
+consumer acquire/return, producer return and first unknown transitions.
+Only constructor/first-export function stacks are captured. No application
+owner, child, callback or argument is retained by the observer, and all
+monetary events remain unfiltered. Private candidate behavior is unchanged.
+
+Build passes in 465.17 seconds; original complete Core still fails after
+56.46 seconds at the same structured inspection assertion. Its own initial
+read-view acquisition refuses 16,777,216 bytes against 146,776,360 bytes
+charged and the unchanged 150,994,944-byte cap, an overshoot of 12,558,632.
+The main ledger's live SUM is 43,051,080 while its charged high-water is
+45,785,384; different observation phases are not substituted for each other.
+
+The actual live Prepared payments are now identified, not guessed from
+invoice size:
+
+| First unknown-export caller | Actual live owners | Invoiced bytes |
+| --- | ---: | ---: |
+| `HostJavaScriptPluginToolExecutor.executeLegacyActualFrame204` | 25 | 6,957,872 |
+| `HostJavaScriptPluginServiceBroker.validateChildPlan` | 30 | 8,320,312 |
+
+All 55 remain unknown; 52 also have actual producer-return markers.
+Neither those markers nor a returned individual consumer establishes the
+last opaque consumer's return. These payments stay funded. A first export
+stack is not a last-consumer witness: catalog effect/capability resolution
+and network-policy callbacks can retain the exact borrowed call graph.
+The withdrawn E1108 same-Prepared metadata/output-ACK carrier is inspected
+only to avoid repeating it; none of its nine sources is reapplied.
+
+`prepared-owner1215` preserves raw observations, all refusal-time live
+leases, constructor/first-export stacks and the no-refund/no-reapply
+`disposition.json`. Remaining non-Prepared DATA need current constructor
+identity before another change is selected. No diagnostic source is
+promoted, complete Core remains failed, GC stays deferred and PR #49 stays
+Draft.
+
+## Current constructor stacks identify remaining non-Prepared DATA families
+
+E1216 captures every actual derived-reservation constructor stack at the
+new output-owner refusal, rather than applying E1204's older phase or
+inferring a producer from an amount. All **17,890 actual births** have
+matching constructor stacks; all 269,532 monetary/custody observations
+reconcile without a threshold. The complete raw log is retained privately.
+
+Build passes in 542.42 seconds. Original complete Core still fails after
+131.22 seconds at the same successful Program evidence assertion.
+ELF SHA-256 is
+`9462eb0e04ead4363c61123f3fd130b3dd09cf1ce9af96d00ef1c433ffefe370`.
+Intrusive all-constructor tracing is not performance evidence. Its own
+refusal records:
+
+| Capacity | Charged | Actual new output-owner request | Overshoot |
+| ---: | ---: | ---: | ---: |
+| 150,994,944 | 146,776,304 | 16,777,216 | 12,558,576 |
+
+Selected actual non-Prepared producer families in the primary ledger are:
+
+| Actual constructor path | Live allocations | Invoiced bytes |
+| --- | ---: | ---: |
+| `HostRegistryCatalogIdentity159.reserveTool159` | 30 | 5,825,088 |
+| `ProductRuntime.requestUnscopedPromptBuildResult204` | 13 | 5,262,080 |
+| `ToolCatalog.produceLockedToolSetSnapshot159` | 3 | 3,408,912 |
+| `hostRegistryCatalogIdentity159` | 9 | 2,893,504 |
+
+The complete family map and every live/peak/closed-since-peak lease retain
+their actual constructor stacks. These totals include real retained DATA;
+they are not claimed savings or permission to retire an opaque consumer.
+
+Source inspection confirms one specific lifetime mismatch:
+`HostRegistryCatalogIdentity159.reserveTool159` adds its original serial,
+depth-weighted schema construction peak to the long-lived identity payment,
+while a separate original child already pays published flat schemas and
+declaration DATA. A distinct private follow-on tests separating only that
+construction work, preserving the full original work invoice, tariff,
+published aliases and unknown failures. No working amount is lowered and no
+metadata/output-ACK or attachment-work candidate is reapplied.
+`remaining-derived-origins1216` preserves all evidence and the scoped
+decision. The follow-on is not accepted in this entry; no source is promoted,
+Core remains failed, GC stays deferred and PR #49 stays Draft.
+
+## Catalog private schema work has an actual frame-return boundary
+
+E1217 tests a separate schema-construction work child in the private
+observer-free candidate based on published `8944a2e`. The original
+depth-weighted work invoice is funded before construction. The complete
+private Catalog helper must return before that child closes. Published
+schema/declaration DATA keep their original independent payments and
+tariffs. Any unknown construction or funding failure keeps both work and
+DATA charged. Empty Catalogs do not allocate a work child.
+
+| Actual Native Host run | Result |
+| --- | --- |
+| Original schema billing with the two new cases | Positive return case fails; unknown-failure control passes |
+| First candidate, 26 selected cases | 25 pass; concurrent-backing case fails two exact private-allocation assertions |
+| Candidate with semantic backing assertions | All 26 pass; all 279 cases naturally enumerate |
+
+The first GREEN attempt remains recorded as failed. Its two allocation
+assertions assumed exactly three retired children. The distinct work child
+correctly adds another 56,384-byte return. The revised test removes those
+incidental amount/count assumptions instead of pinning a new total.
+It requires actual Catalog retirement to fail while the first producer is
+blocked and after its Future returns without the producer-return witness.
+It preserves live definitions, no execution, idempotent collection and the
+original complete Registry-frame SUM/count/native-bank restoration.
+
+The final selected run builds in 40.97 seconds. Its ELF SHA-256 is
+`be4e668bd0c58d3834fc0f1a1a47adc5922fc929145165f89a6b4844e9ceb065`.
+`catalog-schema-work1217-red-host-unit`,
+`catalog-schema-work1217-green-host-unit` and
+`catalog-schema-work1217-return-contract-host-unit` retain source bindings,
+natural inventories, qualified results and actual process-return evidence.
+This is a retained private candidate, not independent Main or full Host
+acceptance. The original complete Core gate has no result for this source
+at this checkpoint. No source is promoted, no earlier failed Core result is
+reclassified, GC stays deferred and PR #49 stays Draft.
+
+## Current schema-work candidate still fails successful Program evidence
+
+E1218 rebuilds the complete original Native Core contract from the E1217
+observer-free source. Build passes in 461.86 seconds. Execution fails after
+48.07 seconds at the unchanged successful Program inspection assertion.
+Its ELF SHA-256 is
+`b25aa13bbbff09fd39e4a7fad8bccbdbdfd09d2f99abc39666d05ef7c26fb16b`.
+All 219 observed execution processes return without an unknown identity or
+unreaped descendant. That result does not acknowledge DATA consumption.
+
+A separate scalar diagnostic captures this source's own initial output
+acquisition, without reusing an earlier refusal amount:
+
+| Capacity | Charged | Actual new output-owner request | Overshoot |
+| ---: | ---: | ---: | ---: |
+| 150,994,944 | 144,988,160 | 16,777,216 | 10,770,432 |
+
+The requested raw output limit remains 131,072 bytes. The actual refusal
+reason is aggregate capacity. Primary-ledger SUM is 41,262,904 bytes while
+its charged high-water is 43,997,184. Secondary-ledger SUM is 6,917,656 while
+its original floor remains 16,777,216. These are current observations, not
+permission to refund an unknown consumer or a cross-run savings claim.
+
+The actual canonical inspection reports failed Receipts for read-view,
+Workspace and Program, including the Program whose Operation is committed.
+The successful Program evidence join remains unchanged.
+Build passes in 512.25 seconds and diagnostic execution fails after
+50.46 seconds. Its ELF SHA-256 is
+`3ccca8e851aa46bb72ad37a404a0f87b50cab153d4025180c2f7306bee1d37ea`.
+All 211 observed execution processes are reaped.
+
+`catalog-schema-work1217-return-contract-complete-core` retains the original
+failure. `catalog-schema-refusal1218` retains reconciled monetary events,
+actual refusal-time leases and `disposition.json`. The diagnostic driver
+did not enable the optional database-retention variable, so original
+fixture cleanup ran. No new retained SQLite or raw-SQL result is claimed.
+The printed canonical inspection states are current; the older retained
+E1211 database remains historical evidence. No source is promoted, Core
+remains failed, GC stays deferred and PR #49 stays Draft.
+
+## Independent Catalog schema-work correction has real Product proof
+
+E1219 isolates the schema-work change onto published `8944a2e` without the
+other 26 private functional candidates or any observer. Only
+`registry_metadata_copy.cj`, `plugin_tool_mount.cj`, the revised existing
+concurrent-backing test and the two-case schema regression file change.
+Main's 275 Host cases plus the two new cases naturally enumerate as 277.
+The two private unknown-load/mount tests are absent because they were never
+Main tests, not because a current Main case was removed.
+
+Original production fails the positive same-bank reservation case while
+the unknown-failure retention control passes. RED build takes 531.17 seconds.
+Its ELF SHA-256 is
+`872639de63f7291cce437578868c63326650a3cbe4410cd10f78f70f240f3d9e`.
+With only the four-file correction, all 24 selected actual Native Host
+cases pass. GREEN build takes 198.22 seconds. Its ELF SHA-256 is
+`9afe8deb89873fbc613cf3e0c6dc73860cdcca39d0e63358ea12ce433ef897f3`.
+The selected run covers real Registry and SQLite consumers, independent
+shares, physical Future return without DATA acknowledgement, early Catalog
+retirement refusal, published schemas and unknown failures.
+
+A separate executable imports public Product APIs. It uses actual Registry
+import, package verification, native process mounting and canonical direct
+tool invocation. One real worker returns `calls=1` and then `calls=2`;
+disabling the plugin makes the subsequent invocation fail. It runs no
+model request. The executable SHA-256 is
+`043f095ca9032fc09890d45219d89c1f4aac157de54d1ef740d53dfdccbf302f`.
+Dependency-ready build takes 2.74 seconds and actual execution takes
+0.63 seconds, with all five observed processes reaped. These times are not
+cold-build or performance evidence.
+
+`catalog-schema-minimal1219-red-host-unit`,
+`catalog-schema-minimal1219-green-host-unit` and
+`catalog-schema-minimal1219-native-smoke-linked` retain exact sources,
+natural inventories, commands, artifact hashes and process receipts.
+Three earlier throwaway-caller compile/link failures remain separately
+recorded. They ran no Product scenario and have no runtime pass credit.
+The corrected caller uses explicit public imports and the existing
+`-lsqlite3` link contract, without a production API or dependency change.
+
+The identical Main behavior sources pass the original 129 selected Python
+regressions in 14.17 seconds and the complete architecture entrypoint in
+29.23 seconds, including documentation and dependency pins.
+`catalog-schema-minimal1219-main-static` records both commands and results.
+The task-only public caller scaffold is removed after its exact source,
+input fixture and actual ELF have been retained as private evidence.
+
+Only this independently verified correction is migrated to Main. The full
+original work invoice is paid through the complete private constructor;
+published DATA retain their original tariffs and final-owner guards.
+The shared bank, floor, input working invoice, SUM/high-water accounting
+and all unknown Prepared/Context debt remain unchanged. Other candidates
+stay private. Full Core, full Host, Product, App, release, the five-second
+request and matching baseline still have no current-Main acceptance from
+these selected results. The task is not complete, GC stays deferred and
+PR #49 stays Draft.
+

@@ -38,7 +38,7 @@ private func hostMountCatalogFrame159(record: ProductPluginRecord,
         return hostPluginResourceError("plugin.registry_metadata_capacity", "catalog identity cannot fit the original shared capacity") }
     identity.beginCatalogConstruction159()
     let result = try { hostMountCatalogIdentityFrame159(record, hostManager, catalog, serviceRuntime, owner, descriptor, identity) }
-    catch (error: Exception) { identity.retainCatalogAliases159(); throw error }
+    catch (error: Exception) { identity.retainCatalogConstructionFailure159(); throw error }
     finally { identity.returnedCatalogConstruction159() }
     result
 }

@@ -3065,3 +3065,63 @@ paid. The other Core/Host/Registry/RunScope candidates and every observer
 remain unpromoted. No new App/Product/release or matching baseline result
 is inferred for this changed Main source. The task remains **not complete**,
 GC stays deferred and PR #49 stays **Draft**.
+
+[E1215](implementation/plan-execution-reliability.md#actual-prepared-exports-remain-unknown-and-are-not-refunded)
+identifies all 55 actual live Prepared metadata payers and their two first
+export sites. All remain unknown despite 52 producer-return markers;
+15,278,184 invoiced bytes are not refunded from terminal state, zero loans
+or callback return. First-export evidence does not acknowledge downstream
+catalog or network-policy callbacks. The withdrawn metadata/output-ACK
+carrier is not reapplied. Complete Core still fails; remaining non-Prepared
+DATA need current actual constructor attribution. Diagnostic source stays
+private; the task is **not complete**, GC stays deferred and PR #49 stays
+**Draft**.
+
+[E1216](implementation/plan-execution-reliability.md#current-constructor-stacks-identify-remaining-non-prepared-data-families)
+captures all 17,890 current derived constructor paths and reconciles the
+new output refusal independently. Actual remaining families include
+published tool declarations, request prompts, source snapshots and Catalog
+identities; their bills are not called leaks or predicted savings.
+Source confirms one Catalog identity invoice combines serial private schema
+construction scratch with still-live DATA, leading to a different bounded
+work-lifetime experiment with original prices and unknown debt preserved.
+That follow-on has no acceptance credit here; complete Core still fails,
+diagnostic source remains private, the task is **not complete**, GC stays
+deferred and PR #49 stays **Draft**.
+
+[E1217](implementation/plan-execution-reliability.md#catalog-private-schema-work-has-an-actual-frame-return-boundary)
+separates only the original private schema-construction work invoice from
+published Catalog DATA in the retained private candidate. The positive
+same-bank reservation case fails before the change; unknown-failure
+retention passes before and after. The first candidate run records a
+concurrent-backing failure from obsolete exact private-allocation totals.
+The revised test checks real retirement refusal before the actual producer
+return and retains complete final bank restoration. All 26 selected cases
+then pass, with all 279 cases naturally present. Full Core, Main, full Host,
+Product and release receive no pass credit from this selected run.
+The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1218](implementation/plan-execution-reliability.md#current-schema-work-candidate-still-fails-successful-program-evidence)
+rebuilds the original complete Core gate from that observer-free candidate.
+It still fails the unchanged successful Program evidence assertion.
+A separate scalar run captures its own initial output-owner refusal and
+current failed canonical Receipts. All observed processes return, without
+treating that physical return as DATA ACK. The optional database-retention
+flag was not enabled, so no new retained database or raw-SQL result is
+claimed. Neither selected Host passes nor a lower observed charged amount
+closes Core acceptance. No source is promoted, the task is **not complete**,
+GC stays deferred and PR #49 stays **Draft**.
+
+[E1219](implementation/plan-execution-reliability.md#independent-catalog-schema-work-correction-has-real-product-proof)
+migrates only the independently isolated four-file Catalog schema-work
+correction onto published Main. Original production fails the positive
+reservation case. The correction passes all 24 selected Native Host cases,
+with all 277 current cases naturally present. A separate public Product
+executable imports and mounts a real native plugin, invokes the same worker
+twice and rejects invocation after disable. Original work and DATA
+tariffs, quotas, floors, SUM/high-water and unknown-consumer debt remain
+unchanged. Other candidates stay private. This is not full Core, Host,
+Product, App, release, five-second request or matching baseline acceptance.
+The identical Main code also passes the original 129 selected Python
+regressions and complete architecture entrypoint, including docs and pins.
+The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
