@@ -3040,3 +3040,28 @@ The observer-free E1209 candidate separately passes the original selected
 passes nor fixture-only diagnostics establish full Core/Product/release
 acceptance. No behavioral source is promoted; the task remains
 **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1212–E1213](implementation/plan-execution-reliability.md#initial-read-view-acquisition-has-a-distinct-measured-bank-refusal)
+correct a diagnostic blind spot at initial owner acquisition. The actual
+read-view request needs a new original-floor owner and exceeds the bank by
+12,558,408 bytes at its own refusal. Full same-time occupancy, live leases,
+earlier peaks and constructor-identified checkpoint/attachment roots are
+retained separately; no old attachment-growth amount or zero-loan refund is
+substituted. Complete Core still fails; diagnostic source remains private.
+
+[E1214](implementation/plan-execution-reliability.md#independent-copied-definition-billing-correction-ships-with-native-proof)
+ships only the independently isolated copied-model-definition meter and
+its two real regressions. Original production fails the small-copy case;
+the actual large-copy saturation control rejects on both. All 45 current
+Main Runtime cases execute and pass after the fix. A real external Native
+public-API executable also proves source-independent copies, schema/array
+isolation, exact numeric spelling and genuine saturation rejection.
+The identical Main code also passes the original 129 selected Python
+regressions and complete architecture gate, including docs and pins.
+The SDK's RED `ERROR: 1` and the private runner's initial classifier error
+remain recorded, without rerunning or weakening that failure.
+The full source, original tariffs and actual ACK/unknown-debt rules remain
+paid. The other Core/Host/Registry/RunScope candidates and every observer
+remain unpromoted. No new App/Product/release or matching baseline result
+is inferred for this changed Main source. The task remains **not complete**,
+GC stays deferred and PR #49 stays **Draft**.

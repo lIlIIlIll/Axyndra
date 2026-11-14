@@ -5208,3 +5208,123 @@ waive the failed Core, Product, startup, baseline or release requirements.
 No behavioral source is promoted; the task remains not complete, GC stays
 deferred and PR #49 stays Draft.
 
+## Initial read-view acquisition has a distinct measured bank refusal
+
+E1212 reuses the full scalar allocator observer on the E1209 candidate.
+Build passes in 589.27 seconds; original complete Core still fails its
+structured inspection assertion after 54.90 seconds. ELF SHA-256 is
+`f88b2d2d9294591e23e0a338e8465f3eb1c1f92800b5bc8ccf90b31225e5bf2e`.
+All 269,252 captured events reconcile, but no refusal checkpoint appears.
+Source review finds an observer gap: it records failed reservation growth,
+not the initial `LogicalJsonOwnerBudget.acquire` rejection. An empty refusal
+array is not evidence of unused capacity or an absent bank rejection.
+`read-view-refusal1212/coverage-review.json` preserves this limitation.
+
+E1213 adds the same eight scalar fields at that initial decision under its
+original bank lock. Caller ID zero means no reservation has been allocated;
+it is not a new payer or refund. The existing read-view catch additionally
+prints only its numeric frozen output maximum and a bounded reason code,
+not exception text, arguments or application references. Behavior, locks,
+limits, actual ACKs and all original assertions are unchanged.
+
+Build passes in 498.43 seconds; original complete Core still fails after
+60.58 seconds. ELF SHA-256 is
+`0c8c29c6f35e797ea4a7a8a2552deddaec8005d7c9f8048e03765bb81f73d452`.
+All 269,914 events reconcile. The actual read-view maximum is 131,072 raw
+bytes; the original floor requires a new 16-MiB owner. Its aggregate refusal
+records these values together:
+
+| Capacity | Charged at refusal | Actual requested growth | Overshoot |
+| ---: | ---: | ---: | ---: |
+| 150,994,944 | 146,776,136 | 16,777,216 | 12,558,408 |
+
+The same-time bank occupancy reconciles as follows:
+
+| Actual holder | SUM at refusal, where applicable | Actual bank charge |
+| --- | ---: | ---: |
+| Shared metadata ledger 1 | 44,921,368 | 45,785,160 |
+| Shared metadata ledger 221 | 7,881,904 | 16,777,216 |
+| Application checkpoint slot | — | 16,777,216 |
+| Tool-input attachment working owner | — | 67,108,864 |
+| All fixed transport buffers | — | 327,680 |
+
+The two standalone owners are identified by their actual constructor
+stacks: `ApplicationSession.reserveOwnedCheckpointSlot113` and
+`HostToolInputAttachmentSession.init`. Neither may be closed merely because
+the output worker needs room. Complete refusal-time live leases and their
+ancestry are retained separately from earlier peak and closed-since-peak
+leases; invoice size is not used to invent an owner class or release proof.
+`read-view-acquire1213` retains raw events, complete reconciliation and
+`actual-refusal-live-leases.json`. This is a new output-owner refusal, not
+the earlier 50,331,648-byte attachment growth. No diagnostic source is
+promoted, no unknown debt is retired and complete Core remains failed.
+
+## Independent copied-definition billing correction ships with Native proof
+
+E1214 isolates only the E1206 copied-definition meter and its two meaningful
+fixed-capacity regressions onto published base `6a566b7`. None of the private
+RunScope, Core, Registry, Host or diagnostic changes accompanies them.
+The corrected production source SHA-256 is
+`64709ee2fb7145bd061f11d6646f8caa577ff6a84f29610cffbaefc98a1d3ec0`.
+The two files copied into the delivery branch match the independently
+verified source bytes exactly.
+
+The fresh RED build uses the original production meter and naturally lists
+all 43 existing Main Runtime cases plus the two new cases. The small-copy
+case fails in `addSnapshot159` with the actual aggregate exception; the
+large available-copy saturation control passes. The SDK reports the former
+as `ERROR: 1`, not `FAILED: 1`. The private driver initially misclassifies
+that distinction and exits 1; its original output and summary are retained.
+`classification-review.json` validates the existing qualified failure and
+exact exception/stack without rerunning it or changing a product assertion.
+
+After the isolated correction, **all 45 naturally enumerated Runtime cases
+execute and pass**, with original case/process limits and complete physical
+custody. Dependency-ready build takes 40.53 seconds; this is not cold-build
+performance. Evidence is `model-copy-minimal1214-green-runtime-unit`.
+Runtime unittest ELF SHA-256 is
+`3e2ae52c72c6432a8c5a171387cbea7ce94dd6c6f49013f20b18cd6105407cc8`.
+RED ELF SHA-256 is
+`83b8ae051a6ad0936ca2958495d986551c043954010a268248f51d71bc9c41cd`.
+The larger candidate's two unpromoted RunScope tests are not present in
+Main source; no existing Main test is excluded or skipped by this full run.
+
+A separate real Native executable then imports the public Runtime API and
+constructs a fully prepaid source in a fixed 16-MiB test bank. It creates two
+independent model-definition copies, retires the actual complete source,
+consumes the copies after that return, checks schema/array mutation
+isolation and exact numeric spelling, and confirms a genuinely large
+available definition still rejects saturation. Caller-frame returns remain
+distinct from producer, provider, storage and process completion.
+Build takes 54.48 seconds; actual execution takes 0.52 seconds and exits 0:
+
+```text
+native_public_copy name=smoke.available literal=1.20e+02 independent=true
+native_public_copy large_available_rejected=true
+```
+
+Evidence is `model-copy-minimal1214-native-smoke`, including caller source,
+manifest, actual Runtime library identities and physical watcher receipts.
+Executable SHA-256 is
+`932ade5c6a5716eb7e373ae4ea22dda11949bbf81a829550ce8c3af5af341e84`.
+This is an actual public consumer, not a unittest-only or mock result.
+
+The identical two-file delivery source also passes the original selected
+129 Python regressions and complete architecture entrypoint, including
+documentation, package boundaries and dependency pins. Evidence is
+`model-copy-minimal1214-main-static`. No dependency or source changes are
+retained by those checks; the completed throwaway caller scaffold is
+removed after its exact source and successful artifact proof are preserved.
+
+The shipped change measures only available definition names, descriptions
+and schemas that the existing copy actually creates. Source snapshots stay
+fully paid; the existing header, full-schema tariff, order, numeric type,
+deep-copy isolation and unknown/consumer ACK rules are unchanged.
+No public signature, dependency, SDK, schema, wire, permission or Source
+contract changes. Rollback restores these two Runtime files together;
+there is no persisted-data migration or refund.
+The larger Core candidate and all numeric/fixture observers remain private.
+This isolated fix is not full Core/Product, current App, matching baseline,
+startup or release acceptance. Those final-source gates remain open, GC
+stays deferred and PR #49 stays Draft.
+

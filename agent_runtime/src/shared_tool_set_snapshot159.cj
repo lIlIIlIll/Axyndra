@@ -606,7 +606,14 @@ class SharedToolSnapshotLoan159 {
         let copiedPayment = sharedSnapshotPhase159(payment.getOrThrow(), 131072)
         let result = OwnedModelTools159(copiedPayment)
         let meter = ToolSnapshotMeasure159(copiedPayment)
-        meter.addSnapshot159(snapshot.getOrThrow()); meter.fund159()
+        // installCopies159 creates only available ModelToolDefinitions. The
+        // source snapshot keeps its own complete invoice; this independent
+        // copy owns no executor metadata, unavailable entry or hook handler.
+        for (entry in snapshot.getOrThrow().entries where entry.availableAtSnapshot) {
+            meter.addSlots159(1)
+            meter.addText159(entry.name); meter.addText159(entry.description); meter.addValue159(entry.inputSchema)
+        }
+        meter.fund159()
         result.installCopies159(snapshot.getOrThrow())
         result
     }
