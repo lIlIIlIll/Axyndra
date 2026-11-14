@@ -5730,3 +5730,69 @@ to it. Full Core, Product, App, release, five-second request and matching
 baseline remain unaccepted. The task is incomplete, GC stays deferred and
 PR #49 stays Draft.
 
+## Batched enables publish once and verification never reuses
+
+E1227 reproduces a separate non-GC transaction defect in the original
+Registry. `setEnabledBatch` calls the ordinary setter, which publishes
+each prefix before later namespaces validate. On a later missing namespace,
+the old code restores memory but leaves changed lock bytes and Workspace
+grants. A newly opened Registry observes that rejected prefix.
+The real User/Workspace enable-and-disable regression fails before the
+fix; the successful two-namespace control passes.
+
+The correction uses the existing private batch deferral for enable/disable
+as well as import. It publishes the scoped lock after all requested
+records validate, restores loaded records on prepublication failure and
+always clears deferral so ordinary subsequent mutations still publish.
+Original dependency, content, fence, scope and recovery checks remain.
+
+The generic writer-fence verification cache is removed, not widened.
+A Registry writer fence does not prevent arbitrary package-file mutation.
+Every dependency and target inspection now uses the original full-byte
+inspector. No verification result is reused, even during first install;
+this conservatively satisfies the single-first-install-transaction reuse
+ceiling without creating another cache, permission or Source authority.
+
+| Evidence | Actual result | ELF SHA-256 |
+| --- | --- | --- |
+| `registry-batch-minimal1227-red-unit` | Failed-batch state regression fails; successful-batch control passes | `e47a7518b8a85080bd62865cda321abf1b19e27bc8da0e38019046355a340c8e` |
+| `registry-batch-minimal1227-green-unit` | 35 qualified passes; one current GC crash; two older GC samples not run | `68aeeb9175507996ad51a57df647806bc602809aa85e7eca96a4b492b22378b6` |
+| `registry-batch-minimal1227-native-smoke` | Standalone public Registry consumer exits zero with all six expected observations | `d4ae33b97d5c91d5412f8a13f8d13150bb5c6a992fc2e108c0584b8de6741a06` |
+
+All 38 cases remain naturally present. Both new regressions pass after the
+fix, including unchanged durable bytes/grants after failure, reopened
+state, every successful namespace and later ordinary single mutations.
+The current `seventeenActualInstalledPinsShareOneRealAllocationWithNearEightMibAndSessionOwners`
+sample crashes with SIGSEGV and direct
+`MapleRuntime::GCTib::ForEachBitmapWord` above `std.fs.exists` and
+`inspectPluginPackage`. Only that observed sample joins GC deferral.
+It receives zero pass credit, is not retried, and does not establish the
+original corruption cause. The original `FAIL_NO_ACCEPTANCE` summary
+remains unchanged; `classification-review.json` records all three
+unpassed GC samples.
+
+The separate public executable performs real native Registry writes,
+package materialization and reopen in User and Workspace scopes. It
+observes rejection of a later namespace without persisted prefix,
+successful batch publication, ordinary disable and rejection after an
+actual same-length installed-byte change. The fixture code is never
+executed. Build takes 54.23 seconds; dependency-ready execution takes
+0.64 seconds. These are not cold-start or five-second-gate results.
+Its exact caller source and actual output are retained, then the task-only
+caller scaffold is removed.
+
+The combined Main Tool/Registry source also passes the original 129
+selected Python regressions in 14.02 seconds and complete architecture
+entrypoint in 29.18 seconds, including docs and dependency pins.
+`registry-batch-minimal1227-main-static` retains the final source bindings.
+Public method signatures and disk formats are unchanged. Operators who
+previously saw a failed batch should inspect actual records before
+retrying; historical prefixes are not rewritten by guessing earlier intent.
+
+Only these two independently exercised Registry files are migrated to
+Main. Other Registry work/streaming candidates stay private. The fixed SDK,
+bank, floor, input work, SUM/high-water, unknown DATA debt and actual final
+ACK requirements remain unchanged. This is not full Registry, combined
+Core, Product, App, release or matching-baseline acceptance. The task is
+incomplete, GC stays deferred and PR #49 stays Draft.
+

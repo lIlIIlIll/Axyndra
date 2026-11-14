@@ -3187,3 +3187,25 @@ gate still fails `input_attachment.capacity`. No move count, saved-byte
 amount, complete Core, Product, release or matching baseline acceptance is
 inferred. The task is **not complete**, GC stays deferred and PR #49 stays
 **Draft**.
+
+[E1227](implementation/plan-execution-reliability.md#batched-enables-publish-once-and-verification-never-reuses)
+fixes actual rejected-batch prefix publication. The User/Workspace
+enable/disable state regression fails before the change and passes after;
+successful batch and later ordinary single mutations still persist.
+The generic writer-fence verification cache is removed entirely, retaining
+full current-byte inspection without reuse even during first install.
+Only these two Registry files migrate to Main.
+
+All 38 natural cases remain: 35 pass, one new sample has a direct Runtime
+GC crash and two earlier GC samples are not rerun. All three unpassed
+samples retain zero credit and the original failed summary remains failed.
+A separate public Native Registry executable verifies actual durable
+rollback, success, reopen, ordinary disable and same-length tamper
+rejection in both scopes. The caller scaffold is removed after evidence
+capture. This is not full Registry, combined Core, Product, release,
+five-second request or matching-baseline acceptance. The task is **not
+complete**, GC stays deferred and PR #49 stays **Draft**.
+
+The combined Main source also passes all 129 selected Python regressions
+and the complete architecture entrypoint. Public method signatures and
+disk formats are unchanged; historical prefixes are not silently rewritten.

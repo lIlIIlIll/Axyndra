@@ -232,3 +232,64 @@ class RegistryWriterTests {
         } finally { remove(root,recursive:true) }
     }
 }
+
+@Test
+class RegistryEnableBatch1227Tests {
+    @TestCase
+    func failedBatchPreservesMemoryLockAndWorkspaceGrantForBothDirections(): Unit {
+        for (scope in [PluginInstallScope.User, PluginInstallScope.Workspace]) {
+            for (enabled in [true, false]) {
+                let owners = RegistryTestOwners()
+                try {
+                    let root = Directory.createTemp("/tmp").toString()
+                    try {
+                        let registry = owners.openRegistry(root + "/settings", root)
+                        registryFixtureRecord(registry.importLocal(registryFixturePackage(root, "1.0.0"), scope))
+                        if (!enabled) { registryFixtureRecord(registry.setEnabled("pi:minimal-fixture", true, scope)) }
+                        let lockPath = pluginScopeRoot(root + "/settings", root, scope) + "/plugins/lock.jsonl"
+                        let before = String.fromUtf8(File.readFrom(lockPath))
+                        let grantPath = pluginWorkspaceGrantPath(root + "/settings", root)
+                        let workspace = pluginScopeEquals(scope, PluginInstallScope.Workspace)
+                        let beforeGrant = if (workspace) { String.fromUtf8(File.readFrom(grantPath)) } else { "" }
+                        @Expect(writerError(registry.setEnabledBatch(
+                            ["pi:minimal-fixture", "pi:absent"], enabled, scope)), "plugin.not_found")
+                        @Expect(registry.get("pi:minimal-fixture").getOrThrow().enabled, !enabled)
+                        @Expect(String.fromUtf8(File.readFrom(lockPath)), before)
+                        if (workspace) { @Expect(String.fromUtf8(File.readFrom(grantPath)), beforeGrant) }
+                        @Expect(owners.openRegistry(root + "/settings", root).get("pi:minimal-fixture").getOrThrow().enabled, !enabled)
+                        @Expect(registry.setEnabledBatch(["pi:minimal-fixture"], enabled, scope).isOk())
+                        @Expect(owners.openRegistry(root + "/settings", root).get("pi:minimal-fixture").getOrThrow().enabled, enabled)
+                        registryFixtureRecord(registry.setEnabled("pi:minimal-fixture", !enabled, scope))
+                        @Expect(owners.openRegistry(root + "/settings", root).get("pi:minimal-fixture").getOrThrow().enabled, !enabled)
+                    } finally { remove(root, recursive: true) }
+                } finally { owners.close() }
+            }
+        }
+    }
+
+    @TestCase
+    func successfulBatchPublishesEveryNamespaceAndKeepsSingleMutationUsable(): Unit {
+        let owners = RegistryTestOwners()
+        try {
+            let root = Directory.createTemp("/tmp").toString()
+            try {
+                let first = registryFixturePackage(root, "1.0.0")
+                let second = registryFixturePackage(root, "2.0.0")
+                let packagePath = second + "/package.json"
+                File.writeTo(packagePath, String.fromUtf8(File.readFrom(packagePath))
+                    .replace("minimal-fixture", "another-fixture").toArray())
+                let registry = owners.openRegistry(root + "/settings", root)
+                @Expect(registry.importLocalBatch([first, second], PluginInstallScope.User).isOk())
+                @Expect(registry.setEnabledBatch(
+                    ["pi:minimal-fixture", "pi:another-fixture"], true, PluginInstallScope.User).isOk())
+                let reopened = owners.openRegistry(root + "/settings", root)
+                @Expect(reopened.get("pi:minimal-fixture").getOrThrow().enabled, true)
+                @Expect(reopened.get("pi:another-fixture").getOrThrow().enabled, true)
+                registryFixtureRecord(registry.setEnabled("pi:minimal-fixture", false, PluginInstallScope.User))
+                let disabled = owners.openRegistry(root + "/settings", root)
+                @Expect(disabled.get("pi:minimal-fixture").getOrThrow().enabled, false)
+                @Expect(disabled.get("pi:another-fixture").getOrThrow().enabled, true)
+            } finally { remove(root, recursive: true) }
+        } finally { owners.close() }
+    }
+}
