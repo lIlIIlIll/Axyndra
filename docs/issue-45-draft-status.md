@@ -3209,3 +3209,12 @@ complete**, GC stays deferred and PR #49 stays **Draft**.
 The combined Main source also passes all 129 selected Python regressions
 and the complete architecture entrypoint. Public method signatures and
 disk formats are unchanged; historical prefixes are not silently rewritten.
+
+[E1228](implementation/plan-execution-reliability.md#current-committed-tool-and-registry-corrections-still-fail-full-core)
+rebuilds and executes the original complete Core gate from published
+`925170f` only, without private candidates or observers. It still fails
+`input_attachment.capacity`. All 229 observed processes are reaped with no
+unknown identity, without treating physical return as DATA ACK or assigning
+an earlier artifact's numeric refusal. The current committed combined
+source therefore still lacks full Core acceptance. The task is **not
+complete**, GC stays deferred and PR #49 stays **Draft**.

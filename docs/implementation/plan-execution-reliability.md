@@ -5796,3 +5796,27 @@ ACK requirements remain unchanged. This is not full Registry, combined
 Core, Product, App, release or matching-baseline acceptance. The task is
 incomplete, GC stays deferred and PR #49 stays Draft.
 
+## Current committed Tool and Registry corrections still fail full Core
+
+E1228 rebuilds the original complete Native Core/recovery gate from
+published `925170fc7783956b3a9cbeb1146bd6476db07377` only. There is no private
+mount, Registry work/streaming, Core, Product canonical-frame, RunScope or
+observer source. Build passes in 422.09 seconds. Execution fails after
+47.50 seconds at the unchanged model-selected Program assertion with
+`input_attachment.capacity`.
+Actual ELF SHA-256 is
+`285ead312c3acddf0d177e400a31b30857ae9bf51c61a426c46a0a6cfb37122c`.
+
+All 229 observed execution processes are reaped, with no surviving,
+unreaped or unknown process, no watcher fault and both actual leader and
+watcher returned. Physical cleanup remains explicitly not DATA ACK.
+The observer-free run supplies no new refusal amount; E1223's earlier
+source-specific balance is not applied to this artifact.
+
+`registry-batch-main1228-complete-core` retains exact source and package
+bindings, commands, the failed gate and its actual process census.
+Two task-generated lock rewrites preserve the same dependency identities;
+their exact diff is retained and only those two files are restored.
+Component and standalone Registry passes do not satisfy full Core.
+The task remains incomplete, GC stays deferred and PR #49 stays Draft.
+
