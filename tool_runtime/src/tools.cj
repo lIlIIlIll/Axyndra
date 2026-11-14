@@ -3844,7 +3844,7 @@ public class ToolPipeline {
         match(decision){case ApprovalDecision.ApproveSession=>
             match(copiedPermissionGrant204(context,context.sessionId,parent.operationPlan.approvalMetadata.grantScope)){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()};case _=>()}
-        if(approved){return executeOwnedPrepared(context,preparedWithAuthorization(context,parent,PreparedAuthorization.Approved),
+        if(approved){return executeOwnedPrepared(context,preparedWithAuthorization(context,parent,PreparedAuthorization.Approved,false),
             afterHandoff:afterHandoff,afterExecutionAdmission:afterExecutionAdmission)}
         // Rejection has no execution handoff. Its real executor must freeze a
         // paid denial and dedicated no-handoff final witness; the old generic
@@ -3939,7 +3939,7 @@ public class ToolPipeline {
             match(validateLivePreparedCurrent(context,parent)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             if(catalog.executionWasRevoked(registration)){
                 return livePolicyPreparationError<OwnedToolPipelineProgress>("tool.live_owned_registration_revoked")}
-            let approvedPending:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(context,child,PreparedAuthorization.Approved))}else{None}
+            let approvedPending:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(context,child,PreparedAuthorization.Approved,false))}else{None}
             let control=match(ownedExecutionControlForExecutor(context,parent,Some(value),executor,resumed:approvedPending)){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(actual)=>actual}
             let returned=try{executor.resumeOwned(context,value,decision,control)}finally{control.close()}
@@ -4104,7 +4104,7 @@ public class ToolPipeline {
             match(copiedPermissionGrant204(context,context.sessionId,child.operationPlan.approvalMetadata.grantScope)){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()};case _=>()}
         match(validateLivePreparedCurrent(context,parent)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-        let selected:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(context,child,PreparedAuthorization.Approved))}else{None<PreparedToolInvocation>}
+        let selected:?PreparedToolInvocation=if(approved){Some(preparedWithAuthorization(context,child,PreparedAuthorization.Approved,false))}else{None<PreparedToolInvocation>}
         let control=match(preparedPhaseControl(context,parent,Some(value),executor,phase.inputCustody(),selected)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(actual)=>actual}
         let returned:Result<Unit>=try{
@@ -5485,6 +5485,11 @@ public class ToolPipeline {
         decision: ApprovalDecision,
         decisionSource!: ApprovalDecisionSource = ApprovalDecisionSource.User
     ): Result<ToolAuthorization> {
+        authorizeFrame204(context, prepared, decision, decisionSource, false)
+    }
+    private func authorizeFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        decision: ApprovalDecision, decisionSource: ApprovalDecisionSource,
+        privateLoaded204: Bool): Result<ToolAuthorization> {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
@@ -5606,7 +5611,7 @@ public class ToolPipeline {
             return Result.Ok(ToolAuthorization.Completed(result))
         }
         Result.Ok(ToolAuthorization.Ready(
-            preparedWithAuthorization(context,prepared, PreparedAuthorization.Approved)
+            preparedWithAuthorization(context, prepared, PreparedAuthorization.Approved, privateLoaded204)
         ))
     
             })
@@ -5632,7 +5637,7 @@ public class ToolPipeline {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        decidePrepared(context, prepared, decision, afterHandoff, decisionSource)
+        decidePrepared(context, prepared, decision, afterHandoff, decisionSource, true)
     }
 
     // Approval continuation must receive a freshly attested canonical source
@@ -5649,7 +5654,7 @@ public class ToolPipeline {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        decidePrepared(context, prepared, decision, afterHandoff, decisionSource)
+        decidePrepared(context, prepared, decision, afterHandoff, decisionSource, true)
     }
 
     public func decideContextRead(context: ToolInvocationContext, prepared: PreparedToolInvocation,
@@ -5668,7 +5673,7 @@ public class ToolPipeline {
                 return Result.Ok(ToolInvocationResult.Denied(ToolDenial(pipelineCall204(context, prepared).callId, pipelineCall204(context, prepared).name, error)))
             case Result.Ok(_) => ()
         }
-        decidePrepared(context, prepared, decision, afterHandoff, decisionSource)
+        decidePrepared(context, prepared, decision, afterHandoff, decisionSource, false)
     }
 
     private func decidePrepared(
@@ -5676,9 +5681,10 @@ public class ToolPipeline {
         prepared: PreparedToolInvocation,
         decision: ApprovalDecision,
         afterHandoff: (PreparedToolInvocation) -> Result<Unit>,
-        decisionSource: ApprovalDecisionSource
+        decisionSource: ApprovalDecisionSource,
+        privateLoaded204: Bool
     ): Result<ToolInvocationResult> {
-        match (authorize(context, prepared, decision, decisionSource: decisionSource)) {
+        match (authorizeFrame204(context, prepared, decision, decisionSource, privateLoaded204)) {
             case Result.Err(error) => Result.Err(error)
             case Result.Ok(ToolAuthorization.Ready(value)) =>
                 executePrepared(context, value, afterHandoff)
@@ -5992,8 +5998,18 @@ public class ToolPipeline {
     private func preparedWithAuthorization(
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation,
-        authorization: PreparedAuthorization
+        authorization: PreparedAuthorization,
+        privateLoaded204: Bool
     ): PreparedToolInvocation {
+        if (privateLoaded204) {
+            match (coreCatalogDataScope204(context)) {
+                case Some(scope) => match (scope.movePrivateAuthorization204(prepared, authorization)) {
+                    case Some(value) => return value
+                    case None => ()
+                }
+                case None => ()
+            }
+        }
         PreparedToolInvocation(
             prepared.operationId,
             pipelineCall204(context, prepared),

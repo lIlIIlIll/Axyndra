@@ -138,3 +138,80 @@ class CatalogResolverInvocation204Tests {
         @Expect(fixture.consumer.scope.getOrThrow().returnWholeCoreFrame204(), true)
     }
 }
+
+private func privateApprovalPrepared1201(fixture: ResolverInvocationFixture204): PreparedToolInvocation {
+    let call = ToolCall("private-approval-data", "resolver.data",
+        objectValue([ValueField("payload", textValue("actual-move-data"))]))
+    match (fixture.pipeline.prepare(fixture.context, call)) {
+        case Result.Ok(ToolPreparation.Ready(value)) => value
+        case _ => throw IllegalStateException("actual private DATA preparation did not complete")
+    }
+}
+
+@Test
+class PrivateApprovalMetadataMove1201Tests {
+    @TestCase
+    func movedPrivateWrapperKeepsDataPaymentUntilActualLastConsumerReturns(): Unit {
+        let fixture = ResolverInvocationFixture204(owned: true, read: false)
+        let original = privateApprovalPrepared1201(fixture)
+        let scope = fixture.consumer.scope.getOrThrow()
+        let before = fixture.root.retainedCustodyUsage113()
+        let next = scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).getOrThrow()
+        let after = fixture.root.retainedCustodyUsage113()
+        @Expect(next.authorization == PreparedAuthorization.Approved)
+        @Expect(next.operationId.value, original.operationId.value)
+        @Expect(refEq(next.source, original.source))
+        @Expect(after[2], before[2])
+        @Expect(after[0] > before[0] && after[0] <= before[0] + 8192)
+        var oldReturned = false
+        try { original.withCall204({ call => call.name == "resolver.data" }) }
+        catch (_: IllegalStateException) { oldReturned = true }
+        @Expect(oldReturned, true)
+        let consumer = next.retainMetadataConsumer204().getOrThrow()
+        @Expect(scope.returnWholeCoreFrame204(), true)
+        @Expect(consumer.withOperationPlan204({ plan =>
+            plan.canonicalArguments.field("payload").getOrThrow().text == "actual-move-data"
+        }), true)
+        let beforeLast = fixture.root.retainedCustodyUsage113()
+        consumer.returnConsumerFrame204()
+        let afterLast = fixture.root.retainedCustodyUsage113()
+        @Expect(afterLast[2] + 1, beforeLast[2])
+        @Expect(afterLast[0] < beforeLast[0])
+        @Expect(afterLast[1], beforeLast[1])
+    }
+    @TestCase
+    func actualExistingConsumerPreventsMoveUntilItsOwnFrameReturns(): Unit {
+        let fixture = ResolverInvocationFixture204(owned: true, read: false)
+        let original = privateApprovalPrepared1201(fixture)
+        let scope = fixture.consumer.scope.getOrThrow()
+        let consumer = original.retainMetadataConsumer204().getOrThrow()
+        let before = fixture.root.retainedCustodyUsage113()
+        @Expect(scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).isNone())
+        let after = fixture.root.retainedCustodyUsage113()
+        @Expect(after[0], before[0]); @Expect(after[2], before[2])
+        @Expect(consumer.withCall204({ call => call.name == "resolver.data" }), true)
+        consumer.returnConsumerFrame204()
+        let next = scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).getOrThrow()
+        @Expect(next.withOperationPlan204({ plan =>
+            plan.canonicalArguments.field("payload").getOrThrow().text == "actual-move-data"
+        }), true)
+        @Expect(scope.returnWholeCoreFrame204(), true)
+    }
+    @TestCase
+    func actualRawMetadataExportOrOpaqueContextNeverUsesPrivateMove(): Unit {
+        for (rawContext in [false, true]) {
+            let fixture = ResolverInvocationFixture204(owned: !rawContext, read: false)
+            let original = privateApprovalPrepared1201(fixture)
+            let scope = fixture.consumer.scope.getOrThrow()
+            if (!rawContext) { @Expect(original.call.name, "resolver.data") }
+            let before = fixture.root.retainedCustodyUsage113()
+            @Expect(scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).isNone())
+            let after = fixture.root.retainedCustodyUsage113()
+            @Expect(after[0], before[0]); @Expect(after[2], before[2])
+            @Expect(original.withCall204({ call => call.name == "resolver.data" }), true)
+            if (rawContext) { @Expect(scope.returnWholeCoreFrame204(), false) }
+            // The real export/opaque debt stays paid. This private-bank
+            // fixture cannot manufacture a DATA ACK or authorize execution.
+        }
+    }
+}

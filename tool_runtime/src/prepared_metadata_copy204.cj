@@ -72,6 +72,25 @@ class PreparedMetadataOwner204 {
         } finally { lock.unlock() }
     }
     func holdUnknown204(): Unit { lock.lock(); try { unknown = true } finally { lock.unlock() } }
+    func movePrivateAuthorization204(value: PreparedToolInvocation, actual: PlanCopyDataConsumer204,
+        headerPayment: LogicalJsonOwnerReservation, headerInvoice: Int64,
+        authorization: PreparedAuthorization): ?PreparedToolInvocation {
+        lock.lock()
+        try {
+            if (returned || producerReturned || unknown || consumers != 0) { return None<PreparedToolInvocation> }
+            if (!samePlanCopyConsumer204(actual, core) || !refEq(prepared.getOrThrow(), value)) {
+                throw IllegalArgumentException("private approval metadata belongs to another producer")
+            }
+            // The actual Core scope prepays the extra control-only wrapper.
+            // The existing DATA payment, producer and ACK rules never change.
+            headerPayment.ensureRetainedPeak(headerInvoice)
+            let next = value.privateAuthorizationShell204(this, authorization)
+            value.clearDetachedMetadata204()
+            prepared = Some(next)
+            Some(next)
+        } catch (error: Exception) { unknown = true; throw error }
+        finally { lock.unlock() }
+    }
     func producerReturned204(): Unit {
         lock.lock(); try { producerReturned = true } finally { lock.unlock() }
         collect204()

@@ -182,6 +182,33 @@ public class PreparedToolInvocation {
         detachedMetadata204 = Some(owner)
     }
     func borrowDetachedPlan204(): NormalizedOperationPlan { operationPlanData204.getOrThrow() }
+    // Only the private freshly loaded approval coordinator may consume this
+    // wrapper. The paid owner checks exact producer, Core, exports and loans.
+    // Move fields, not DATA or authority; the old wrapper becomes unreadable.
+    func tryMovePrivateAuthorization204(actual: PlanCopyDataConsumer204,
+        headerPayment: LogicalJsonOwnerReservation, headerInvoice: Int64,
+        authorization: PreparedAuthorization): ?PreparedToolInvocation {
+        match (detachedMetadata204) {
+            case Some(owner) => owner.movePrivateAuthorization204(this, actual, headerPayment, headerInvoice, authorization)
+            case None => None<PreparedToolInvocation>
+        }
+    }
+    func privateAuthorizationShell204(owner: PreparedMetadataOwner204,
+        authorization: PreparedAuthorization): PreparedToolInvocation {
+        if (metadataReturned204 || catalogConsumer204.isSome() || nextPrepared204.isSome() ||
+            !refEq(detachedMetadata204.getOrThrow(), owner)) {
+            throw IllegalStateException("private approval metadata producer changed")
+        }
+        let next = PreparedToolInvocation(operationId, callData204.getOrThrow(),
+            concurrencyData204.getOrThrow(), authorization, operationPlanData204.getOrThrow(),
+            source, approval: approvalData204)
+        // These are already privately copied immutable identifiers. Do not
+        // materialize another String merely to change an authorization tag.
+        next.planStepIdData204 = planStepIdData204
+        next.planActionIdData204 = planActionIdData204
+        next.detachedMetadata204 = Some(owner)
+        next
+    }
     func clearDetachedMetadata204(): Unit {
         callData204 = None<ToolCall>
         operationPlanData204 = None<NormalizedOperationPlan>; concurrencyData204 = None<ToolConcurrencyProfile>

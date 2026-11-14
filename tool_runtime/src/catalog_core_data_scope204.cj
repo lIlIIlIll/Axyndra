@@ -52,6 +52,27 @@ public class ToolCatalogCoreDataScope204 {
             catch (error: Exception) { held = true; owner.holdUnknown204(); throw error }
         } finally { lock.unlock() }
     }
+    // Fresh private approval loads may move their already paid immutable
+    // fields into the Approved wrapper. Public/retained Prepared values never
+    // use this route. Opaque Context, DATA exports and real consumers keep the
+    // original copying path; no return or refund is inferred from this move.
+    func movePrivateAuthorization204(value: PreparedToolInvocation,
+        authorization: PreparedAuthorization): ?PreparedToolInvocation {
+        lock.lock()
+        try {
+            if (returned || returning || payment.isNone() || core.isNone() ||
+                value.source.runId.value != run.value) {
+                throw IllegalStateException("private approval has no actual Core source loan")
+            }
+            if (held) { return None<PreparedToolInvocation> }
+            if (headers > (Int64.Max - 16384) / 1024 - 1) { throw LogicalJsonPayloadError("Catalog DATA header invoice overflow") }
+            let moved = value.tryMovePrivateAuthorization204(core.getOrThrow(),
+                payment.getOrThrow(), 16384 + (headers + 1) * 1024, authorization)
+            if (moved.isSome()) { headers++ }
+            moved
+        } catch (error: Exception) { held = true; throw error }
+        finally { lock.unlock() }
+    }
     func requireCanonicalOwnerBank204(owner: ToolCanonicalArgumentsOwner204): Unit {
         lock.lock(); try {
             if (returned || payment.isNone()) { throw IllegalStateException("Catalog DATA source has returned") }

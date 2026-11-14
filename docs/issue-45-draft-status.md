@@ -3125,3 +3125,65 @@ Product, App, release, five-second request or matching baseline acceptance.
 The identical Main code also passes the original 129 selected Python
 regressions and complete architecture entrypoint, including docs and pins.
 The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1220](implementation/plan-execution-reliability.md#published-main-still-rejects-input-attachment-admission)
+rebuilds the original complete Core gate from published `96c4eb6` only.
+It still fails `input_attachment.capacity` before successful Program
+inspection. All observed processes are reaped, without DATA pass credit.
+The later private-candidate output refusal amount is not assigned to this
+different sample. Current published Main therefore still lacks complete
+Core acceptance.
+
+[E1221](implementation/plan-execution-reliability.md#independent-registry-candidate-preserves-two-unpassed-gc-samples)
+isolates the retained eight-file Registry candidate. All 38 cases naturally
+enumerate: 36 pass, one current sample crashes with a direct Runtime GC
+frame and one earlier user-deferred GC case is not rerun. Both unpassed
+cases retain zero current pass credit, and the original failed summary
+remains failed. The identical ELF's earlier pass does not turn the current
+crash into a pass. No Registry source is promoted or whole-module
+acceptance claimed. The task is **not complete**, GC stays deferred and
+PR #49 stays **Draft**.
+
+[E1222](implementation/plan-execution-reliability.md#isolated-registry-changes-do-not-close-current-core-admission)
+executes the original complete Core gate with only that independent
+Registry candidate added to published Main. It still fails the unchanged
+Program assertion with `input_attachment.capacity`. Real process cleanup
+completes, without DATA or whole-gate pass credit. No Registry source is
+promoted. The task is **not complete**, GC stays deferred and PR #49 stays
+**Draft**.
+
+[E1223](implementation/plan-execution-reliability.md#current-published-main-refusal-is-fully-reconciled)
+captures the current published-Main refusal with a private constructor
+observer, not the unpromoted behavioral candidates. Actual root, fixed
+buffer, ledger and constructor events reconcile the complete bank balance.
+Corrected attribution uses the first actual funding frame; the deeper-name
+provisional classification remains preserved but ineligible. Closed private
+children do not refund long-lived parent high-water, and live Prepared
+payments are not deemed returnable. Complete Core still fails; this is not
+performance, memory-leak or DATA-return proof.
+
+[E1224](implementation/plan-execution-reliability.md#independent-canonical-graph-lifetime-does-not-yet-close-admission)
+isolates a Product canonical-graph message lifetime with the Registry
+candidate, preserving original invoices, same-bank floor and actual final
+return guards. The original complete Core gate still rejects input
+attachment admission. No new numeric refusal amount or whole-gate pass
+is inferred. Candidates stay private. The task is **not complete**,
+GC stays deferred and PR #49 stays **Draft**.
+
+[E1225](implementation/plan-execution-reliability.md#independent-private-authorization-move-preserves-the-actual-data-owner)
+migrates only the independently isolated private authorization metadata
+move. All 75 natural Native Tool cases pass, including all original 72.
+Only a fresh unpublished intermediate with the exact Core/owner and no
+actual consumer, export or opaque Context can move; its DATA payment and
+real final return rules remain unchanged. Public/retained values still
+copy. No unknown debt is retired or additional authority created.
+The identical Main source also passes all 129 selected Python regressions
+and the complete architecture entrypoint, including docs and dependency pins.
+
+[E1226](implementation/plan-execution-reliability.md#tool-only-public-core-smoke-still-fails-attachment-admission)
+executes the original public Product/Core entrypoint with those exact five
+files and no other private correction or observer. The unchanged complete
+gate still fails `input_attachment.capacity`. No move count, saved-byte
+amount, complete Core, Product, release or matching baseline acceptance is
+inferred. The task is **not complete**, GC stays deferred and PR #49 stays
+**Draft**.

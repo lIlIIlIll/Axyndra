@@ -5489,7 +5489,7 @@ remains failed, GC stays deferred and PR #49 stays Draft.
 ## Independent Catalog schema-work correction has real Product proof
 
 E1219 isolates the schema-work change onto published `8944a2e` without the
-other 26 private functional candidates or any observer. Only
+other private Core, Host or Registry corrections or any observer. Only
 `registry_metadata_copy.cj`, `plugin_tool_mount.cj`, the revised existing
 concurrent-backing test and the two-case schema regression file change.
 Main's 275 Host cases plus the two new cases naturally enumerate as 277.
@@ -5541,5 +5541,192 @@ and all unknown Prepared/Context debt remain unchanged. Other candidates
 stay private. Full Core, full Host, Product, App, release, the five-second
 request and matching baseline still have no current-Main acceptance from
 these selected results. The task is not complete, GC stays deferred and
+PR #49 stays Draft.
+
+## Published Main still rejects input attachment admission
+
+E1220 rebuilds the original complete Native Core gate from published
+`96c4eb640404a1cfda50aeaa14ec05f22c00fb1a`, without any unpromoted
+Registry, Host, Core or RunScope changes. Build passes in 599.82 seconds.
+Execution fails after 48.41 seconds at the original model-selected Program
+assertion with `input_attachment.capacity`, before successful Program
+inspection. ELF SHA-256 is
+`6e3f1699e58f9de69590f81477207627d5856217d6bf05019edffbbb0fa814dc`.
+All 197 observed execution processes are reaped, with no unknown identity.
+
+This is current published-Main failure evidence. It is not the E1218
+private candidate's later output-owner refusal, and that candidate's
+requested amount or overshoot is not assigned to this sample.
+The original success assertion, Source, SQL, Receipt, actual owner return
+and process-custody requirements remain unchanged.
+`catalog-schema-main1220-complete-core` retains source bindings, commands,
+the actual artifact and failure. Its early deterministic fixture samples
+are neither full Core acceptance nor matching baseline/performance credit.
+The task remains incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Independent Registry candidate preserves two unpassed GC samples
+
+E1221 isolates the retained eight-file Registry streaming, requested-record
+comparison and caller-work candidate onto published `96c4eb6`. The stale
+four-MiB loading comment is corrected. No Host, Core, RunScope or observer
+source is copied. Original raw sources, typed DATA, per-row parsing,
+complete package-byte inspection, Source and final-owner guards remain.
+The candidate does not lower the shared bank, floor or attachment invoice.
+
+All 38 Registry cases naturally enumerate. The original qualified runner
+attempts 37, passes 36 and reports one actual error. The older directly
+observed GC case is not rerun:
+
+| Case | Actual current result |
+| --- | --- |
+| `returnedTreeInspectionWorkDoesNotBecomeEachSelectedPinGraph` | SIGSEGV; direct `MapleRuntime::GCTib::ForEachBitmapWord` frame; zero pass credit |
+| `actualReloadAndCaptureShareOneCustodyButPreserveIndependentGenerationRevocation` | Existing user-deferred GC sample; not run; zero pass credit |
+
+Build passes in 27.52 seconds. The rebuilt ELF SHA-256 is
+`2ed3c4530a4a101ea834ce8076aa12051a08dfa4648cbf2d361ae0bb064e9943`,
+identical to the retained E1199 Registry ELF. The current crash is not
+rewritten as a pass because an earlier run passed with that artifact.
+Its direct Runtime GC frame places only this new sample within the
+approved deferral. It does not prove the original corruption cause.
+
+`registry-state-minimal1221-unit` retains the unchanged
+`FAIL_NO_ACCEPTANCE` summary, actual qualified outcomes and
+`classification-review.json`. No failing case is retried or removed from
+the natural inventory. Full Registry, Core, Product and release receive
+no acceptance from this run. The Registry candidate is not promoted, the
+task remains incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Isolated Registry changes do not close current Core admission
+
+E1222 runs the original complete Core gate on published `96c4eb6` plus only
+the eight-file Registry candidate from E1221. The observed Source, SQL,
+permission, Receipt, working-invoice and process requirements remain intact.
+Build passes in 507.54 seconds. Execution still fails after 49.65 seconds at
+the original model-selected Program assertion with `input_attachment.capacity`.
+ELF SHA-256 is
+`e55996a695373fa195b0aefae25b3f287f74d1a1cb5fcd27a05504876645b044`.
+All 197 observed execution processes are reaped.
+
+`registry-state-minimal1222-complete-core` retains exact source bindings,
+commands and this failure. Earlier successful deterministic fixture
+scenarios do not turn the enclosing failed gate into a pass. The Registry
+candidate remains unpromoted. Its two unpassed GC samples remain deferred
+with zero current pass credit; no additional quota, timeout or DATA refund
+is introduced. The task remains incomplete and PR #49 stays Draft.
+
+## Current published-Main refusal is fully reconciled
+
+E1223 observes published `96c4eb6` with only the private logical-budget
+constructor observer. No retained behavioral candidate is added.
+Build passes in 471.34 seconds. The original complete Core gate fails in
+113.37 seconds at `input_attachment.capacity`. Diagnostic ELF SHA-256 is
+`7d423d8f1667e60f5b2543000981d20ae219a578af7abbc1a7992601f06f074c`.
+Diagnostic execution time is not a performance result.
+
+The actual first refusal requests 50,331,648 additional bytes from the
+existing attachment owner. Capacity is 150,994,944; charged occupancy is
+107,401,136; overshoot is 6,737,840. Contemporaneous acquisition, growth,
+final-return and fixed-buffer events reconcile every charged byte:
+
+| Actual owner at refusal | Charged bytes | Shared-ledger SUM |
+| --- | ---: | ---: |
+| Registry root 1 | 53,526,840 | 47,120,456 |
+| Registry root 214 | 20,082,296 | 8,516,504 |
+| Application checkpoint root 224 | 16,777,216 | Standalone |
+| Attachment root 225 | 16,777,216 | Standalone |
+| 29 live fixed buffers | 237,568 | Fixed storage |
+
+The attachment request grows its existing floor toward the unchanged
+64-MiB work invoice. It is not an initial read-view output reservation.
+Every one of 17,252 derived-constructor records has its complete serialized
+stack, including all live entries. Raw invoices plus the original 1,024-byte
+per-entry ledger header exactly reconcile both SUMs.
+
+The first provisional family report selected a deeper known frame and
+misgrouped some Prepared producers under `AgentCore.startOwned`.
+That report is preserved, not accepted. Corrected reports use the first
+actual non-budget funding frame and retain its next caller and full stack.
+They identify 53 live `retainPrepared204` children; this sample does not
+observe their export/loan flags or prove any of them may return.
+
+Root 1's peak includes a 9,360,096-byte canonical-plan child, and root
+214's peak includes a 4,194,304-byte Registry validation scratch child.
+Both children actually close before refusal; their parent high-water
+charges correctly remain. This is accounting, not physical-memory or
+leak proof, and does not authorize a partial refund.
+`main-refusal1223` retains original events, source and artifact bindings,
+corrected attribution, exact bank balance and peak/return ancestry.
+Complete Core remains failed, unknown DATA guards remain intact, the task
+is incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Independent canonical graph lifetime does not yet close admission
+
+E1224 adds one Product canonical-owner correction to published `96c4eb6`
+and the eight-file Registry candidate. The copied canonical graph obtains
+its own real message in the same bank. It preserves the original
+131,072-byte header, 8,388,608-byte construction payment, message floor and
+existing exact producer/copy-consumer return gates. Unknown DATA remain
+paid. No private Core, Tool, RunScope or Host correction is included.
+
+Build passes in 456.15 seconds. The original complete Core gate still fails
+after 46.96 seconds at the unchanged model-selected Program assertion with
+`input_attachment.capacity`. Actual ELF SHA-256 is
+`656afd936e678d0c97818831c187a673d57e061e8338ebbb7b07b3c1c598696f`.
+This observer-free run does not supply a new numeric refusal amount.
+`canonical-frame-minimal1224-complete-core` retains exact source bindings,
+the actual build and failed execution. An earlier relative-path wrapper
+launch failed before compilation; it receives no gate credit.
+The candidate remains private. The two unpassed Registry GC samples retain
+zero pass credit. The task is incomplete and PR #49 stays Draft.
+
+## Independent private authorization move preserves the actual DATA owner
+
+E1225 isolates four Tool implementation files and three regressions in an
+existing test file onto published `96c4eb6`. The private coordinator may
+consume only a freshly reloaded, unpublished authorization intermediate.
+The scope must be active and unheld, with the exact Core and producer
+identity, no raw export, unknown debt, producer return or actual consumer.
+Public authorization, retained context-read objects and opaque Context
+keep the original independent-copy path.
+
+The coordinator prepays an additional control wrapper, transfers the
+already paid immutable fields to its Approved wrapper and invalidates the
+old private DATA access. The DATA owner, invoice, final producer/consumer
+return rules and frozen normalized plan remain the same. No DATA return,
+refund or new execution authority is inferred from the move.
+
+All 75 naturally enumerated Native Tool cases pass, preserving all 72
+original cases. The three additions exercise old-access invalidation,
+retention through the real last consumer, blocked moves while an actual
+consumer remains, and rejection after Raw export or opaque Context.
+Build takes 174.91 seconds. Actual ELF SHA-256 is
+`c088e2a60417d9081e3413a9e7f26ebdd6eb413520ac961af51759dfa7676f42`.
+`private-approval-minimal1225-tool-unit` retains exact sources, inventory,
+commands and qualified outcomes. The identical five files are migrated to
+Main; `private-approval-minimal1225-main-source-binding.json` records their
+byte-for-byte applicability. No other private candidate is migrated.
+The identical Main source also passes the original 129 selected Python
+regressions in 13.97 seconds and the complete architecture entrypoint in
+29.03 seconds, including docs and dependency pins.
+`private-approval-minimal1225-main-static` retains both results. The earlier
+ad hoc invocation omitted the established script import path; its loader
+errors remain recorded with zero acceptance credit.
+
+## Tool-only public Core smoke still fails attachment admission
+
+E1226 rebuilds and executes the original public Native Product/Core/recovery
+entrypoint from the same independently isolated five Tool files, without
+private Registry, Host, Core, Product, RunScope or observer changes.
+Build passes in 462.35 seconds. Execution fails after 45.93 seconds at the
+original model-selected Program assertion with `input_attachment.capacity`.
+Actual ELF SHA-256 is
+`4b9eb28df39ab8bee8c9d52cf0d0e2a730f58a764b7dbd1e0a12cda92f7bbf9f`.
+
+`private-approval-minimal1226-complete-core` retains the failed complete
+gate, exact source bindings and real execution command. Unit passes do not
+turn it green. This observer-free run does not establish an actual move
+count or saved-byte amount, and E1223's earlier bank values are not assigned
+to it. Full Core, Product, App, release, five-second request and matching
+baseline remain unaccepted. The task is incomplete, GC stays deferred and
 PR #49 stays Draft.
 
