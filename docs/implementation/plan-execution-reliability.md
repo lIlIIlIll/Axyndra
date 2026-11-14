@@ -5820,3 +5820,101 @@ their exact diff is retained and only those two files are restored.
 Component and standalone Registry passes do not satisfy full Core.
 The task remains incomplete, GC stays deferred and PR #49 stays Draft.
 
+## Mount descriptor scratch ends at its actual private copy frame
+
+E1229 independently corrects `HostRegistryMountDescriptor159` on published
+`925170f` Tool/Registry source. Previously, each retained mount descriptor
+kept the complete UTF-8/source/parser/DTO construction invoice after the
+actual decoding helper had returned. The correction prepays that same
+complete work invoice in a private child, then separately funds the live
+typed descriptor before detaching scratch. Both the actual decoding and
+retained-DATA measurement helpers must return before that child closes.
+The original 16-times text and 2,048-byte structural tariffs remain.
+All 14 descriptor text fields and seven collection roots, including nested
+contribution fields, are included.
+
+This is not a receipt or mount ACK. The descriptor's real DATA owner stays
+paid until its actual complete consumer frame returns. Borrowing is
+rejected while private work remains. Unknown parsing, funding or
+measurement failures retain both work and DATA; subsequent return notices
+do not clear their partial aliases.
+
+| Evidence | Actual result | ELF SHA-256 |
+| --- | --- | --- |
+| `mount-copy-minimal1229-red-host-unit` | Original production source fails the new saturation case | `5b262b472d97ebfa7367dc6008a4b60eedce2820c3ed2a5550be4ea39b178e57` |
+| `mount-copy-minimal1229-green-host-unit` | All 26 selected Native Host cases pass | `2c6122dd6b9c7f4f147da7d580bac2cb9dae43560b2cd22f17f21b5ef77bff41` |
+| `mount-copy-minimal1229-native-smoke` | Public Product imports and enables a real Native worker, observes calls 1 and 2, then rejects invocation after disable | `e3e6c9eb69fba5ae36ce71f5e199dd5733118f49fdaefe6c1532539561c041a2` |
+
+The saturation regression uses the actual Registry and original Native
+bank with an installed eight-extension Pi metadata fixture. Its JavaScript
+files are never executed. It first observes rejection of another genuine
+independent message, then keeps all 32 descriptor copies alive while
+checking them against the original record. Only their actual helper
+returns permit final retirement. The separate deliberate partial-parser
+failure uses an isolated fixed bank and proves that return notices leave
+both charges and aliases intact.
+
+Host naturally enumerates 279 cases: the original 277 and two additions.
+Only the 26 executed cases receive credit, not the whole module.
+The standalone public Product smoke builds in 138.19 seconds and runs
+dependency-ready in 0.63 seconds with exact expected output and closed
+process custody. It is not a cold-start, five-second or matching-baseline
+result. Caller and fixture bytes are retained with the evidence before
+removing the task-only caller scaffold.
+
+Only `registry_metadata_copy.cj` and
+`owned_registry_mount_descriptor159_test.cj` migrate to Main. Their
+SHA-256 values are respectively
+`a0b80f072cae3bf096a5f88bb13ba72190156c6b360742f24fcc527178de4555`
+and
+`8e6a7cf58ebc2c18b8e5f2c42701b918928fda8802f22b4b9fc621a433f1b203`.
+The accepted schema correction remains unchanged; no other private
+Registry, Core, Product, RunScope or observer change is included.
+The fixed SDK, bank, floor, attachment work invoice, SUM/high-water,
+permissions, Source, SQL, recovery and actual final-ACK rules remain.
+Public method signatures and disk formats do not change.
+
+Full Core remains unaccepted: E1228 still fails on its own exact artifact;
+these Host and Product observations do not replace the unchanged complete
+gate on the new source. Full Product, App, release, five-second request
+and matching baseline also remain unaccepted. The task is incomplete,
+GC stays deferred and PR #49 stays Draft.
+
+The identical migrated Main source also passes all original 129 selected
+Python regressions and the complete architecture entrypoint, including
+documentation and dependency pins. `mount-copy-minimal1229-main-static`
+retains the exact source bindings and actual commands. These static
+checks add no complete Core or broader runtime acceptance.
+
+The test hash above identifies the actual Native-tested bytes. Before
+commit, the edit tool's unrelated whole-file CRLF conversion is removed:
+all 401 unchanged original lines keep their exact original endings, and
+only new or changed lines use LF. Final test SHA-256 is
+`8f1fb3da357f2bbfb4c0ae9a8b0a4781d32f5a3444f1b19676357dfd35b2d76b`.
+`line-ending-equivalence.json` retains both raw hashes and verifies equal
+LF-normalized source. No Cangjie token, literal, case or production byte
+changes; existing Native and static evidence remains applicable.
+
+## Mount-only correction still fails the original complete Core gate
+
+E1230 rebuilds the unchanged full Native Core/recovery entrypoint from
+published `925170f` plus exactly E1229's two Host files, without an
+observer or any other private candidate. Production source matches the
+migrated Main bytes. Build passes in 641.93 seconds within the original
+bound. Execution fails after 47.21 seconds at the original model-selected
+Program assertion with `input_attachment.capacity`.
+Actual ELF SHA-256 is
+`4698bf5921ab7688f7ca0eb4112a54967d48cd8fa839e365c17903087c5d8760`.
+
+All 243 observed execution processes are reaped, with no surviving,
+unreaped or unknown process, no watcher fault and both leader and watcher
+returned. Physical cleanup is not DATA ACK. This observer-free run gives
+no new numeric refusal or savings count; E1223's older balance is not
+assigned to it.
+
+`mount-copy-minimal1230-complete-core` retains the exact source diff,
+bindings, command, actual failure and process census. The independent
+Host and public Native Product passes remain narrowly valid, not full
+Core or broader acceptance. The task remains incomplete, GC stays
+deferred and PR #49 stays Draft.
+

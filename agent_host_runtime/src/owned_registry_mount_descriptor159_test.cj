@@ -28,6 +28,88 @@ private func registryDescriptorBorrowFrame159(owner: HostRegistryMountDescriptor
         original.textEquals(PluginDescriptorText.Entrypoint, actual.entrypoint) &&
         original.textEquals(PluginDescriptorText.ContentDigest, actual.contentDigest)
 }
+private func registryDescriptorThrowingCopyFrame1229(graph: HostRegistryCopiedGraph81): Unit {
+    graph.bytes = Some("{\"partial\":[1,2,3]}".toArray())
+    graph.source = Some(String.fromUtf8(graph.bytes.getOrThrow()))
+    graph.document = Some(parseUnifiedJson(graph.source.getOrThrow()))
+    throw IllegalStateException("actual private mount descriptor decode failure")
+}
+private func registryDescriptorUnknownCopyFrame1229(probe: LogicalJsonOwnerReservation): Unit {
+    let payment = probe.deriveRetainedLease()
+    payment.ensureRetainedPeak(65536)
+    let graph = HostRegistryCopiedGraph81(payment)
+    let owner = HostRegistryMountDescriptor159(graph)
+    owner.beginPrivateCopyWork159(1048576)
+    let held = probe.retainedCustodyUsage113()
+    var earlyBorrowRefused = false
+    try { let _ = owner.mountDescriptor159() }
+    catch (_: LogicalJsonPayloadError) { earlyBorrowRefused = true }
+    @Expect(earlyBorrowRefused)
+    var failed = false
+    try { registryDescriptorThrowingCopyFrame1229(graph) }
+    catch (_: Exception) { owner.retainLegacy159(); failed = true }
+    @Expect(failed)
+    owner.returnedPrivateCopyFrame159()
+    owner.returnedMountFrame159()
+    @Expect(graph.bytes.isSome()); @Expect(graph.source.isSome()); @Expect(graph.document.isSome())
+    let after = probe.retainedCustodyUsage113()
+    @Expect(after[0], held[0]); @Expect(after[1], held[1]); @Expect(after[2], held[2])
+}
+private func registryDescriptorSaturatedCopyFrame1229(record: ProductPluginRecord,
+    probe: LogicalJsonOwnerReservation): Bool {
+    let descriptor = record.descriptor
+    let copies = Array<?HostRegistryMountDescriptor159>(32, repeat: None<HostRegistryMountDescriptor159>)
+    let floors = Array<?LogicalJsonOwnerReservation>(32, repeat: None<LogicalJsonOwnerReservation>)
+    try {
+        var saturated = false
+        for (index in 0..floors.size) {
+            try { floors[index] = Some(probe.acquireIndependentDataFrame(4096)) }
+            catch (_: LogicalJsonPayloadError) { saturated = true; break }
+        }
+        if (!saturated) { throw IllegalStateException("original bank must reject another real message") }
+        for (index in 0..copies.size) {
+            let owner = match (hostRegistryMountDescriptorCopy159(descriptor)) {
+                case Result.Ok(value) => value
+                case Result.Err(_) => return false
+            }
+            copies[index] = Some(owner)
+            if (!registryDescriptorBorrowFrame159(owner, descriptor)) { return false }
+        }
+        true
+    } finally {
+        // Every actual raw-descriptor helper returned; keep all copied DATA
+        // alive until that point, then retire only those actual consumers.
+        for (value in copies) { match (value) {
+            case Some(owner) => owner.returnedMountFrame159(); case None => () } }
+        for (value in floors) { match (value) {
+            case Some(owner) => owner.close(); case None => () } }
+    }
+}
+private func registryDescriptorSaturatedActualFrame1229(): Bool {
+    let root = Directory.createTemp("/tmp").toString()
+    var registry: ?PluginRegistry = None
+    try {
+        let directory = root + "/source/extensions/"
+        Directory.create(directory, recursive: true)
+        File.writeTo(root + "/source/package.json",
+            "{\"name\":\"generation159\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"extensions/one.js\",\"extensions/two.js\",\"extensions/three.js\",\"extensions/four.js\",\"extensions/five.js\",\"extensions/six.js\",\"extensions/seven.js\",\"extensions/eight.js\"]}}".toArray())
+        for (name in ["one", "two", "three", "four", "five", "six", "seven", "eight"]) {
+            File.writeTo(directory + name + ".js",
+                "throw new Error('MUST_NOT_EXECUTE_DURING_DATA_COPY');".toArray())
+        }
+        let actual = PluginRegistry(root + "/settings", root)
+        registry = Some(actual)
+        let record = registryDescriptorRecord159(actual.importLocal(root + "/source"))
+        try {
+            let probe = record.descriptor.deriveCopiedDataPayment(4096)
+            try { registryDescriptorSaturatedCopyFrame1229(record, probe) }
+            finally { probe.close() }
+        } finally { record.close() }
+    } finally {
+        try { match (registry) { case Some(value) => value.close(); registry = None; case None => () } }
+        finally { remove(root, recursive: true) }
+    }
+}
 private func registryDescriptorActualFrame159(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     var registry: ?PluginRegistry = None
@@ -82,8 +164,8 @@ private func registryDescriptorActualFrame159(): Unit {
     }
 }
 
-// Actual Registry parser/owned record + original Native bank, with no native
-// worker, Tool, SQL receipt, mock owner, or Source factory in this DATA test.
+// The actual Registry copy path retains the original Native bank. Deliberate
+// unknown work uses a separate fixed bank, never another test's shared quota.
 @Test
 class HostRegistryMountDescriptor159Tests {
     @TestCase
@@ -96,6 +178,16 @@ class HostRegistryMountDescriptor159Tests {
         let custodyExpected159b3 = before
         @Expect(custodyActual159b3[0], custodyExpected159b3[0])
         @Expect(custodyActual159b3[1], custodyExpected159b3[1])
+    }
+    @TestCase
+    func unknownPrivateParserFailureKeepsBothActualWorkAndRetainedData1229(): Unit {
+        let probe = LogicalJsonOwnerBudget(maximumCharged: 33554432).acquire(65536)
+        try { registryDescriptorUnknownCopyFrame1229(probe) }
+        finally { probe.close() }
+    }
+    @TestCase
+    func returnedPrivateWorkAllowsLiveDescriptorCopiesAtOriginalBankSaturation1229(): Unit {
+        @Expect(registryDescriptorSaturatedActualFrame1229(), true)
     }
 }
 

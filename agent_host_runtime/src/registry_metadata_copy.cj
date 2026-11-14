@@ -378,16 +378,46 @@ func hostRegistryFenceJavaScriptError159(data: HostRegistryMountData159, error: 
 class HostRegistryMountDescriptor159 {
     private let lock = Mutex()
     private var graph: ?HostRegistryCopiedGraph81
+    private var copyWork159: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     private var escaped = false
     private var frameReturned = false
     private var borrowed = false
     var nextRetained159: ?HostRegistryMountDescriptor159 = None
     init(graph: HostRegistryCopiedGraph81) { this.graph = Some(graph) }
+    func beginPrivateCopyWork159(invoice: Int64): Unit {
+        lock.lock()
+        try {
+            let actual = graph.getOrThrow()
+            if (escaped || frameReturned || borrowed || copyWork159.isSome() || actual.descriptor.isSome()) {
+                throw LogicalJsonPayloadError("mount descriptor copy work is unavailable") }
+            let work = actual.payment.deriveRetainedLease()
+            copyWork159 = Some(work)
+            // Preserve the original complete byte/parser/DTO construction
+            // invoice before any private copy is made.
+            work.ensureRetainedPeak(invoice)
+        } catch (error: Exception) { escaped = true; throw error }
+        finally { lock.unlock() }
+    }
+    func returnedPrivateCopyFrame159(): Unit {
+        lock.lock()
+        try {
+            if (escaped) { return }
+            let actual = graph.getOrThrow()
+            if (actual.descriptor.isNone() || copyWork159.isNone()) {
+                throw LogicalJsonPayloadError("mount descriptor private copy has not returned") }
+            // Both the complete decode frame and retained-DATA measurement
+            // have returned. Only their private scratch fields are detached.
+            actual.clearReturnedScratch()
+            copyWork159.getOrThrow().close()
+            copyWork159 = None<LogicalJsonOwnerReservation>
+        } catch (error: Exception) { escaped = true; throw error }
+        finally { lock.unlock() }
+    }
 
     func mountDescriptor159(): PluginPackageDescriptor {
         lock.lock()
         try {
-            if (frameReturned || borrowed) { throw LogicalJsonPayloadError("mount descriptor frame is unavailable") }
+            if (frameReturned || borrowed || copyWork159.isSome()) { throw LogicalJsonPayloadError("mount descriptor frame is unavailable") }
             borrowed = true
             graph.getOrThrow().descriptor.getOrThrow()
         } finally { lock.unlock() }
@@ -420,7 +450,7 @@ class HostRegistryMountDescriptor159 {
         try {
             borrowed = false
             frameReturned = true
-            if (escaped) { return None }
+            if (escaped || copyWork159.isSome()) { return None }
             let actual = match (graph) { case None => return None; case Some(value) => value }
             actual.clearReturnedScratch()
             actual.descriptor = None
@@ -488,15 +518,17 @@ func hostRegistryMountDescriptorCopy159(owned: OwnedPluginPackageDescriptor): Re
         case PluginRegistryResult.Ok(value) => value
     }
     try {
-        // The existing full invoice covers the same copying pipeline and its
-        // fixed carrier/node; no new bank, floor, cap or descriptor authority.
-        let payment = raw.deriveCopiedDataPayment(hostRegistryCopyInvoice81(raw))
+        // Register retained DATA first. The separate private work child below
+        // keeps the original complete copy invoice through its actual frame.
+        let payment = raw.deriveCopiedDataPayment(65536)
         let graph = HostRegistryCopiedGraph81(payment)
         let owner = HostRegistryMountDescriptor159(graph)
         hostRegistryMountDescriptors159.retain159(owner)
         try {
+            owner.beginPrivateCopyWork159(hostRegistryCopyInvoice81(raw))
             hostRegistryCopyFrame81(graph, raw)
-            graph.clearReturnedScratch()
+            payment.ensureRetainedPeak(hostRegistryMountRetainedInvoice159(graph.descriptor.getOrThrow()))
+            owner.returnedPrivateCopyFrame159()
             Result.Ok(owner)
         } catch (error: Exception) {
             // Unknown construction failures retain all partial aliases.
@@ -506,6 +538,71 @@ func hostRegistryMountDescriptorCopy159(owned: OwnedPluginPackageDescriptor): Re
     } catch (_: LogicalJsonPayloadError) {
         hostPluginResourceError("plugin.registry_metadata_capacity", "registry metadata cannot fit the original shared capacity")
     } finally { raw.close() }
+}
+
+private func hostRegistryMountTextInvoice159(current: Int64, text: String): Int64 {
+    if (text.size > 134217728 / 16) {
+        throw LogicalJsonPayloadError("Host registry copied data exceeds its original aggregate") }
+    hostRegistryAdd81(hostRegistryAdd81(current, 2048), text.size * 16)
+}
+private func hostRegistryMountStringsInvoice159(current: Int64, values: Array<String>): Int64 {
+    var invoice = hostRegistryAdd81(current, 2048)
+    for (value in values) { invoice = hostRegistryMountTextInvoice159(invoice, value) }
+    invoice
+}
+private func hostRegistryMountRetainedInvoice159(value: PluginPackageDescriptor): Int64 {
+    // The typed DTO retains these values, not JSON keys, punctuation, the
+    // complete source/byte copy or parser DOM. Keep the original 16x text and
+    // 2048-byte structural tariffs. Private measurement getter clones remain
+    // paid by the complete working invoice until this helper returns.
+    var invoice: Int64 = 65536 + 5 * 2048
+    invoice = hostRegistryMountTextInvoice159(invoice, value.id)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.namespace)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.version)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.source)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.root)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.manifestPath)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.overlayPath)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.compatibilityProfile)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.entrypoint)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.sdkRange)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.protocolRange)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.contentDigest)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.declaredContentDigest)
+    invoice = hostRegistryMountTextInvoice159(invoice, value.signature)
+    invoice = hostRegistryMountStringsInvoice159(invoice, value.missingDependencies)
+    invoice = hostRegistryMountStringsInvoice159(invoice, value.requestedCapabilities)
+    for (item in value.components) {
+        invoice = hostRegistryAdd81(invoice, 2048)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.relativePath)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.name)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.identity)
+        invoice = hostRegistryMountStringsInvoice159(invoice, item.dependencies)
+    }
+    for (item in value.dependencies) {
+        invoice = hostRegistryAdd81(invoice, 2048)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.name)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.versionRange)
+    }
+    for (item in value.hookDeclarations) {
+        invoice = hostRegistryAdd81(invoice, 2048)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.event)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.matcher)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.command)
+    }
+    for (item in value.componentDependencies) {
+        invoice = hostRegistryAdd81(invoice, 2048)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.namespace)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.versionRange)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.name)
+    }
+    for (item in value.contributions) {
+        invoice = hostRegistryAdd81(invoice, 2048)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.name)
+        invoice = hostRegistryMountTextInvoice159(invoice, item.inputAttachmentField)
+        invoice = hostRegistryMountStringsInvoice159(invoice, item.allowedUserControls())
+    }
+    invoice
 }
 
 // Private copied catalog DATA, including recursive declarations and callback

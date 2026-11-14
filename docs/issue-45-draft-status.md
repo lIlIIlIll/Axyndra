@@ -3218,3 +3218,37 @@ unknown identity, without treating physical return as DATA ACK or assigning
 an earlier artifact's numeric refusal. The current committed combined
 source therefore still lacks full Core acceptance. The task is **not
 complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1229](implementation/plan-execution-reliability.md#mount-descriptor-scratch-ends-at-its-actual-private-copy-frame)
+separates the original prepaid mount-descriptor copy work from the live
+typed DATA invoice. Work retires only after the actual decoder and
+measurement helpers return; the descriptor keeps its real DATA payment.
+Unknown failures keep both charges and partial aliases, and an early
+descriptor borrow is rejected. Original tariffs, bank/floor, SUM and final
+consumer-ACK requirements remain.
+
+The real original-bank saturation regression fails before the correction
+and passes after. All 26 selected Native Host cases pass, including the
+partial-failure debt boundary; all 279 natural cases remain present, with
+no whole-module credit. A standalone public Product executable imports a
+real Native plugin, observes two calls on the same worker and rejects
+invocation after disable. Exact sources, fixture, output and ELF hashes
+are retained before removing the caller scaffold.
+
+Only the two independently exercised Host files migrate to Main.
+No complete Core, Product, App, release, five-second request or matching
+baseline acceptance is inferred. The task is **not complete**, GC stays
+deferred and PR #49 stays **Draft**.
+
+The identical migrated Main source also passes all 129 selected Python
+regressions and the complete architecture entrypoint, including docs and
+dependency pins, without broader runtime credit.
+
+[E1230](implementation/plan-execution-reliability.md#mount-only-correction-still-fails-the-original-complete-core-gate)
+rebuilds the original complete Core entrypoint with exactly the E1229
+production source and no observer or other candidate. It still fails
+`input_attachment.capacity`. All 243 observed processes are reaped with
+no unknown identity; physical return is not DATA ACK, and no earlier
+numeric refusal is assigned to this new artifact. Host and standalone
+Native Product passes do not satisfy full Core. The task is **not
+complete**, GC stays deferred and PR #49 stays **Draft**.
