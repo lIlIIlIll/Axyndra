@@ -7645,3 +7645,210 @@ PR #49 stays Draft.
 
 
 
+## Current read-view composition still fails complete Core
+
+E1362 now has actual execution evidence; the preceding checkpoint's
+“unverified” describes its state before this execution. Its fresh build
+takes 731.62 seconds and the original complete Core run takes 79.77 seconds.
+All three matched samples, intervening plan cases, exact one-call scheduler
+rejection and forbidden-write scenario proceed. The following forbidden-shell
+scenario fails `input_attachment.capacity`, before any derived admission.
+The actual canonical root is operation 100; root 99 has the denied-write
+business failure, not an attachment or permission bypass.
+
+Core ELF:
+`ecf3ae87d295307c867da6c803366c01c0cb811e1dd5d3e62c9a8df5a3eaf670`.
+E1363 passes all 281 naturally enumerated Host cases on that source; Host ELF:
+`292e321158e323604b9e88c5958962ab5d551da40d8794d067b970a9fe7e46b6`.
+Six original Store files are retained read-only. Every observer FD closes;
+separate analysis copies pass `quick_check`. Canonical plan decoding is
+checked by exact re-encoding, not by interpreting arbitrary JSON text.
+
+`reader-frame1362-complete-core`, `reader-frame1362-store-retained`,
+`reader-frame1362-canonical-analysis` and `reader-frame1363-host-unit`
+retain these distinct execution and component results. No complete Core
+credit follows from the Host pass.
+
+## Current refusal accounting identifies an aliased derived-call boundary
+
+E1367 rebuilds the exact E1362 behavior with three private numeric-only
+overlays: the existing reservation observer, first-unknown metadata origins
+and catalog first-held origins. Every other protected source matches E1362;
+removing the metadata observations leaves the same functional tokens.
+The trace uses a fresh unique sink and retains every event without filtering
+small growth. Neither logs nor closures retain owner or child references.
+
+The actual first refusal reconciles exactly:
+
+| Current E1367 quantity | Bytes |
+| --- | ---: |
+| Charged at refusal | 102,044,284 |
+| This request's actual incremental growth | 50,331,648 |
+| Unchanged shared-bank capacity | 150,994,944 |
+| Overshoot | 1,380,988 |
+
+The charge is the sum of these current holders:
+
+| Holder | Charged bytes | Live SUM bytes | Live leases |
+| --- | ---: | ---: | ---: |
+| Main shared Root 1 | 51,352,112 | 48,461,520 | 565 |
+| Artifact-failure Product Root 220 | 16,785,484 | 6,705,760 | 121 |
+| Actual checkpoint-slot Root 265 | 16,777,216 | — | — |
+| Attachment requester Root 266 | 16,777,216 | — | — |
+| 43 fixed buffers | 352,256 | — | — |
+
+This identifies custody and the actual refusal, not a leak, DATA return,
+or permission to refund the difference between SUM and high-water.
+The active checkpoint slot and attachment work remain real live invoices.
+E1349's older figures are not applied to this execution.
+
+Every current first-unknown metadata origin is retained: Root 1 has ten
+`executeServiceChildFrame159`, 21 Legacy and 28 `validateChildPlan` origins;
+Root 220 has one Legacy and two `validateChildPlan` origins. The ten private
+read-view Parents first export through
+`prepareDerived → pipelineCall204 → Prepared.call`.
+These are first exports, not last-consumer witnesses.
+
+Changing that getter alone would be unsafe. The actual
+`readViewChildArguments` constructs a new outer object but reuses the frozen
+Parent's host fields and intent. A normalizer, validator or policy callback
+that retains the child call can therefore retain the Parent's JSON subtree.
+The copied call must be independently paid before any such open callback;
+a nominal loan or copied call wrapper is not isolation.
+
+Diagnostic Core ELF:
+`19047753ba7709adf2b349c681f8938605348c1612e4ecc9dd77f1ccfcfd8d86`.
+`current-debt1367-diagnostic-core`, its complete `events.txt`,
+`remaining-exports.json`, `current-debt1367-store-retained` and
+`current-debt1367-canonical-analysis` preserve the source-bound trace and
+separate canonical outcomes. Complete Core still fails forbidden-shell
+attachment capacity; the diagnostic execution is not acceptance.
+
+## Independent complete derived inputs pass Tool contracts but not Core
+
+E1374 adds a same-bank, data-only complete copy of the derived `ToolCall`
+and the actual Parent call ID. The original 8 KiB control and 16 KiB scalar
+copy work are prepaid before graph copying. The existing occurrence meter,
+tariffs, cycle checks and exact numeric spelling remain in use. Copies
+exposed to open callbacks stay paid as unknown DATA; callback return,
+canonical completion and physical worker exit do not acknowledge them.
+
+Only a still-private detached Parent uses this route. Already Raw/unknown
+or ownerless Parents retain the original conservative path. Both
+`prepareDerived` APIs still call the same `prepareResolved` and preserve
+Source/context checks, frozen-plan matching, current capability ceilings,
+canonical OperationRuntime and SQL rules. There is no caller-supplied
+authority, alternate executor or generic opaque-Context refund.
+
+E1375 passes all 79 naturally enumerated Tool cases. Its two added behavior
+regressions verify mutation isolation from the actual frozen Parent,
+retained copied JSON and exact numbers after the Parent's actual DATA
+return, and genuine saturation with no publication or retained unaccepted
+lease. Existing Raw, Source, approval, replay and actual custody controls
+also pass. Tool ELF:
+`fe76a03cd28dd6a6aeacda9a2a2e66c636d6fc1878d1beb53700758c18ad1b2e`.
+
+The actual complete Core still fails the subsequent forbidden-shell
+attachment boundary after all matched samples and preceding plan scenarios.
+Fresh build: 580.88 seconds; original run: 81.45 seconds. Core ELF:
+`0ff1409f62e562c677f804e08f867fc8d3353d7fdda1926c7c3013c5595ace23`.
+All six original Store files are retained; separate copies pass
+`quick_check`. The actual failed operation remains root 100 with
+`input_attachment.capacity` and zero derived admissions.
+E1367's numerical balance is not assigned to this new execution.
+
+`owned-derived1374-core-source.json`, `owned-derived1374-complete-core`,
+`owned-derived1374-store-retained`,
+`owned-derived1374-canonical-analysis` and `owned-derived1375-tool-unit`
+bind this private composition and its limits. E1379's current numeric-only
+attribution and E1382's post-change Host run are pending at this checkpoint.
+None of these private runtime candidates has been promoted to the PR.
+
+## Actual yjson AST attribution does not yet fix first CLI execution
+
+E1364/E1365 isolate the fixed SDK's actual SHA-256 implementation without
+an Axyndra dependency, wrapper, runtime or setup requirement. A standalone
+64 MiB/64 KiB-buffer caller produces the exact reference digest in each of
+three executions. Reported Cangjie hashing times are 139, 129 and 132 ms;
+the three reference Python process times are 128, 131 and 131 ms.
+Initial missing-library launch failures are preserved separately; no
+algorithm ran in those failed launches. This is a narrow causal probe,
+not a matched 20-sample product benchmark or a replacement hash implementation.
+
+Actual archive-symbol inspection attributes all three AST initializer
+references to the pinned yjson archive. Axyndra's domain, logical payload,
+process and yjson-support producer archives have none. Real standalone
+Derive and separate static-library consumer probes do not acquire AST
+dependencies. The pinned yjson `src/lib_json_bind.cj` instead has an unused
+`import std.ast.*`; its remaining code uses no AST symbol.
+
+E1371 changes only that line in a task-private copy of all 43 pinned
+yjson Cangjie sources. A nested namespace binding supplies this explicitly
+modified dependency; the original cache's 43 source hashes remain unchanged.
+No Axyndra source changes, official SDK changes, library omission or skipped
+integrity checks are involved. This is not an unchanged-pin release.
+
+E1373 combines the same private dependency with the existing eight Native
+manifests' dependency-wide `-O2` and verbose producer commands. Workflow
+already has its original `-O2`; all nine public packagers remain unchanged.
+Both experiments use the same previously qualified immutable App input.
+
+| Actual private experiment | Native package bytes | Coding9 producer | Clean/setup | ModelProvider | Original first CLI call |
+| --- | ---: | --- | --- | --- | --- |
+| E1371, no unused AST import | 231,689,691 | Pass, 505.47 s | Pass | 51/51 | Five-second timeout |
+| E1373, same dependency plus O2 | 210,489,067 | Pass, 1,082.04 s | Pass | 51/51 | Five-second timeout |
+
+Each actual Native ELF loses its AST `DT_NEEDED` entry and the package
+closure no longer requires the AST library; the library is not merely
+removed from the package. Original runtime, engine, license, clean-path
+and post-link identity checks still run. Audited generated E1371 lock
+churn is restored exactly to the original pins. The modified dependency
+and O2 candidates remain private and are not an accepted startup fix.
+
+`sha-probe1364/corrected-summary.json`, `derive-link1366`,
+`derive-static1369`, `startup-no-ast1371-source.json`,
+`startup-no-ast1371-current-coding`, `startup-no-ast-o2-1373-source.json`
+and `startup-no-ast-o2-1373-current-coding` retain the distinct proof scopes.
+
+## First CLI timeout is not proof that no HTTP request was attempted
+
+The original profile gate applies its five-second timeout to the complete
+CLI subprocess, not just HTTP. Its uncaught `TimeoutExpired` traceback
+does not print captured child stdout/stderr. Earlier timeouts alone
+therefore do not locate initialization, request execution or shutdown.
+
+E1378 adds observation only around the unchanged original fixture:
+actual SSE-handler entry/return timestamps, original `invoke` entry/unwind
+and captured partial output if `TimeoutExpired` occurs. Original request
+authentication/model assertions, response bytes, configuration, commands
+and five-second bound remain unchanged. All retained E1373 App, Native,
+dependency and fixture-source identities are guarded.
+
+This execution takes a different failure path: the first original `invoke`
+unwinds after 4.923 seconds with `approval required`; neither actual HTTP
+handler is entered, and profile two is not attempted. The original
+nonzero-exit assertion fails. This is not a successful first call,
+startup-budget acceptance, or evidence that approval should be bypassed.
+The earlier timeout executions are not retrospectively reclassified.
+
+The physical watcher observes and reaps the actual descendant processes;
+no owned or unreaped process remains. That physical result is not a DATA
+ACK. The existing Core-only Store watcher captures zero files because the
+real CLI uses `sessions`, not the fixture's `state` directory. No canonical
+Store claim follows from that empty capture.
+
+E1381 smoke-proves a narrow sessions-directory adapter using a separate
+throwaway real SQLite WAL fixture: all three original inodes survive
+normal unlink, no observer error occurs, and every FD closes. The actual
+CLI's pending plan/approval and the canonical reason for its decision
+still require observation; the smoke fixture is not that evidence.
+`startup-observation1378` and `startup-observer1381-selfcheck` retain these
+different scopes.
+
+The public checkpoint remains documentation-only `414b4f8`, with behavior
+source `fb35f53`. E1376 preserves the complete existing PR body and reads
+back the exact current head, Open state and Draft flag after a body-only
+update. Non-GC Core, the first complete model call, remaining non-GC
+Product/application flows, matched baseline and final release remain
+unaccepted. User-deferred GC has zero pass credit; PR #49 stays Draft.
+

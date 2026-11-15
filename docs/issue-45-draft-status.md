@@ -3714,3 +3714,51 @@ The task is **not complete**, GC has **zero pass credit**, and PR #49 remains
 
 
 
+### Current private Core and first-CLI evidence E1362–E1382
+
+Public behavior remains `fb35f53`; `414b4f8` only updates the two existing
+acceptance records. Subsequent runtime, Native O2 and modified-yjson
+candidates remain private. None is an accepted complete PR delivery.
+
+| Requirement / source | Current observable evidence | Source/artifact binding | Status and remaining gap |
+| --- | --- | --- | --- |
+| Non-GC complete Core, fixed shared bank and actual DATA return | E1362 and E1374 proceed through the matched samples and denied-write case, then fail forbidden-shell attachment capacity with zero derived admissions | `reader-frame1362-core-source.json` / Core `ecf3ae87…`; `owned-derived1374-core-source.json` / Core `0ff1409f…`; six retained Store images per execution and separate checked analysis copies | Partially implemented; complete Core not accepted |
+| Refusal-time accounting, no invented ACK/refund | E1367 reconciles actual charged 102,044,284 + incremental growth 50,331,648 against unchanged capacity 150,994,944, overshoot 1,380,988; all current roots, fixed buffers and first exports retained | `current-debt1367-diagnostic-core/events.txt`, ELF `19047753…` and canonical analysis | Diagnostic evidence only; neither SUM/high-water differences nor first exports establish DATA return |
+| Independent Parent/child DATA without authority bypass | E1375 passes 79 natural Tool cases, including actual JSON mutation isolation, retained copied numbers after original Parent return and genuine saturation without publication | `owned-derived1375-tool-unit`, ELF `fe76a03c…` | Component evidence only; full Core still fails, E1379 numeric attribution and E1382 Host regression pending at this checkpoint |
+| Original five-second first CLI/model flow | E1371/E1373 actually build all nine Native packages and pass clean/setup and ModelProvider 51; both original first CLI calls time out | `startup-no-ast1371-current-coding`, `startup-no-ast-o2-1373-current-coding`; immutable App with explicitly modified private dependency | Partially implemented; no first-call, second-profile, matched-baseline or release acceptance |
+| Exact authorization of the real first call | E1378's original first invoke returns `approval required` after 4.923 seconds; zero actual local HTTP entries, original exit assertion fails | `startup-observation1378`; fixture and every retained package identity guarded | Unresolved; canonical pending plan not captured yet, no approval bypass or retrospective timeout classification |
+| Current product/application and release definition | No new complete non-GC Product/application, matched-baseline or final-release evidence | Existing canonical matrices and the source-specific records above | Not accepted; GC remains deferred with zero pass credit |
+
+[E1362/E1363](implementation/plan-execution-reliability.md#current-read-view-composition-still-fails-complete-core)
+replace the earlier unverified checkpoint with actual failed Core and
+281/281 Host results. Those Host results do not apply automatically to
+the later derived-call change.
+
+[E1367](implementation/plan-execution-reliability.md#current-refusal-accounting-identifies-an-aliased-derived-call-boundary)
+finds ten private Parent first exports at `prepareDerived → pipelineCall204`.
+The actual child arguments alias frozen Parent JSON, so changing only the
+getter would not safely retire Parent DATA.
+[E1374/E1375](implementation/plan-execution-reliability.md#independent-complete-derived-inputs-pass-tool-contracts-but-not-core)
+independently prepay and copy the complete child call and actual Parent ID
+before open callbacks, preserving the original Raw fallback and canonical
+Source, policy, capability, OperationRuntime, SQL and ACK rules.
+Unknown copied DATA remains paid. Complete Core still fails.
+
+[E1364–E1373](implementation/plan-execution-reliability.md#actual-yjson-ast-attribution-does-not-yet-fix-first-cli-execution)
+isolate the actual pinned yjson unused AST import rather than substituting
+hashes or omitting required libraries. Actual Native closures lose that
+dependency after the single-line private change, but neither the default
+nor O2 combination passes the original first-call gate. The modified cache
+is not an unchanged dependency pin or a published fix.
+
+[E1378/E1381](implementation/plan-execution-reliability.md#first-cli-timeout-is-not-proof-that-no-http-request-was-attempted)
+distinguish the whole-process timeout from actual HTTP arrival and preserve
+the new approval failure. The Core-only watcher produces no CLI Store
+images; a separate sessions-adapter smoke test is not evidence about the
+real pending operation.
+
+The task remains **not complete**, user-deferred GC has **zero pass
+credit**, and PR #49 remains **Draft**. No new external model call, SDK
+build/replacement, quota/stack/deadline increase, manual CI, force update,
+Ready, merge or Issue closure is authorized or claimed.
+
