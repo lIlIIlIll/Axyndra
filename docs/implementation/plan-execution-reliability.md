@@ -6231,3 +6231,536 @@ nor whole Product, startup, matching-baseline or release acceptance.
 Core's non-GC gap remains open. GC stays deferred, the task remains
 incomplete and PR #49 stays Draft.
 
+## Real full-byte inspection reproduces the worker pressure defect
+
+E1239 builds a standalone public Native Registry caller against published
+`c054476`. A deterministic Pi package has two real 1 MiB payloads, a
+manifest and an extension that must never execute. Independent standard
+Python SHA-256 computes both original and same-length-mutated complete
+v2 tree identities. The unpressured current-byte inspection matches the
+original exact digest.
+
+The caller then holds five actual same-bank independent reservations,
+grows its paid loan to actual bank refusal, verifies that another actual
+independent message is refused, and returns only 66 never-filled
+caller-owned fixed guards. Under that real pressure, the original
+inspection fails `plugin.registry_metadata_capacity`. No Source DATA,
+unknown consumer or high-water mark is acknowledged.
+
+E1240 changes only the optional parallel-selection block in a private
+checkout. The original full-byte serial path still reads every file,
+checks path/root/type/symlinks, pre/post metadata and size, enforces the
+same tree limits and emits the identical canonical v2 format. The exact
+same caller bytes now match the full original digest under pressure,
+detect the changed full digest and preserve the original immutable
+descriptor. Nothing is cached or authorized by those DATA comparisons.
+
+| Actual Native evidence | Result | ELF SHA-256 |
+| --- | --- | --- |
+| `package-pressure1239-red` | Exact unpressured tree matches; actual pressured inspection fails capacity | `1ac7314fed2662092cb5c9489086ca991ae885de6bbe8e0824ddd7e5462eec36` |
+| `package-pressure1240-green` | Identical caller passes all original/changed full-tree and pressure checks | `4b8d5fb2d36265d2744edee1eb974d8561e2dacc843a6076a29dde4892892373` |
+| `package-serial1242-clean-smoke` | Corrected clean serial production passes the same complete actual checks | `ecd2200675024bf3bd9e13240912905c1d195a853365d9a8fbd063d035237c49` |
+
+Each actual execution has no surviving, unreaped or unknown processes.
+These are focused Source-inspection results, not matching performance,
+five-second startup, plugin execution or complete Core acceptance.
+The serial experiment remains private; no current Main behavior is
+changed by these results.
+
+## Clean serial combination still fails original full Core
+
+The private cleanup removes the unused extra reader, its work-accounting
+method and largest-file bookkeeping. The initial E1241 build correctly
+catches that the deleted worker file also housed the shared canonical
+tree-entry formatter. Its original eight-line implementation is moved
+unchanged into the active digest file. That failed build is preserved.
+The first Core preflight also preserves the old pin-test hash mismatch;
+the corrected proof uses the exact already-published E1238 test hash,
+not a removed source guard. No Core executed in that failed preflight.
+
+E1242 then builds published `c054476` plus the clean serial production
+and the same private canonical payment-scope file, without an allocator
+observer or a unit fixture. Build passes in 512.40 seconds. The unchanged
+complete Core gate still fails its original Program inspection assertion
+after 55.40 seconds. Actual ELF SHA-256 is
+`4e1ace8ec3c3062154dd3d76469710a4b01f110e44e3de5dda3d89c71b1145e6`.
+All 201 observed execution processes are known and reaped. The original
+four-stage source/receipt expectations are not weakened.
+
+The event-driven read-only inode observer retains six actual DB/WAL/SHM
+images after the original fixture unlinks them; all its FDs close and
+its thread returns. Raw captured images remain unopened in SQLite and
+retain all six original hashes. Only separate analysis copies are queried;
+their primary DB passes `quick_check`, then all analysis connections close.
+
+Actual current-source canonical receipts still distinguish the Completed
+Run from failed `plugin.axyndra:workspace.grep` and
+`plugin.axyndra:program.run` receipts. The derived error is
+`plugin.snapshot_stale`, the parent error is `tool_program.subcall_failed`,
+and the actual input-attached/handoff audits do not satisfy the original
+successful completed-attachment provenance join. No SDK field or receipt
+is synthesized. The underlying new-source failure and amount require
+fresh attribution; the old 98,304-byte refusal is not transferred to this
+artifact.
+
+`package-serial1242-complete-core` and
+`package-serial1242-retained-store` preserve the exact source, original
+failure, physical census, original inode images and canonical SQL
+projection. Component pressure success does not close this non-GC Core
+gap. The combination remains private and the task is incomplete.
+
+## Clean serial regression qualification preserves original gates
+
+E1243 converts the real full-tree pressure/mutation caller into a permanent
+Registry regression. Its first build detects an accidental own-package
+import; removing that import fixes the actual cyclic dependency without
+changing any assertion. The original failed build remains preserved.
+Natural Native inventory is required to be the original 39 plus that one
+case, with all three original GC-deferred cases still excluded from
+execution and receiving zero pass credit. E1245 actually passes all 37
+eligible Native cases against the natural inventory of 40. Actual unittest
+ELF SHA-256 is
+`ab622a50442658f87097254ad651e9ea011910376b25f493ff348b91d8c8f220`.
+`package-serial1245-unit` records every original name, command, qualified
+single-case result and closed process custody. This is selected-case credit.
+
+E1244 passes the original 129 Python cases but correctly fails architecture
+because the historical E792 row presents the now-deleted worker path as
+an extant authority. The private documentation keeps the entire old
+investigation and GC conclusion, identifying its historical filename
+without claiming that deleted source still exists.
+
+With that authority formatting and the own-package import corrected,
+E1246 passes all original 129 Python cases in 18.05 seconds and the
+complete architecture gate in 41.86 seconds.
+`package-serial1246-static` records actual commands, complete source
+identity and both results. Full 4 MiB loading work, 64 MiB input work,
+the 144 MiB bank, original floor/SUM/high-water, actual ACK, permissions,
+Source and recovery remain unchanged.
+
+Neither this static pass nor a focused Native pressure pass gives whole
+Registry/Core/Product/App, startup, matched-baseline or release credit.
+Only E1238's separately qualified Registry admission correction is
+published. The serial/canonical combination remains private, GC stays
+deferred, the task remains incomplete and PR #49 stays Draft.
+
+## Fresh serial-source refusal belongs to actual private manifest parsing
+
+E1247 rebuilds the exact failed E1242 production and canonical combination
+with only the frozen, unfiltered numeric allocator observer added. The
+original complete Core still fails Program inspection. Actual ELF SHA-256
+is `4f0095ac30b11c4231b97d3a6ca724ac7bbffd3ac696e2c1658d5eeddb71244b`.
+All 179 observed execution processes are known and reaped.
+
+| First actual refusal fact | Bytes |
+| --- | ---: |
+| Unchanged bank capacity | 150,994,944 |
+| Charged at this refusal | 150,971,744 |
+| Actual additional request | 31,384 |
+| Overshoot | 8,184 |
+
+Every active lease invoice and header agrees with its ledger SUM.
+All root charges and 32 live fixed buffers agree with the bank. All
+13,990 derived identities have unique actual constructor stacks, without
+threshold filtering. The current private-document frame belongs to the
+real nested `Registry.inspect` call reached from the Pi launch check.
+The observer records its prepayment, node growth and return rather than
+inferring them from the failed parent receipt.
+
+`package-serial-refusal1247` preserves the complete event stream, original
+failure, exact bank reconciliation and private-document constructor stack.
+The old worker refusal amount does not apply to this ELF. This accounting
+proves the current refusal, not a leak, a refund or a performance result.
+
+## Actual manifest-read work has a separate retirement witness
+
+E1248 keeps the original full file read, UTF-8 conversion, manifest parser,
+directory/layout validation and fresh tree-byte inspection. It does not
+replace complete inspection with a hash comparison. The private candidate
+funds the original full 4 MiB read work before I/O, separately from returned
+text/error DATA. Those outputs receive their full independent invoice
+before escaping the private frame.
+
+The raw byte holder clears after the actual reader and publication helper
+return. Only its same-payment, one-shot typed retirement can release read
+work. A recorded exact prepublication refusal may return that private work.
+Another logical error after actual output acceptance remains unknown and
+cannot acknowledge it. Full Registry loading/capture work and input work
+are unchanged.
+
+The identical Native public Registry caller now returns only 65 never-filled
+fixed guards, rather than the previous 66. It retains the genuine bank and
+independent-message refusal checks, original full-byte digest, changed-byte
+digest and immutable old descriptor assertions. Caller SHA-256 is
+`d161b9b577b1a2b5c931c46ef8995d6d007b572e587c3cfd7b5cc40c7b994720`.
+
+| Stronger-pressure Native evidence | Actual result | ELF SHA-256 |
+| --- | --- | --- |
+| `manifest-read1248-red-smoke` | Original serial implementation fails `plugin.registry_metadata_capacity` after the genuine refusal | `652eb802beaf509d0038bc96ff38f586df0de177f8801389fe7cc44ed137316e` |
+| `manifest-read1248-green-smoke` | Exact caller passes original/changed full-tree and immutable descriptor checks | `8a50f97d10c27e675a31fd557880e2aeb8dde88f78c21889470301fdb3f2cde3` |
+
+Both executions close their original strict process custody. The Native
+Registry caller does not link the private canonical payment candidate.
+Full Core qualification of the combination and actual retained-DATA/error
+boundary qualification are not yet accepted. No new production change is
+published from these experiments. The task remains incomplete, GC stays
+deferred and PR #49 stays Draft.
+
+## Reader boundaries pass but full Core reaches another package-check refusal
+
+E1250 passes all 37 eligible Native Registry cases and three new public
+`inspectPluginPackage` boundary cases on the exact E1248 production.
+Registry inventory remains 40, with the same three known GC cases not run.
+Extension Runtime naturally enumerates 103 cases; only the three new cases
+run, so the other 100 receive no credit.
+
+The public boundary cases use a real fixed 32 MiB ledger with two actual
+message floors. Exact read DATA survives a later consumer failure. An
+actual before-publication payment refusal returns only private read work.
+A different logical error after retaining real output keeps that work
+charged and refuses the next real consumer. The fixture clears its actual
+DATA only after the asserting consumer frame returns. These are lifetime
+and saturation results, without a product quota change.
+
+| E1250 Native artifact | SHA-256 |
+| --- | --- |
+| Extension Runtime unittest ELF | `ba31544c42af98209125a3d2159deec154f919cbe25d126a2f8cf3c35f3381d3` |
+| Registry unittest ELF | `3703ae4cc56b8807dc964a58aa7a1acca044d3afaf6595c17f76fad70a77a003` |
+
+E1249 builds the same private production plus the canonical payment
+candidate without either unit fixture or numeric observer. The unchanged
+complete Core still fails its original Program inspection assertion.
+Actual ELF SHA-256 is
+`7480ec2ee5eee426503e60e1e869ab01408fc7b4a7b38b9e5a1def0fb15e889d`.
+All 196 observed execution processes are known and reaped.
+
+Six actual DB/WAL/SHM inode images survive the original fixture unlink.
+All observer FDs close and its thread returns. Raw images retain their
+capture hashes and remain unopened in SQLite. Only separate analysis
+copies are queried, and the actual database passes `quick_check`.
+
+The real receipts now include the derived `host.process.readview` operation.
+It fails `read_view.package_changed` with “worker package is unavailable”.
+Workspace reports `workspace.protocol`, and Program remains a failed
+partial receipt despite the Completed Run. Thus the read change reaches
+a later real child but does not establish successful Program provenance.
+The old snapshot-stale diagnosis and refusal amount do not apply to this
+artifact without new evidence.
+
+`manifest-read1250-unit`, `manifest-read1249-complete-core` and
+`manifest-read1249-retained-store` preserve the actual commands, source,
+qualified results, process custody and original canonical projections.
+The full Core gap remains open. The candidates remain private.
+
+## Fresh read-view refusal needs a new working-payment increment
+
+E1251 adds only the frozen unfiltered numeric observer to the exact failed
+E1249 production. Its actual ELF SHA-256 is
+`a84058f04769c66a76beb8c48c7216c6a169164f66f2599162723c9b0005033c`.
+The original complete Core still fails. All 204 execution processes are
+known and reaped.
+
+| Current first refusal fact | Bytes |
+| --- | ---: |
+| Unchanged bank capacity | 150,994,944 |
+| Charged at this refusal | 150,812,360 |
+| Actual additional request | 505,720 |
+| Overshoot | 323,136 |
+
+The exact constructor belongs to the fresh full 4 MiB package-inspection
+work payment, reached from the actual read-view executor's package check.
+The requesting ledger's live SUM remains below its billed high-water.
+That slack is insufficient for the full original work invoice, producing
+the recorded increment. It is not permission to refund the historical
+peak or reduce the invoice.
+
+All current live invoices, headers, root charges and 33 fixed buffers
+reconcile. All 14,289 derived identities have unique actual constructor
+stacks. `manifest-read-refusal1251` preserves every live holder and its
+original stack without threshold filtering. Current attribution does not
+prove any opaque or older consumer has returned its DATA.
+
+E1252 passes the original 129 Python cases but catches one more historical
+E792 authority reference in the private issue ledger. Only that reference's
+formatting is corrected, reusing E1246's qualified wording. The entire
+historical GC evidence, exact old status excerpt and later refutation remain.
+The failed architecture result is preserved; corrected qualification is
+separate. Whole Core, Product, startup, matched baseline and release remain
+unaccepted. The task is incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Published admission source passes all nine production builds
+
+E1253 rebuilds only published `c054476` in a new task-owned cache. Its
+16 source identities exclude the private serial, reader, invocation-work,
+canonical and numeric-observer experiments. All original nine production
+stages pass under their original bounds and strict process custody.
+The fixed official SDK remains read-only.
+
+| Current published-source artifact | SHA-256 |
+| --- | --- |
+| App ELF | `29518401b621209883d7a203d9462218122381362d9bdcb3b56cb3e9ea2b3588` |
+| Minimal ELF | `18b1b4ac1f2d7809fdfc6cf907450de505518de7a8267f2a23b5dc6d9c160a8c` |
+
+`native-admission1253-nine-production-stages` records each real command,
+source identity and artifact. This is production compilation evidence.
+It does not establish a current Coding package, successful local model
+request, matching performance or complete release.
+
+E1254 separately passes the original complete architecture gate in 45.08
+seconds after the private issue ledger's E792 formatting correction.
+All production/test hashes remain identical to E1252, so its 129 Python
+successes remain applicable. `manifest-read1254-architecture` records that
+reuse and the entire original architecture command. This qualifies only
+the private reader combination's static gates.
+
+## Current-invocation work handoff remains a private experiment
+
+E1255 identifies the other retained Registry root as the actual independent
+artifact-failure Product. Its surviving custody is not available for
+arbitrary reuse or refund. Opaque contexts, Prepared values, copied fixture
+observations and all original return proofs remain paid.
+
+The new private design assigns inspection work to the actual current
+invocation's existing Application reservation, without changing its initial
+failure-metadata invoice or acknowledgement protocol. A concrete one-shot
+funding ticket owns only a new empty control child. The inspector obtains
+a distinct full 4 MiB child after checking the same original bank.
+Closing the empty ticket cannot close that actual working child.
+
+Only the latest exact request consumer can request funding. Supplier code
+receives no Raw Context, Source, ToolCall, plan or Registry reservation and
+runs outside Core/custody/Registry locks. Closed or absent suppliers preserve
+the original Registry payment path. Every reopened manifest read requests
+fresh funding. Actual read bytes and unknown-output retention still obey
+the existing typed return witness.
+
+E1256 exercises the public Registry entrypoint with actual same-bank caller
+funding. It first establishes genuine bank growth and independent-message
+refusals. After returning 48 never-filled fixed guards, ordinary inspection
+still fails capacity. Funded inspection then matches the complete original
+and changed tree digests and preserves the immutable old descriptor.
+Another real independent message remains refused afterward.
+
+Actual Native ELF SHA-256 is
+`e8b5d0ff2f50bb8b158cc3df4d3f4a86912b85ee33bda43c29a11d531287d9b4`.
+`invocation-work1256-native` preserves exact source, all six output checks
+and closed process custody. This caller links Domain, Registry and Extension
+Runtime only. The new Core/Application binding is not compiled or accepted
+by that result. Its new ownership/recovery and complete Core requirements
+remain unverified. No private candidate is published.
+
+The bank, floor, SUM/high-water, full working invoices, permissions,
+Source, canonical SQL and actual DATA ACK requirements remain fixed.
+Whole Core, Product, startup, matching baseline and release remain
+unaccepted. The task is incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Published-source Coding package passes selected real entrypoints
+
+E1257 assembles the actual Coding package from E1253's published-source App.
+Actual package ELF SHA-256 is
+`98e572e0a49b01de502c9cb9c61dfb06d10dd5074e6352345e06308060332c12`.
+The original package assembly, clean environment, setup and real captured
+PTY `cards` and `ask` scenarios all pass with closed process custody.
+Source and original App identities match before and after packaging.
+
+`native-admission1257-current-coding` retains commands, package provenance,
+terminal evidence and actual canonical state projections. The known
+GC-deferred fresh-operator scenarios are not retried or counted passed.
+The original local model request gate and complete frontend/release and
+matching-baseline acceptance remain separate. No private reader, work-owner,
+canonical or numeric-observer candidate enters this package.
+The task remains incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Current-invocation binding advances Core but does not complete it
+
+E1258 compiles the private Core/Application binding with the serial digest,
+manifest-reader and canonical-payment experiments. The unchanged complete
+Core fixture still fails its original Program SDK/content/arguments SQL
+assertion. Actual retained canonical receipts now show
+`host.process.readview` failing with `read_view.output_capacity`, rather than
+the earlier package-validation error. The parent Program subcall remains
+failed despite the Run's Completed state.
+
+Actual Core ELF SHA-256 is
+`43aa91b94f1cce535f18a41fd8d7f88f369635cd28b9c3eb82ac04844020fd22`.
+`invocation-work1258-complete-core` preserves commands, source binding and
+closed custody for all 194 observed processes. Six original database/WAL/SHM
+inodes were retained read-only before deletion. Their raw hashes remain
+unchanged; only independent analysis copies were queried, with connections
+explicitly closed. `invocation-work1258-retained-store` preserves the full
+typed canonical projection. No SQL, assertion, permission or DATA-return
+requirement is relaxed. The new output refusal has not yet been numerically
+attributed; amounts from E1251 do not describe this different refusal.
+
+## Published Coding package still fails the original first-model deadline
+
+E1259 runs the untouched `provider_profiles_blackbox` against E1257's actual
+published-source Coding package. The first
+`--print --model profile-one/shared-model` local HTTP fixture request exceeds
+the original five-second subprocess deadline. The second profile is not
+executed. The outer 180-second bound is unchanged; all 50 observed processes
+are reaped with no unknown or remaining process.
+
+`native-admission1259-provider-profiles` binds package SHA-256
+`98e572e0a49b01de502c9cb9c61dfb06d10dd5074e6352345e06308060332c12`
+and the exact unmodified fixture. There are no concurrent agent Native builds
+during this gate. The timeout is not GC evidence or a passing local-model,
+matching-baseline or release result.
+
+## Private funding and custody regressions pass only their selected cases
+
+E1260 initially fails compilation because a new test uses the reserved
+identifier `foreign`. The failure is retained. E1261 changes only those four
+local references to `otherBank`, then passes all 53 selected real Native
+cases: four new same-bank funding/foreign-bank/replay/saturation cases,
+nine original request-custody/task/opaque/actual-failure-ACK cases, three
+public manifest-read DATA/error cases and 37 eligible Registry cases.
+Registry naturally enumerates 40; its three known GC cases remain unexecuted
+with zero credit. No complete module or application pass is claimed.
+
+| E1261 selected module | Actual Native ELF SHA-256 |
+| --- | --- |
+| Domain | `0dd782140b93c4ab1980d3c6dc2a730fa54ce3d5bf3fdded4f4388dfdec99519` |
+| Core | `b2d27409fadd26ce5d5719be8e0408e61a97fabe40aa1362b7f10e5b506356f1` |
+| Extension Runtime | `13ceec51c18b501ecdd180b9f36bdbe1490f6223e88e38c37d6351ef538f0532` |
+| Registry | `7019a5f764b5cc18ed63b6a835a20719757fc80e8df6bf6b910fa2189cc949d9` |
+
+`invocation-work1260-unit` retains RED compilation evidence;
+`invocation-work1261-unit` retains source, natural inventories, exact selected
+cases and closed process custody. Production source is identical to E1258;
+the test-only identifier correction does not change its failed Core result.
+The private experiments are not promoted or published. Whole Core, Product,
+first local model request, matching baseline and final release remain
+unaccepted. The task is incomplete, GC stays deferred and PR #49 stays Draft.
+
+## The new read-view output owner needs its own original floor
+
+E1262 observes the initial output acquisition, not the earlier inspection
+growth. The actual request is 16,777,216 bytes against 150,517,568 charged
+bytes and the unchanged 150,994,944-byte bank: a 16,299,840-byte shortfall.
+The requesting root is zero because no output owner was admitted.
+
+| Actual E1262 root | Constructor-bound role | Charged bytes | Live derived invoices |
+| --- | --- | ---: | ---: |
+| 1 | Main Product Registry custody | 48,821,064 | 45,114,024 |
+| 221 | Independent artifact-failure Product Registry custody | 17,482,744 | 6,917,680 |
+| 231 | Current Application checkpoint slot | 16,777,216 | 135,296 |
+| 232 | Actual input attachment | 67,108,864 | Not a derived ledger |
+| Fixed buffers | 33 actual reservations | 327,680 | Not derived leases |
+
+The complete sum reconciles exactly. All 14,299 derived births have unique
+corresponding constructor stacks; all 589 refusal-time shared holders and
+their full origins are retained without threshold filtering. Actual
+immediate funders distinguish Prepared copies, catalog copies, source loans
+and fixture observations. A deeper Program caller is not the allocation owner.
+
+Actual diagnostic ELF SHA-256 is
+`26278c789f1444bc31ca3653e0fa3b6d0bc3793f85ebadf148fbfe0d5f97fb4a`.
+`invocation-output1262` retains the full events, constructor traces and bank
+reconciliation. The original complete Core still fails. Shared high-water
+remains until the last actual lease closes; closing a child does not refund
+the original root. Neither a low current SUM nor a completed Product permits
+borrowing or refunding the independent artifact-failure root.
+
+## Current first-unknown attribution does not establish final DATA return
+
+E1263 adds private source-only observations at actual first unknown exports
+and Prepared collection attempts. Complete Core still fails with closed
+process custody. Actual diagnostic ELF SHA-256 is
+`b503b578dce6af58fba71067df49b073ec2cea186e77dfb9a3c80362be4b24cd`.
+Its own initial output refusal requests 16,777,216 bytes against 150,518,032
+charged bytes: a distinct 16,300,304-byte shortfall.
+
+The trace records 55 Prepared first-unknown exports and two Core Context
+first-unknown observations. The Prepared callers are the regular Host Tool
+Executor's plan getter and Service Broker child validation's call getter.
+For 52 still-live owners, prior observations establish both actual producer
+return and the monotonic unknown flag, totaling 14,137,472 invoiced bytes.
+Last-observed consumer counts are not claimed as refusal-time counts.
+
+`invocation-debt1263` retains every observed first-export stack and the fresh
+bank/owner correspondence. This reconfirms the E1175 boundary on current
+source; the first getter is not the last consumer. Descriptor capability,
+effect and network callbacks can retain a ToolCall over canonical arguments.
+The existing `hasRawPreparedCallResolver204` predicate covers canonical and
+preparation-read callbacks, not those three callback families. Reusing it or
+a nominal closed flag as a general release proof would be incorrect.
+
+E1267 therefore withdraws an unused private exact-Core Host getter helper
+before any caller migration or compilation. No candidate ELF exists and no
+main source changes result. No unknown flag, Context field, quota, floor,
+high-water, Source, SQL or ACK rule is changed. A correct cutover still needs
+concrete closed consumers or independently paid copies with actual transfer
+and field-clearing evidence.
+
+The existing offline E1258 artifact-failure Product database identifies
+Program, Workspace read, read-view and file-plan proposal operations. The
+file-plan failure is real; the other Product's logical completion is not a
+return receipt for its retained metadata.
+
+## Standalone chmod timing is not startup hotspot proof
+
+E1264 compiles and runs a standalone standard-library probe with the fixed
+official compiler and package-manager versions. It has no Axyndra imports,
+configuration or wrapper dependency. All 30 actual permission subprocesses
+complete successfully and leave the real file at mode 0600.
+
+| Standalone process workload | Samples | Whole-process wall time |
+| --- | ---: | --- |
+| No permission subprocess | 3 | 24.89–26.13 ms |
+| Ten `executeWithOutput` chmod subprocesses | 3 | 34.78–37.01 ms |
+
+`standalone-chmod1264` preserves source, executable, commands and raw results.
+The separate Core diagnostic build can perturb these timings. They are not
+CPU attribution, current App phase timings, a matching release baseline or a
+passing five-second request. The incidental historical chmod stack does not
+justify replacing permission operations or removing their fail-closed checks.
+
+## Portable Skills classification first requires a qualified executable
+
+E1265 refuses the debugger run before executing any case: the original cache
+no longer contains the qualified historical Product ELF. The required hash
+is not found among the 18 retained task-owned unittest paths inspected.
+The guard failure is retained; no different executable is relabeled and no
+historical failure is reclassified as GC.
+
+E1266 instead starts a fresh current-published-source Product test build.
+It exceeds the original 900-second compilation bound. All 110 observed
+processes are closed with no unknown or unreaped process. Static dependency
+and Product archives are generated, but no new case is executed or counted
+passed. `portable-skill1266-current-product` retains the failed build, exact
+source and custody. Cold-build, portable-case and whole-Product acceptance
+remain open. The task is incomplete, GC stays deferred and PR #49 stays Draft.
+
+## Current Portable Skills sample has direct Runtime GC evidence
+
+E1268 reuses the actual static dependency and Product archives generated by
+the failed E1266 attempt. The normal incremental Product test build succeeds
+in 403.23 seconds under the same original 900-second bound and unchanged
+source, compiler, options and tests. This is not a passing cold build.
+Natural enumeration lists 1,086 cases. A subsequent fixture-path guard fails
+before case execution because the new target bind hides historical package
+paths; that failed attempt is retained.
+
+E1269 maps the actual original task-owned fixture cache read-only, without
+altering it or substituting packages. All 17 original manifests, provenance
+records and Native entrypoint hashes match. It reuses the unchanged compiled
+ELF and natural enumeration, then executes only the still-unclassified
+portable Codex Skills public case under its original deadlines.
+
+Actual Product unittest ELF SHA-256 is
+`f2a941be17cd75cd4e1f8fa4521d385d4d008fc95a73217e99bebf3cd6fad87a`.
+The case fails with SIGSEGV in `gc-main-thread`, with an actual
+`MapleRuntime::CheckAndPush` frame from `libcangjie-runtime.so`.
+All ten observed processes return with no unknown or unreaped process.
+`portable-skill1269-current-product` retains the exact fixture bindings,
+normal test frontend output and reviewed classification.
+
+Only this current artifact/sample enters the user's GC deferral, with
+zero pass credit. The older `9bc355c8` SIGABRT/region-assertion sample remains
+unclassified; its history is not rewritten. The new stack does not establish
+the underlying SDK-versus-application root cause. No debugger retry of the
+now-observed GC path is needed. Whole Product, Core capacity, first local
+model request, matching baseline and final release remain unaccepted.
+The task is incomplete, GC stays deferred and PR #49 stays Draft.
+

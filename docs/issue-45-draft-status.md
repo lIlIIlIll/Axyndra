@@ -3339,3 +3339,136 @@ original 129 Python cases and complete architecture gate. The canonical
 payment experiment and observers are excluded. Whole Core, Product,
 startup, matching-baseline and release remain unaccepted. The task is
 **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1239–E1240](implementation/plan-execution-reliability.md#real-full-byte-inspection-reproduces-the-worker-pressure-defect)
+preserves a genuine public Native RED/GREEN result with identical caller
+bytes and independently computed full original/changed tree digests.
+The private serial path removes the additional reader, not Source checks,
+actual DATA charges or authority checks. The corrected clean Native
+production passes the same full pressure and mutation smoke.
+
+[E1241–E1242](implementation/plan-execution-reliability.md#clean-serial-combination-still-fails-original-full-core)
+preserves the caught shared-formatter cleanup error and exact corrected
+source guards. The final clean serial/canonical private combination still
+fails the unchanged complete Core Program inspection. Actual canonical
+SQLite proves failed Workspace and Program receipts despite the Completed
+Run. All six raw inode images remain intact, only separate analysis copies
+are queried, and all observer FDs/threads close. No prior refusal amount,
+Source byte change, false SDK field or completed-attachment credit is
+inferred for this new artifact.
+
+[E1243–E1246](implementation/plan-execution-reliability.md#clean-serial-regression-qualification-preserves-original-gates)
+keeps the actual own-package-import and historical-source-authority
+failures, corrects only those concrete causes, and then passes the original
+129 Python cases and complete architecture. E1245 actually passes all 37
+eligible Native Registry cases, preserving all original 39 names plus the
+new consumer regression and the same three unexecuted GC exclusions.
+This gives selected-case credit only. The serial/canonical work stays
+private; whole Core, Product,
+startup, matching baseline and release remain unaccepted. The task is
+**not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1247](implementation/plan-execution-reliability.md#fresh-serial-source-refusal-belongs-to-actual-private-manifest-parsing)
+records a fresh current-source refusal at actual private manifest parsing.
+Its additional request exceeds the unchanged bank by 8,184 bytes. Every
+ledger SUM, root charge, fixed buffer and 13,990 derived constructor
+identities reconcile. This is current attribution, not a leak/refund or
+startup/performance conclusion.
+
+[E1248](implementation/plan-execution-reliability.md#actual-manifest-read-work-has-a-separate-retirement-witness)
+separates actual full 4 MiB read work from fully paid returned DATA, keeping
+all current-byte, directory/layout, parsing, permission and Source checks.
+The exact same stronger-pressure public Native caller fails before and
+passes after the private change. Full Core and retained-DATA/error
+qualification are still unaccepted. The candidate remains unpublished.
+Whole Product, startup, matched baseline and release remain unaccepted.
+The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1249–E1250](implementation/plan-execution-reliability.md#reader-boundaries-pass-but-full-core-reaches-another-package-check-refusal)
+passes 37 eligible Registry and three public retained-DATA/read-error
+boundary cases, without credit for the three deferred Registry GC cases
+or the other 100 Extension Runtime cases. The unchanged full Core still
+fails. Actual retained canonical receipts now reach the derived host
+read-view operation and fail its package-unavailable check. They do not
+satisfy successful Program provenance. All original captured inode hashes,
+observer return and process custody are preserved.
+
+[E1251–E1252](implementation/plan-execution-reliability.md#fresh-read-view-refusal-needs-a-new-working-payment-increment)
+attributes the new actual refusal to full private read-view inspection work.
+Its 505,720-byte increment exceeds the unchanged bank by 323,136 bytes.
+Every live SUM, bank charge and all 14,289 derived origins reconcile.
+Opaque DATA is not refunded. The original 129 Python cases pass; one
+historical authority-formatting correction still requires the original
+complete architecture gate. The candidates remain private. Whole Core,
+Product, startup, matched baseline and release remain unaccepted.
+The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1253–E1254](implementation/plan-execution-reliability.md#published-admission-source-passes-all-nine-production-builds)
+passes all original nine production builds for published `c054476`, with
+new exact App/Minimal identities and no private behavior candidate.
+Separately, the corrected private reader source passes the entire original
+architecture gate and reuses its unchanged-source 129 Python successes.
+Neither result gives complete release or matching-performance credit.
+
+[E1255–E1256](implementation/plan-execution-reliability.md#current-invocation-work-handoff-remains-a-private-experiment)
+keeps old/opaque holders paid and prototypes a same-bank work child from
+the actual current invocation. A real public Native caller retains ordinary
+capacity refusal, then passes full original/changed Source inspection using
+explicit caller funding without making another independent message fit.
+That result does not compile or qualify the Core/Application handoff.
+The prototype remains private and its new lifetime/recovery contract is
+unverified. Whole Core, Product, startup, matching baseline and release
+remain unaccepted. The task is **not complete**, GC stays deferred and
+PR #49 stays **Draft**.
+
+[E1257](implementation/plan-execution-reliability.md#published-source-coding-package-passes-selected-real-entrypoints)
+assembles the new current published-source Coding package and passes the
+original clean-environment, setup, captured `cards` and `ask` entrypoints.
+Exact source/App/package identities and real process custody are preserved.
+Known GC fresh-operator scenarios remain unexecuted with zero credit.
+Local model, complete frontend/release and matching-baseline gates remain
+unaccepted. No private candidate is published. The task is **not complete**,
+GC stays deferred and PR #49 stays **Draft**.
+
+[E1258–E1261](implementation/plan-execution-reliability.md#current-invocation-binding-advances-core-but-does-not-complete-it)
+supersedes the earlier uncompiled-binding status. The private binding now
+compiles and advances actual read-view package validation, but complete Core
+still fails: canonical receipts report `read_view.output_capacity` and a
+failed parent Program subcall. Run completion is not acceptance. Separately,
+the current published-source Coding package still exceeds the original
+five-second first local model request deadline; no second-profile pass is
+claimed. A corrected test-only identifier permits 53 selected real Native
+funding, custody, read-work and Registry regressions to pass, not whole
+modules. Three known Registry GC cases remain unexecuted with zero credit.
+All process custody and actual source/artifact identities are retained.
+No private experiment is published. Whole Core, Product, startup, matching
+baseline and final release remain unaccepted. The task is **not complete**,
+GC stays deferred and PR #49 stays **Draft**.
+
+[E1262–E1263](implementation/plan-execution-reliability.md#the-new-read-view-output-owner-needs-its-own-original-floor)
+bind the actual new output refusal to its own floor, full bank and live
+holders. The current first-unknown trace identifies the same internal
+Prepared export boundary as E1175, not a final consumer return. The unused
+E1267 borrowed-getter proposal is withdrawn before caller migration or
+compilation; opaque callbacks, Context debt and high-water remain protected.
+The standalone E1264 permission probe does not establish an App startup
+hotspot or justify replacing permission checks.
+
+[E1265–E1266](implementation/plan-execution-reliability.md#portable-skills-classification-first-requires-a-qualified-executable)
+refuse substitution of a mismatched historical executable, then retain the
+fresh current Product test build's original-bound timeout. No portable case
+is executed or reclassified and no Product or cold-build pass is claimed.
+Whole Core, Product, first local model request, matching baseline and final
+release remain unaccepted. The task is **not complete**, GC stays deferred
+and PR #49 stays **Draft**.
+
+[E1268–E1269](implementation/plan-execution-reliability.md#current-portable-skills-sample-has-direct-runtime-gc-evidence)
+compile and naturally enumerate the current Product tests under the original
+bound, then verify all 17 original Native fixture packages through a
+read-only source mapping. The one selected portable Skills case fails on
+the exact new ELF with direct `MapleRuntime::CheckAndPush` GC-stack evidence;
+all ten observed processes are reclaimed. This current sample is deferred
+with **zero passing credit**, not a Product pass. The older incomplete
+SIGABRT sample remains unclassified. Core capacity, the original first-model
+deadline, remaining flows, matching baseline and final release remain open.
+The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
