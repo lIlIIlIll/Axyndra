@@ -6764,3 +6764,451 @@ now-observed GC path is needed. Whole Product, Core capacity, first local
 model request, matching baseline and final release remain unaccepted.
 The task is incomplete, GC stays deferred and PR #49 stays Draft.
 
+## Private full-invoice output custody advances but does not complete Core
+
+E1271 independently inspects the nine retained Coding packages in distribution
+and reverse order. All 18 complete v2 digests match their independent golden
+values. The two orders take 1.546 and 1.276 seconds respectively. Caller ELF is
+`aff3c787620ddb59b77d4a83ae0c2672e635f566db0475e71fb8ea7692ebc328`.
+These are standalone inspection controls, not App startup, shared-bank
+pressure, a matching baseline or the original five-second request gate.
+`package-inspection1271` retains the actual sources and full-byte bindings.
+
+The E1272 private candidate adds a distinct output DATA child of the actual
+one-request supplier. The original same-bank check, full
+`max(16 MiB, 8 * bytes)` invoice, live SUM, child headers, high-water and real
+output consumer remain. A closed, ambiguous or absent supplier does not
+select another request's owner. No allocation token grants execution authority.
+
+| Evidence | Actual result and qualification boundary |
+| --- | --- |
+| E1272, `invocation-output1272-unit` | Six new test-only tuple-index syntax errors prevent execution; no passing cases. |
+| E1273, `invocation-output1273-unit` | Seven actual Domain custody cases and nine existing Core cases pass; the new ambiguous-request case fails. Overall qualification fails. |
+| E1274, `invocation-output1274-unit` | Rejecting the Run-wide supplier when multiple request consumers remain makes all ten selected Core cases pass. Other naturally enumerated cases receive no credit. |
+| E1275, `invocation-output1275-complete-core` | Build passes; the original complete Core consumer crashes before its original Program provenance check. No Core pass. |
+| E1277, `invocation-output1277-nine-production-stages` | A fresh target builds all nine original production stages within their original bounds. Build-only evidence, not a successful Core consumer. |
+| E1279, `invocation-output1279-complete-core` | Fresh complete consumer rebuild passes; execution still fails the original SDK/content/canonical-arguments inspection assertion. |
+| E1281, `invocation-output1281-complete-core` | Passing the original request's DATA supplier explicitly across the process-only cancellation projection permits the first read-only Program and its original provenance check to succeed. The original new-Thread rerun still fails. |
+
+E1274 Core unittest ELF is
+`cda06a1ec3f018998f2dc7df1a53fa07a74315cead2b3b010cf026128613ae62`.
+E1273 Domain unittest ELF is
+`f788b1ac1bbc87b81a182f9fda9dcca4e10a5c6f34adadafad7cc9ec7d90f6a8`;
+its seven cases cover actual retained data, full invoices, foreign-bank
+rejection, saturation and duplicate-close protection. Neither is whole-module
+acceptance.
+
+The E1277 private App is
+`355f281e9d1c2691d29f19450756169833b44183a8c4c52faa03f59f0c1e263f`.
+The failed E1279 Core ELF is
+`6c23d30010f8f745ea6539751a6b2b6ccb3c0778f3d3c493b53000b8d626a60a`.
+The failed E1281 Core ELF is
+`d8cf46ae62d0d0437e6534e07770d9f593d2944019a2c1d6c8a36d10d15959ed`.
+All remain private; the published host behavior remains `c054476`.
+
+## Saved invalid-PC sample is not GC evidence
+
+E1276 reads the already-existing E1275 core with the exact
+`e1fe5595ef16d3d824454b4ebcbf66fc4e1c361a93209d4fb75230622ed18b8e`
+consumer and its matched Native bridge. It does not start a new inferior,
+replace the SDK or repeat the failed workload.
+
+The original `schd-worker` PC is `0xffffffffffffffff`. Signal reporting then
+crashes in `FrameInfo::ResolveProcInfo`, through frame analysis and
+`PrintSignalHandlerStack`. Other GC threads in the saved process do not prove
+the original fault is GC. The apparent Native return address points into
+read-only `/proc/%ld/stat` text, not a validated callee or a proven stat-parser
+defect. Classification remains unclassified invalid managed PC with a
+secondary signal-unwind crash, zero pass credit and no GC deferral.
+`invocation-output1276-saved-core` retains the reviewed binding and the
+779,202,560-byte original core. A later build not reproducing that signal
+does not prove stale ABI or an SDK root cause.
+
+## Current new-Thread refusal has its own complete balance
+
+E1283 adds only task-private numeric bank, root, lease and birth observations
+to the E1281 candidate. It preserves the current DATA APIs, original complete
+fixture, actual acknowledgements, tariffs and deadlines. Every growth is
+recorded without threshold filtering; diagnostic records retain no owner or
+child references. Its exact consumer ELF is
+`dacd48b080cb03c789113a381d8edfcafa7498e109dbcd242f074baf247b0d8c`.
+The original new-Thread assertion still fails.
+
+| Refusal-time quantity | Bytes |
+| --- | ---: |
+| Actual bank capacity | 150,994,944 |
+| Actual charged amount | 101,156,680 |
+| Actual requested growth | 50,331,648 |
+| Actual overshoot | 493,384 |
+| Root 1 high-water charge | 49,857,376 |
+| Root 220 high-water charge | 17,482,728 |
+| Root 235 current checkpoint slot | 16,777,216 |
+| Root 236 actual input attachment before refused growth | 16,777,216 |
+| All 32 live fixed transport buffers | 262,144 |
+
+The four roots plus fixed buffers exactly equal bank occupancy. Root 1 has
+45,896,336 live SUM across 470 leases; root 220 has 6,917,680 across 119.
+Their high-water-minus-live differences are not evidence of a leak, return
+or permission to refund. Root 235 is the actual new Application checkpoint;
+root 236 is created by `HostToolInputAttachmentSession` before its original
+64 MiB working prepayment. No older refusal's amounts or root roles are
+substituted for these observations.
+
+`invocation-output1283-complete-core` retains all 252,280 numeric events,
+actual live-root constructor stacks and the exact balance. Its 256 execution
+processes return without surviving or unknown identities. The earlier E1281
+case closes all 239 execution identities. Physical closure is not DATA ACK.
+Canonical receipts in both retained failure stores identify
+`input_attachment.capacity`; the successful earlier parent Program receipt
+does not make the later Run successful.
+
+The E1275 and E1279 filesystem observers had incorrectly watched the task
+directory rather than its mapped temporary parent. Their empty captures do
+not establish that no Store existed. `core-store-observer1281-smoke` verifies
+the corrected observer against a real committed SQLite row after the original
+path is unlinked. E1281 and E1283 each retain six actual original DB/WAL/SHM
+inodes with zero links. Only separate copied analysis images are queried.
+Both E1283 analysis databases pass `quick_check`; connections close and all
+six raw hashes remain unchanged. Retention is failure provenance, not a new
+Store authority or a DATA return witness.
+
+The numeric observer is removed back to the exact E1281 DATA API source.
+E1285 tries funding the actual input attachment from that one-request supplier
+while retaining its complete original 64 MiB invoice, real child header and
+existing attachment ACK/cleanup conditions. Build passes, but its actual
+`a18c5a3ece42dfcad787ce22863b92f1026f398d885b1dd426de40875155bdc3`
+consumer fails earlier at `fixture.input_copy_capacity`, before the previously
+successful first Program milestone. All 248 observed execution processes
+close without unknown identities. The same-bank working high-water would
+remain with the longer-lived checkpoint; it is not a shorter DATA lifetime.
+The input-funding change and its helper rename are fully withdrawn to E1281.
+The original independent 64 MiB attachment owner remains. No old metadata/
+output-ACK or early-release scheme is reapplied and no Core pass is claimed.
+
+E1289 maps the twelve largest actual live invoices from the existing E1283
+capture to their own original constructor stacks, without another consumer
+execution. Two approximately 1 MiB holders come from canonical-configuration
+loading. The selected configuration stores strings, not its temporary parser
+DOM. E1290 is a private one-file experiment separating the unchanged full
+parser/FD invoice from a distinct prepaid retained string-data child, using
+the existing 16 KiB plus eight-times-text metadata tariff. The whole original
+load/publication frames must return before unused parser data can close;
+unknown or published consumers stay paid. No amount, ordinary root floor,
+high-water, Source/current-file comparison or actual consumer ACK is waived.
+Its three naturally enumerated public DATA ownership regressions pass on
+`bbe3cd53b7847d6693642ec26c5046b8f54df2d4f99733e715b75e7991afb7c3`.
+They cover independent Registry shares, Catalog-blocked early return and
+independent public text exports. The original runner then fails its stale
+ten-case aggregate assertion. The retained finalizer verifies the original
+three receipts, 279-case inventory, source hashes and physical closure without
+rerunning or adding case credit. This is three selected passes, not full Host
+or Core acceptance.
+
+The original complete Core consumer builds as
+`18851cce2bf5fc4c186f04eb61c862361d9bf27a473a59f28f61b3bec6d0f409`.
+It advances through the new-Thread Program rerun, then fails the original
+same-Thread new-Run assertion with `input_attachment.capacity`. All 261
+observed execution processes close without unknown identities. E1294 queries
+only separate analysis copies of its retained canonical databases and the
+earlier withdrawn E1285 input experiment. All four copied databases pass
+`quick_check`, every connection closes, and all twelve original DB/WAL/SHM
+hashes remain unchanged. E1290's latest Run and joined Operation/Receipt fail
+with the actual attachment-capacity error. Earlier completed Runs do not
+authorize DATA refunds or establish complete Core success.
+
+## Actual Native optimization and clean runtime artifact controls
+
+E1278 builds and packages the unchanged standalone ModelProvider with the
+fixed official SDK. Its raw and final ELF bytes exactly match the current
+Coding package. Actual verbose compiler commands show that only `yjson`
+has explicit `-O2`; the other ten compilation modules, including the entry,
+have no explicit optimization option. Workspace flags alone are not proof
+of standalone dependency flags.
+
+E1280 adds only the standalone dependency override and rebuilds the same
+actual producer. The last explicit optimization flag on each of the eleven
+actual compiler commands is `-O2`.
+E1282 runs its unchanged 51-case real executable codec/protocol suite:
+51 pass, zero failures, errors or skips, with all process identities closed.
+These are controlled host-wire-peer cases, not Product authority, SQL,
+public providers or actual HTTP credential injection.
+
+| Single actual ModelProvider artifact | E1278 control bytes | E1280 candidate bytes |
+| --- | ---: | ---: |
+| Raw producer ELF | 18,100,048 | 14,190,960 |
+| Final packaged ELF | 18,350,825 | 14,441,785 |
+| Complete package apparent bytes | 55,149,536 | 51,240,496 |
+
+Candidate raw ELF is
+`c8e3bf4e4c5e1fb8a8d2d34d5e712af61d3842113cddbb30c7c81ec7466ffa35`;
+the final ELF qualified by all 51 cases is
+`1b039280b58ffc16c765aa12b79ed43ec31474a6b73f4b1a951f910a22dc518b`.
+No SDK library or license is removed. This is size and producer evidence,
+not a performance or five-second acceptance result.
+
+The actual 17-builder manifest inventory already has dependency-wide `-O2`
+in Workflow and MCP. Fifteen, not sixteen, lacked it before this experiment.
+E1284 extends that existing convention privately and also fixes actual
+runtime-artifact pollution: the old Coding output contains compiler targets
+with `.cjo` interfaces, while its loader report exposes the build output path.
+The existing public clean-environment check gains actual artifact/privacy
+assertions and fails against that real old artifact before the new assembly.
+No mock packager or copied command assertion is used.
+
+The real nine-package Coding producer now gives each builder an explicit
+target under a unique mode-0700 sibling outside the runtime artifact.
+Compiler evidence remains outside the artifact; no target or interface is
+published as runtime payload. Loader diagnostics replace the output prefix
+with `<package>` while retaining missing-library rejection. Assembly passes
+in 904.86 seconds under the original 2,100-second bound. Real relocated
+clean-environment and setup checks pass with their original bounds and full
+process custody. The exact host ELF remains
+`98e572e0a49b01de502c9cb9c61dfb06d10dd5074e6352345e06308060332c12`.
+The nine Native packages total 313,775,454 apparent bytes. This is not whole
+distribution size, RSS, benchmark or eight Full-only package acceptance.
+
+The new ModelProvider raw and final bytes equal E1280, so its 51-case
+executable evidence applies without a duplicate run. The other quiet build
+targets contain option hashes, not recorded actual compiler command lines;
+no all-dependency command proof is inferred from those opaque hashes.
+`native-release1284-current-coding` retains RED, actual production targets,
+before/final hashes, complete package provenance and clean/setup custody.
+
+E1286 runs the exact unchanged two-profile local HTTP/SSE fixture against this
+new artifact with no concurrent Native build or live sampler. The first
+request still exceeds its original five seconds; the second profile is not
+credited. All 98 observed processes close without unknown identities.
+`native-release1286-provider-profiles` preserves the failure and fixture
+SHA-256. Smaller packages and clean/setup passes do not satisfy startup.
+
+These candidates are not promoted. Complete Core, the original model request
+deadline, remaining non-GC application flows, matching baseline and final
+release remain unaccepted. GC remains user-deferred with zero passing credit.
+The task is incomplete and PR #49 remains Draft.
+
+## Snapshot canonical work and retained graph remain separate private candidates
+
+E1293 separates the original snapshot producer's canonical-codec work from
+the retained snapshot graph. The complete original meter still prepays all
+schema getters, canonical strings, path frames and construction work. A
+second child then prepays the retained nodes, strings, slots and fixed
+metadata before it receives the actual snapshot graph. The private producer
+returns before its original holder clears that graph and closes its working
+payment. The retained holder continues to own the graph, including historical
+exports and unknown consumers. This is an ownership transfer, not proof that
+the graph has been consumed or that an opaque Context has returned.
+
+`toolSetSnapshotLocked159` also reads the actual definition once per entry
+instead of invoking its full-schema-copying getter three times. No definition,
+capability, Source, SQL, attachment invoice or consumer ACK is removed.
+
+The meter's compiled private layout changes, so the original nine production
+stages build against a genuinely empty private target. All nine pass.
+App SHA-256 is
+`b90a16be14c7e0e6d900762a888a1e0cfbcf5b7cd4eb3c5066577d921242ce99`;
+Minimal SHA-256 is
+`30b53ffa77d8c24ac0a4ca8874a51d608af041fd2a1c9cdf7898a28e4bfd83ee`.
+`snapshot-data1293-nine-production-stages` retains the exact source map,
+commands and process-custody records. This grants build credit only.
+E1296 subsequently passes 86 naturally enumerated real SDK case executions:
+
+| Module | Natural inventory | Executed and passed | Native ELF SHA-256 |
+| --- | ---: | ---: | --- |
+| Runtime | 45 | 6 | `4fe5b1524845908a71244f628c015623a5c8992080db981c2411f0ef06aa254e` |
+| Tool | 75 | 75 | `fcf3bf6a2dafdd9d23783bf98a54694fd6cbdafa6a80fec9802bfa499ca26e0a` |
+| Host | 279 | 5 | `cb70901442bac09a98c557207a5edbd674f8dde7191829e0c255a1f00ad51d02` |
+
+Every naturally enumerated Tool case runs in its own original isolated
+process. Runtime covers scalar, actual copied-definition saturation and
+identity ownership. Host covers actual Registry/Catalog snapshot return,
+historical export and all three selected canonical-configuration cases.
+No full Runtime, Host or Product pass is claimed.
+
+E1295 builds the unchanged complete Core consumer as
+`60b7fde407349f1cdab3367ac81bcfbada082641c05a78affb3f54bc1b8d8c42`.
+It passes the original new-Thread and same-Thread Program reruns, then fails
+the original direct-control rejection assertion. All 262 execution process
+identities close without unknown identities. Its actual canonical Store
+contains the completed third Program's exact SDK, artifact and argument
+provenance, followed by one failed Direct Run with no Operation or model
+Attempt. These facts do not identify the returned Outcome or authorize DATA
+refunds. Both separate analysis databases pass `quick_check`; all six raw
+DB/WAL/SHM hashes stay unchanged.
+
+E1300 retains a diagnostic-only consumer whose assertion message identifies
+the unexpected outer `Ok`. Its original boolean and SQL assertions stay
+unchanged. E1304 then tries a stricter typed `Denied` assertion with the same
+permission code and exact call/tool identity, plus canonical zero-execution
+checks. That attempt still fails at the same predicate. The test adjustment
+is fully withdrawn, including the changed no-Thread SQL assertion. It is not
+a test fix, a permission pass or evidence that the original assertion is
+obsolete. E1307's further bounded Outcome diagnostic has no acceptance
+credit. The original contract remains the required consumer.
+
+These implementations remain private. Complete Core, remaining Product and
+application flows, matching baseline and final release remain required.
+
+## System-only leaf dependencies do not need a package search path
+
+E1291 builds the original nine production stages for the current published
+admission host plus same-width all-file balanced hashing. It retains one
+caller, one worker, two 64 KiB scratch arrays and every current-byte check.
+E1297 composes that host with the unchanged E1284 Native9 packages using the
+actual host provenance publisher. Clean environment and setup pass, but the
+first original Profile request still exceeds five seconds. This is a new
+source and package workload, not a passing replay of E1180.
+
+E1298 identifies actual unnecessary ELF layout growth:
+`libboundscheck.so` requires only system `libc`, yet every ordinary packager
+adds an `$ORIGIN` RUNPATH. The original library's large load alignment makes
+that metadata addition expand the packaged file.
+
+E1301 changes the copied library only: inspect its actual dependency closure,
+keep `$ORIGIN` for DSOs with bundled dependencies, and remove search metadata
+for system-only leaves. The original complete dependency resolver, clean
+loader verification, library inventory and license checks remain. No SDK
+source, DSO code, library, notice, scratch allocation or quota changes.
+
+| Exact artifact payload | Before, bytes | Leaf-layout candidate, bytes |
+| --- | ---: | ---: |
+| ModelProvider `libboundscheck.so` | 2,100,601 | 71,720 |
+| Complete ModelProvider package | 51,240,496 | 49,201,814 |
+| All nine Coding Native packages | 313,775,454 | 295,427,316 |
+
+The actual ModelProvider retained-target builder passes, followed by all 51
+original executable protocol cases with zero failures, errors or skips.
+Its source and packaged entry ELF hashes remain E1280's; the changed DSO
+payload receives its own actual runtime verification.
+
+E1302 executes the other eight Coding retained-target packagers and reuses
+the byte-exact E1301 ModelProvider output. E1305 executes all eight Full-only
+retained-target packagers, including unchanged MCP's existing transitive
+layout. All seventeen package closures pass with the exact original raw ELF,
+required library-name sets, system dependencies, engines and licenses.
+Sixteen packagers receive the generic leaf fix; MCP already avoids this
+growth and is unchanged. These are retained-input packaging checks, not new
+Full-only source builds or proof of their new compiler flags.
+
+The actual distribution sealer and host provenance publisher bind the smaller
+Native9 composition to packaged host
+`9f5f59e49ebe0e91a73e0c3e274a55fb1a2ad39eea6b8e0a69f638f77a386aad`.
+Original clean-environment and setup consumers pass. E1303 then runs the
+unchanged two-Profile local HTTP/SSE fixture without a competing build or
+live sampler. Its first request still exceeds five seconds. The second
+Profile is not credited. Reduced bytes, complete loading and codec passes do
+not establish startup, matched performance or final release acceptance.
+
+`balanced-native1297-provider-profiles`, `leaf-runtime1301-model`,
+`leaf-runtime1302-coding`, `leaf-runtime1303-provider-profiles` and
+`leaf-runtime1305-full-only` retain source maps, exact commands, complete
+provenance and physical process custody. These candidates are not promoted.
+The task remains incomplete, GC remains deferred with zero passing credit,
+and PR #49 remains Draft.
+
+## Direct rejection follows the accepted Run-snapshot contract
+
+E1309's diagnostic-only consumer identifies the actual earlier result:
+`Completed(isError=true, error=readonly_delegation.target_stale)`. The
+source-defined top-level `error` field, not an inferred enum or missing
+diagnostic field, supplies that code. This is not a complete Core pass.
+
+The accepted fixed-SDK contract already permits Direct readonly roots with
+an actual available Run snapshot. The historical blanket no-Direct/no-Thread
+assertion conflicts with that contract. E1311 migrates only that assertion:
+the unchanged unavailable-target request must return the exact typed
+`Completed` error, preserve call identity and have no execution receipt.
+Canonical SQL additionally requires one failed Direct Run, zero Operations
+and execution Receipts, and zero model Attempts. A failed Run is a durable
+control record, not execution or authorization. The successful Program's
+original SDK, argument, artifact and seven-receipt checks remain unchanged.
+No production permission, Source, snapshot or execution guard changes.
+
+The complete consumer, ELF
+`12578acf243ad933da5306e852463933359ed402d56e15fff6177a6d49f691da`,
+passes the corrected early assertion and both earlier Program reruns, then
+fails the next partial Program at `input_attachment.capacity`. The later SQL
+assertions are not reached and have no runtime passing credit. E1311
+retains all six original Store images; E1316 queries separate copies only.
+Both copied databases pass `quick_check`, their newest canonical failure
+records the attachment-capacity code, and all raw DB/WAL/SHM hashes remain
+unchanged. Clean physical process custody does not retire DATA.
+
+`direct-snapshot1311-complete-core`,
+`direct-snapshot1311-store-retained` and
+`direct-snapshot1311-canonical-analysis` retain the actual source, exact
+consumer, process custody and canonical facts. The candidate remains private.
+This migration supersedes E1307's provisional requirement to retain the old
+predicate; the failed E1304 `Denied` attempt remains withdrawn, not repaired
+or retroactively credited. Complete Core and every other unmet requirement
+remain open.
+
+## Publication-source packaging is qualified without private runtime experiments
+
+E1314 moves only the sixteen generic system-only-leaf packager changes and
+the clean-artifact producer/checker changes into the publication checkout.
+Standalone manifests, compiler options, dependency pins and Cangjie/native
+source remain unchanged. Private O2 overrides, balanced readers and Core
+ownership candidates are not included.
+
+The actual Coding producer builds all nine Native plugins from those
+unchanged standalone manifests under the fixed official SDK. Compiler
+targets are unique mode-0700 siblings, never runtime artifact contents.
+The loader report replaces the actual package prefix with `<package>`.
+The original relocated clean-environment consumer now also rejects compiler
+interfaces and private home paths; its earlier real artifact RED is retained.
+
+| Actual publication-source verification | Result |
+| --- | --- |
+| Complete fresh Coding9 producer | Passed, 723.10 seconds |
+| Relocated clean environment | Passed |
+| Setup | Passed |
+| ModelProvider executable protocol | 51/51, no failures, errors or skips |
+| Natural packaging Python regressions | 23/23 |
+| Existing selected Python regressions | 129/129 |
+| Complete original architecture gate | Passed |
+
+The unmodified host source uses raw App
+`29518401b621209883d7a203d9462218122381362d9bdcb3b56cb3e9ea2b3588`.
+The actual new packaged App is
+`98e572e0a49b01de502c9cb9c61dfb06d10dd5074e6352345e06308060332c12`;
+the newly built ModelProvider entry is
+`25d8550af0339cfd78c704020b63319bf935db0b1bee119e9317a8ecbe1e03ae`.
+The sixteen publication packager inputs also byte-match the actual E1301,
+E1302 and E1305 seventeen-closure consumers. This reuses their retained-raw
+Full-only closure proof, not fresh Full-only source-build or optimization
+evidence. Every required library, engine and license remains included.
+
+`packaging-publication1314-current-coding` and
+`packaging-publication1317-static` bind actual commands, source inputs,
+artifact hashes and closed physical process custody. The packaging fix is
+the only promoted candidate at this checkpoint. These results do not satisfy
+the five-second model request, complete Core/Product, matched performance
+or final release requirements.
+
+There is no public API, lock format or persisted-data migration. Changed
+package bytes receive their actual new provenance and ordinary content
+identity. Existing installed records and operator enable/disable/scope choices
+are not rewritten or implicitly upgraded. Explicit operator management must
+select an updated package; rollback selects the preceding release/package
+without deleting settings or Store data. Source pins and execution checks
+remain required. The task is not complete and PR #49 remains Draft; GC stays
+deferred with zero passing credit.
+
+## A catalog-cut working child still fails the later capacity contract
+
+E1313 privately separates catalog-cut codec work from its retained replacement
+snapshot without changing class layout or payment floors. The original nine
+production stages pass on the ABI-consistent target; private App is
+`c955bd363b84e38ad51aa7a47208a66951e37faf8ad1fa658a107d65c9a945c5`.
+E1315 rebuilds the complete consumer as
+`d7d5abe7b806d6f7d349f54f3738059386592c4369a7bd223528e4a2eca40eda`.
+It still fails partial Program attachment capacity, with no complete Core
+credit. Its working child does not change the original shared-ledger
+high-water rule. The six retained original Store images remain exact; both
+separate final analysis copies pass `quick_check` and confirm the latest
+`input_attachment.capacity` receipt. No quota, root floor, supplier, DATA
+ACK, Source, SQL or production authority is weakened. This candidate remains
+private; `catalog-cut1313-nine-production-stages`,
+`catalog-cut1315-complete-core` and
+`catalog-cut1315-canonical-analysis-final` retain the actual evidence.
+

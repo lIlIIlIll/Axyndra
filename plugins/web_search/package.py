@@ -77,7 +77,11 @@ def package(arguments):
                 queue.append(destination)
         subprocess.run(['patchelf', '--set-rpath', '$ORIGIN/../lib', str(plugin)], check=True)
         for library in (stage / 'lib').iterdir():
-            subprocess.run(['patchelf', '--set-rpath', '$ORIGIN', str(library)], check=True)
+            # System-only leaves need no package search path. Adding one can
+            # expand an ELF by its large load alignment without changing code.
+            has_bundled_dependency = any(not system_library(source) for _, source in dependencies(library))
+            option = ['--set-rpath', '$ORIGIN'] if has_bundled_dependency else ['--remove-rpath']
+            subprocess.run(['patchelf', *option, str(library)], check=True)
         clean = os.environ.copy()
         clean.pop('LD_LIBRARY_PATH', None)
         for binary in [plugin, *(stage / 'lib').iterdir()]:

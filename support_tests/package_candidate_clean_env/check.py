@@ -19,6 +19,16 @@ SOURCE = Path(os.environ["AXYNDRA_BINARY"]).resolve()
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="axyndra-clean-candidate-") as root_text:
         root = Path(root_text)
+        build_interface = next(SOURCE.parent.parent.rglob("*.cjo"), None)
+        assert build_interface is None, (
+            "runtime distribution contains a compile-time interface: "
+            + str(build_interface.relative_to(SOURCE.parent.parent))
+        )
+        loader_report = (SOURCE.parent.parent / "diagnostics/ldd.txt").read_text()
+        assert str(SOURCE.parent.parent) not in loader_report, "loader report exposes the build output path"
+        assert not any(prefix in loader_report for prefix in ("/home/", "/root/")), (
+            "loader report exposes a private home path"
+        )
         relocated = root / "relocated"
         shutil.copytree(SOURCE.parent.parent, relocated)
         provenance = json.loads((relocated / "package-provenance.json").read_bytes())

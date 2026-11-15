@@ -3472,3 +3472,114 @@ with **zero passing credit**, not a Product pass. The older incomplete
 SIGABRT sample remains unclassified. Core capacity, the original first-model
 deadline, remaining flows, matching baseline and final release remain open.
 The task is **not complete**, GC stays deferred and PR #49 stays **Draft**.
+
+[E1271–E1281](implementation/plan-execution-reliability.md#private-full-invoice-output-custody-advances-but-does-not-complete-core)
+retain independent full-byte digest controls, private full-invoice DATA
+custody RED/GREEN cases and the fresh production rebuild. The corrected
+explicit supplier handoff advances original complete Core through the first
+read-only Program and its unchanged SDK/content/argument provenance check,
+but the new-Thread rerun still fails. Seven selected Domain and ten selected
+Core unit cases are not whole-module acceptance. None of these private
+implementations is published.
+
+[E1276](implementation/plan-execution-reliability.md#saved-invalid-pc-sample-is-not-gc-evidence)
+retains a read-only postmortem of the actual existing E1275 core. Its original
+invalid managed PC and secondary signal-unwind failure remain unclassified,
+not GC-deferred. Other GC threads and an address into read-only stat-format
+text do not prove the original cause. The later non-signal failure is not
+stale-ABI or SDK proof.
+
+[E1283](implementation/plan-execution-reliability.md#current-new-thread-refusal-has-its-own-complete-balance)
+binds the new failure to its own actual request, four roots, all live fixed
+buffers and complete exact bank balance. The current overshoot is 493,384
+bytes, not a reused earlier request amount. No high-water gap is refunded or
+treated as a leak. Corrected observers retain actual unlinked Store inodes;
+only separate copies are queried, with raw hashes unchanged. Earlier empty
+captures used the wrong parent and are not proof of absent Stores. E1285's
+full 64 MiB input-funding experiment fails earlier at fixture input-copy
+capacity and is fully withdrawn. Original independent attachment ownership,
+Source, SQL and ACK remain. E1289 identifies actual retained configuration
+constructor costs from the existing trace. E1290 privately separates temporary
+parser and retained string-data invoices. Three original public DATA ownership
+cases pass, but complete Core still fails attachment capacity at the later
+same-Thread rerun. E1294's separate copied canonical databases confirm the
+failure with all original raw hashes unchanged. Neither selected passes nor
+completed earlier Runs refund opaque debt or establish complete Core acceptance.
+
+[E1278–E1286](implementation/plan-execution-reliability.md#actual-native-optimization-and-clean-runtime-artifact-controls)
+prove the standalone ModelProvider's effective compiler flags and its
+unchanged 51-case executable protocol suite. They also retain the real old
+release's compile-interface/privacy RED and a fresh nine-package producer
+whose build targets stay outside the runtime artifact. Relocated clean/setup
+pass; eight Full-only packages and their actual dependency commands are not
+credited. The actual inventory already optimized Workflow and MCP: fifteen,
+not sixteen, previously lacked the override.
+
+The unchanged first local model request still times out after five seconds
+on the new artifact, with no concurrent Native build or live sampler. The
+second profile, matching baseline and full release are not accepted.
+Remaining complete Core, Product and application-flow requirements stay
+open. The task is **not complete**, GC stays deferred with **zero pass
+credit**, and PR #49 stays **Draft**.
+
+[E1293](implementation/plan-execution-reliability.md#snapshot-canonical-work-and-retained-graph-remain-separate-private-candidates)
+builds all original nine production stages on a genuinely empty target after
+separating canonical snapshot construction work from the independently prepaid
+retained graph. It also removes two redundant full-schema getter copies per
+entry. The actual graph remains owned and charged after the private producer
+returns. E1296 passes all 75 naturally enumerated isolated Tool cases and
+eleven selected Runtime/Host ownership and saturation cases. Complete Core
+advances through both Program reruns but fails its original direct-control
+rejection assertion. E1300 identifies only an unexpected outer `Ok`; the
+attempted E1304 typed-denial test correction also fails and is fully withdrawn,
+including its SQL change. No permission or complete Core pass is inferred.
+The original contract remains required and these implementations stay private.
+
+[E1291–E1305](implementation/plan-execution-reliability.md#system-only-leaf-dependencies-do-not-need-a-package-search-path)
+retain two further failed original five-second Profile gates. The new generic
+leaf-library packaging fix passes all seventeen retained-raw-target package
+closures, the ModelProvider's complete 51-case protocol and the actual smaller
+Coding composition's clean/setup checks. Complete library, engine and license
+inventories remain. This does not prove all Full-only current source builds,
+dependency-wide compiler flags, model startup, matching performance or release
+acceptance. The candidates are not promoted.
+
+All other unmet requirements remain open. The task is **not complete**,
+GC stays deferred with **zero pass credit**, and PR #49 stays **Draft**.
+
+[E1309–E1316](implementation/plan-execution-reliability.md#direct-rejection-follows-the-accepted-run-snapshot-contract)
+classify the earlier Direct result from its actual typed error. The accepted
+Run-snapshot contract permits Direct readonly roots; the private fixture now
+requires exact unavailable-target rejection and no execution, rather than
+the obsolete blanket no-Thread predicate. The corrected early assertion and
+both Program reruns pass in the complete consumer, which then fails partial
+Program attachment capacity. Its later stricter canonical SQL assertions
+are not reached. Separate Store copies confirm the actual later failure,
+with both `quick_check` results and all original raw hashes preserved.
+This supersedes the provisional old-predicate requirement above, not the
+withdrawn E1304 `Denied` attempt. There is no full Core or permission-suite
+acceptance, DATA refund, production authorization change or candidate
+promotion.
+
+[E1314/E1317](implementation/plan-execution-reliability.md#publication-source-packaging-is-qualified-without-private-runtime-experiments)
+promote only the system-only-leaf and clean-artifact packaging fixes. Actual
+publication-source Coding9 production, relocated clean/setup, ModelProvider
+51/51, natural packaging Python 23/23, selected Python 129/129 and the complete
+architecture gate pass. The earlier seventeen retained-target closure checks
+also match all sixteen changed builder inputs; Full-only current-source
+builds are not credited. Standalone compiler flags and all Cangjie/native
+source remain unchanged. Private Core, O2 and balanced-reader candidates
+remain private. The five-second request and complete Core/Product,
+application flows, matching baseline and final release remain unaccepted.
+No stored-record migration or implicit plugin upgrade is introduced.
+
+The task is **not complete**. GC retains **zero pass credit** and PR #49
+remains **Draft**.
+
+[E1313/E1315](implementation/plan-execution-reliability.md#a-catalog-cut-working-child-still-fails-the-later-capacity-contract)
+pass the original nine private production builds but still fail complete Core
+at partial Program attachment capacity. Separate canonical Store copies
+confirm the failure with all six raw images unchanged. The original shared
+high-water rule remains; this additional private child is not a capacity fix,
+a DATA refund or a promoted implementation.
+

@@ -132,8 +132,9 @@ for library in "$package_root"/lib/*; do
   patchelf --set-rpath '$ORIGIN' "$library"
 done
 
-env -u LD_LIBRARY_PATH ldd "$package_root/bin/axyndra" \
-  > "$package_root/diagnostics/ldd.txt"
+ldd_output=$(env -u LD_LIBRARY_PATH ldd "$package_root/bin/axyndra")
+ldd_output=${ldd_output//"$package_root"/'<package>'}
+printf '%s\n' "$ldd_output" > "$package_root/diagnostics/ldd.txt"
 if "$GREP" -q 'not found' "$package_root/diagnostics/ldd.txt"; then
   cat "$package_root/diagnostics/ldd.txt" >&2
   exit 1
@@ -142,21 +143,23 @@ if [[ "$distribution" != minimal ]]; then
   distribution_root="$package_root/share/axyndra"
   mkdir -p -- "$distribution_root/plugins"
   # Independent native artifact: never link its implementation into the host.
-  "$root/plugins/skills/build-package.sh" --output "$distribution_root/plugins/skills" >&2
-  "$root/plugins/memory/build-package.sh" --output "$distribution_root/plugins/memory" >&2
-  "$root/plugins/compaction/build-package.sh" --output "$distribution_root/plugins/compaction" >&2
-  "$root/plugins/workflow/build-package.sh" --output "$distribution_root/plugins/workflow" >&2
-  "$root/plugins/workspace/build-package.sh" --output "$distribution_root/plugins/workspace" \
+  # Compiler caches and interfaces are producer inputs, not runtime payloads.
+  native_targets=$(mktemp -d -- "${package_root}-native-targets.XXXXXX")
+  "$root/plugins/skills/build-package.sh" --output "$distribution_root/plugins/skills" --target-dir "$native_targets/skills" >&2
+  "$root/plugins/memory/build-package.sh" --output "$distribution_root/plugins/memory" --target-dir "$native_targets/memory" >&2
+  "$root/plugins/compaction/build-package.sh" --output "$distribution_root/plugins/compaction" --target-dir "$native_targets/compaction" >&2
+  "$root/plugins/workflow/build-package.sh" --output "$distribution_root/plugins/workflow" --target-dir "$native_targets/workflow" >&2
+  "$root/plugins/workspace/build-package.sh" --output "$distribution_root/plugins/workspace" --target-dir "$native_targets/workspace" \
     --engine "$AXYNDRA_WORKSPACE_ENGINE" --engine-license "$AXYNDRA_WORKSPACE_ENGINE_LICENSE" >&2
-  "$root/plugins/shell/build-package.sh" --output "$distribution_root/plugins/shell" >&2
-  "$root/plugins/shell_readonly/build-package.sh" --output "$distribution_root/plugins/shell_readonly" >&2
-  "$root/plugins/model_providers/build-package.sh" --output "$distribution_root/plugins/model-providers" >&2
-  "$root/plugins/program/build-package.sh" --output "$distribution_root/plugins/program" >&2
+  "$root/plugins/shell/build-package.sh" --output "$distribution_root/plugins/shell" --target-dir "$native_targets/shell" >&2
+  "$root/plugins/shell_readonly/build-package.sh" --output "$distribution_root/plugins/shell_readonly" --target-dir "$native_targets/shell_readonly" >&2
+  "$root/plugins/model_providers/build-package.sh" --output "$distribution_root/plugins/model-providers" --target-dir "$native_targets/model-providers" >&2
+  "$root/plugins/program/build-package.sh" --output "$distribution_root/plugins/program" --target-dir "$native_targets/program" >&2
   if [[ "$distribution" == full ]]; then
-    "$root/plugins/ast/build-package.sh" --output "$distribution_root/plugins/ast" \
+    "$root/plugins/ast/build-package.sh" --output "$distribution_root/plugins/ast" --target-dir "$native_targets/ast" \
       --engine "$AXYNDRA_AST_ENGINE" --engine-license "$AXYNDRA_AST_ENGINE_LICENSE" >&2
     for plugin in web_search github lsp dap eval mcp mcp_server; do
-      "$root/plugins/$plugin/build-package.sh" --output "$distribution_root/plugins/$plugin" >&2
+      "$root/plugins/$plugin/build-package.sh" --output "$distribution_root/plugins/$plugin" --target-dir "$native_targets/$plugin" >&2
     done
   fi
   python3 "$root/scripts/package_distribution.py" --root "$distribution_root" \
