@@ -7212,3 +7212,108 @@ private; `catalog-cut1313-nine-production-stages`,
 `catalog-cut1315-complete-core` and
 `catalog-cut1315-canonical-analysis-final` retain the actual evidence.
 
+## Current partial-Program refusal distinguishes retained owners from growth triggers
+
+E1321 observes the exact E1315 functional candidate with numeric-only
+bank/root/lease events and constructor stacks. Its fresh-target consumer is
+`c2b1616050e68649d096443dc829f77b597a411a91f6e53ec245787afa0e526c`.
+The later partial Program still fails attachment capacity. These figures
+belong to that observed refusal, not the later numeric-copy fix.
+
+| Refusal-time quantity | Bytes |
+| --- | ---: |
+| Actual capacity | 150,994,944 |
+| Actual charged amount | 102,661,848 |
+| Actual incremental request | 50,331,648 |
+| Actual overshoot | 1,998,552 |
+| Main Registry root high-water charge | 51,595,904 |
+| Independent artifact-failure Product root charge | 17,224,792 |
+| Current checkpoint slot | 16,777,216 |
+| Actual input attachment before refused growth | 16,777,216 |
+| All 35 live fixed buffers | 286,720 |
+
+The four roots plus buffers exactly equal bank occupancy. The main root's
+live SUM is 47,210,976 across 487 leases; the independent fault Product's is
+6,917,680 across 119. These gaps are not refunds or leak proof. All retained
+leases and constructor categories remain unfiltered. Seventy actual Prepared
+metadata copies account for 19,841,256 bytes including their child headers.
+The last main-root high-water increase instead comes from a Fixture request
+copy and its active observation. Its eventual return does not retire other
+consumers.
+
+No constructor enters E1313's catalog-cut helper. That experiment is withdrawn
+to the exact original method; it never established a capacity improvement.
+All six original Store images remain exact, and both separate copied
+databases pass `quick_check` and confirm the actual capacity Receipt.
+`catalog-cut1321-diagnostic-core` retains the complete numeric stream,
+exact birth attribution and all active lease categories; its timing and
+diagnostic allocations have no performance or production acceptance credit.
+
+## Numeric fixture copies pay live formatter work, not cumulative scratch
+
+The actual Fixture clone adds 16 KiB permanently for every copied number,
+although formatter/materialization work occupies a private scalar frame.
+E1324's real regression fails before the fix with a fixed 16 MiB bank, a paid
+15 MiB source and a bounded numeric schema. The existing genuine capacity
+and partial-copy retirement control still passes. This is not an increased
+product quota or a removal of saturation testing.
+
+The fix preserves the original 16 KiB working tariff and prepays it before
+formatting and materialization. It retains the original node and actual
+spelling invoices, but does not add completed scalar scratch to the retained
+request's running invoice. The same original ledger keeps its high-water;
+no payment closes or DATA acknowledgement changes in this helper.
+
+E1325 passes all ten naturally enumerated Fixture cases. E1328 independently
+rebuilds and executes the same entire module on the publication checkout,
+with only the production helper and its real regression changed. It passes
+10/10, including actual saturation, overlapping callbacks, raw exports,
+observation revocation and unknown-consumer retention. Its Native unittest
+ELF is `eaed847a55db6c102483afbf11deac4587ce56227ed14689f4990d3169cdb903`.
+
+E1331 compiles an independent public-API consumer against those exact Main
+sources. Actual execution verifies bounded acceptance, all numeric values,
+exact `1.2300e+400` spelling, source-mutation isolation, continued payment for
+a live raw export, genuine larger-input refusal before events and actual
+failed-copy retirement. Consumer ELF is
+`24b72078aaac68d2191f66901b84ba098cfce32c2a5f5b9c0c5fdc42adb16f6b`.
+Its earlier E1328 caller build failed on a missing direct JSON class import;
+that failed build is preserved and receives no runtime credit.
+
+E1334 builds all original nine production stages from the exact public
+two-file correction. App is
+`9882573d3b11d8c5f7f3eb5dcbbf80fbc14940bbe53f97f4cadf54a1c683b96a`;
+Minimal is
+`18b1b4ac1f2d7809fdfc6cf907450de505518de7a8267f2a23b5dc6d9c160a8c`.
+There is no public signature, layout, dependency, SDK, authority, Source,
+SQL, original bank/floor/attachment invoice or deadline change.
+
+Complete private Core E1326 still fails the later partial Program's
+`input_attachment.capacity`; separate canonical copies confirm the failure
+with all six raw images unchanged. E1325's earlier Core attempt stops at a
+parent-source preflight mismatch before compilation or execution; E1326
+names the exact already-accepted Direct fixture delta instead of removing
+the guard. Neither run establishes complete Core acceptance.
+
+E1332 additionally measures the same remaining refusal after the numeric
+fix: charged 102,268,824 bytes plus actual 50,331,648-byte growth exceeds the
+unchanged 150,994,944-byte bank by 1,605,528 bytes. Exact reconciliation
+accounts for all roots and fixed buffers. Its 74 first unknown-consumer
+transitions are 46 child-plan `call` exports and 28 ordinary Host executor
+`operationPlan` exports. These identify retained metadata paths to inspect,
+not permission to release unknown DATA or infer a leak. Separate canonical
+copies retain all six original image hashes.
+
+`fixture-number1324-red-unit`, `fixture-number1328-main-unit`,
+`fixture-number1331-public-caller` and
+`fixture-number1334-nine-production-stages` retain exact source, commands,
+artifacts and physical process custody. E1335 also passes the original 129
+selected Python regressions and complete architecture gate on those two
+public source changes. Its copied legacy scope string is corrected by a
+separate exact-command qualification without rewriting the original result.
+Only this independent numeric-copy
+correction is eligible for publication; the other Core candidates remain
+private. The task remains incomplete, GC remains deferred with zero pass
+credit and PR #49 remains Draft. No stored-data migration is introduced;
+rollback restores these two files without deleting retained facts or debts.
+

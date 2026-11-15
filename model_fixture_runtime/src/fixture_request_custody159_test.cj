@@ -127,6 +127,40 @@ class FixtureRequestCustody159Tests {
     }
 
     @TestCase
+    func numericSchemaCopiesFitAlongsidePaidSourceAndPreserveLiteralValues(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let source = bank.acquire(131072)
+        source.ensureRetainedPeak(15728640)
+        let schema = objectValue([
+            ValueField("type", textValue("number")),
+            ValueField("enum", listValue(Array<AgentValue>(96, { index => integerValue(index) }))),
+            ValueField("maximum", parseUnifiedJson("1.2300e+400"))
+        ])
+        let port = FixtureModelPort()
+        let input = ModelRequest("fixture", [], tools: [
+            ModelToolDefinition("fixture.numeric", "bounded numeric schema", schema)
+        ])
+        let result = port.executeReturningInput159(input, { _ => () }, FixtureRequestFunding159(source))
+        let accepted = match (result) {
+            case ModelInputReturn159.Returned(value) => value.isOk()
+            case _ => false }
+        @Expect(accepted, true)
+        if (!accepted) { port.retireLastRequest159(); source.close(); return }
+        let exported = port.lastRequest.getOrThrow()
+        schema.put("maximum", integerValue(-1))
+        let copied = exported.tools[0].inputSchema
+        @Expect(copied.field("maximum").getOrThrow().asNumberText(), "1.2300e+400")
+        for (index in 0..96) {
+            @Expect(copied.field("enum").getOrThrow().asArray().get(index).getOrThrow().asInt64(), index)
+        }
+        port.retireLastRequest159(); source.close()
+        // The actual public export remains live; it cannot be refunded when
+        // the cache or its source closes.
+        @Expect(bank.usage()[0], 1)
+        @Expect(exported.tools[0].name, "fixture.numeric")
+    }
+
+    @TestCase
     func replacementDuringActualProducerCallbackKeepsBothIndependentCopiesPaid(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 67108864)
         let source = bank.acquire(131072)

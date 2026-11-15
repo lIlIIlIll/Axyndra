@@ -31,16 +31,25 @@ class FixtureRequestCopy159 {
         add159(1024); add159(value.size, factor: 16)
         String.fromUtf8(value.toArray())
     }
+    private func fundNumberWork159(): Unit {
+        if (invoice > Int64.Max - 16384) {
+            throw IllegalArgumentException("fixture request copy invoice overflow") }
+        try { payment.ensureRetainedPeak(invoice + 16384) }
+        catch (_: LogicalJsonPayloadError) { throw FixtureRequestCapacity159() }
+    }
+    private func number159(value: AgentValue): AgentValue {
+        // Formatter/copy scratch is live only in this private scalar frame,
+        // not once per previously copied number in the retained request.
+        fundNumberWork159()
+        let spelling = value.asNumberText()
+        add159(spelling.size, factor: 16)
+        fundNumberWork159()
+        value.materialize(1)
+    }
     private func shallowValue159(value: AgentValue): AgentValue {
         add159(1024)
         if (value.unifiedKind == ValueKind.Text) { return textValue(text159(value.text)) }
-        if (value.unifiedKind == ValueKind.Number) {
-            // Numeric materialize(1) preserves the original scalar subtype.
-            // Its only variable spelling is funded before formatter/copy work.
-            add159(16384)
-            let spelling = value.asNumberText(); add159(spelling.size, factor: 16)
-            return value.materialize(1)
-        }
+        if (value.unifiedKind == ValueKind.Number) { return number159(value) }
         if (value.unifiedKind == ValueKind.Boolean) { return boolValue(value.asBool()) }
         if (value.unifiedKind == ValueKind.Null) { return nullValue() }
         if (value.unifiedKind == ValueKind.List) {

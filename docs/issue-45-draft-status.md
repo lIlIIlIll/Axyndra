@@ -3583,3 +3583,29 @@ confirm the failure with all six raw images unchanged. The original shared
 high-water rule remains; this additional private child is not a capacity fix,
 a DATA refund or a promoted implementation.
 
+[E1321](implementation/plan-execution-reliability.md#current-partial-program-refusal-distinguishes-retained-owners-from-growth-triggers)
+reconciles the actual later refusal from its own four roots and all 35 fixed
+buffers. The overshoot is 1,998,552 bytes; neither older figures nor
+high-water/live-SUM gaps authorize refunds. All 487 main-root and 119
+independent fault-Product leases remain accounted for. The catalog-cut helper
+was not executed and is now withdrawn.
+
+[E1324–E1335](implementation/plan-execution-reliability.md#numeric-fixture-copies-pay-live-formatter-work-not-cumulative-scratch)
+qualify an independent two-file numeric-copy fix. Real fixed-capacity RED
+fails before the fix while genuine refusal still passes. Exact publication
+source passes all ten natural Native Fixture cases and a separately compiled
+public consumer for precision, mutation isolation, retained exports,
+saturation and actual failed-copy retirement. All original nine production
+stages, the original 129 selected Python regressions and complete architecture
+gate pass. The 16 KiB scalar working tariff remains prepaid; original
+bank/floor/SUM/high-water, Source/SQL and actual ACK rules remain. Current
+numeric diagnostics still reconcile a 1,605,528-byte Core overshoot and identify
+74 first unknown Prepared metadata exports; none is treated as an actual ACK.
+
+The complete private Core consumer still fails partial Program attachment
+capacity. Whole Core/Product/application, the first local request, matching
+baseline and final release remain unaccepted. The numeric helper is not a
+Core-capacity completion claim; all other runtime candidates remain private.
+The task is **not complete**, GC has **zero pass credit**, and PR #49 remains
+**Draft**.
+
