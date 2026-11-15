@@ -3762,3 +3762,31 @@ credit**, and PR #49 remains **Draft**. No new external model call, SDK
 build/replacement, quota/stack/deadline increase, manual CI, force update,
 Ready, merge or Issue closure is authorized or claimed.
 
+### Current owner-state and actual preparation evidence E1379–E1398
+
+This checkpoint supplements the earlier E1362–E1382 record; it does not
+turn any failed complete execution into acceptance.
+
+| Requirement / boundary | Current result | Evidence and remaining gap |
+| --- | --- | --- |
+| Fixed-capacity complete Core | **Not accepted** | E1379's actual refusal is 101,205,084 charged + 50,331,648 requested against 150,994,944 bytes, 541,788 over. Exact shared-ledger reconciliation does not prove a leak or permission to refund. |
+| Independent derived-call DATA | **Local contracts pass; Core fails** | E1375 Tool79 and E1382 natural Host281 pass on exact E1374 source. E1379 removes the ten earlier derived-Parent first exports, but 52 other first exports remain; last-consumer/producer state still needs attribution. |
+| Canonical-call and closed-descriptor prototypes | **Withdrawn, not delivered** | E1386 and E1392 both stop earlier at partial Program attachment admission. Local Tool80/Host281 results cannot override that failure. E1398 restores every protected E1374 functional hash. |
+| Raw Catalog control test | **Incorrect assertion removed with its prototype** | E1393 has 81 passes and one invalid assertion, not a passing suite. Catalog `rawAliases159` and a separate Core loan's `held` state are different facts; successful loan return is not Catalog DATA ACK. The causal claim is explicitly corrected, not repinned. |
+| Original complete first model call | **Not accepted** | E1385's exact printed operation matches canonical `host.context.read`, requiring outside-workspace approval before any model attempt. No HTTP request or approval decision occurs; CLI exit cancels the pending preparation read. |
+| CLI Store observation | **Narrow observation verified** | Every distinct inode is captured, originals stay read-only, separate main-only analysis passes `quick_check` and the actual normalized plan round-trips. Empty earlier first-pathname images do not prove no Run admission. |
+| Focused workspace-only profile fixture | **Not accepted; this sample GC-deferred** | E1390 fails at the original operator enable command before configuration rewrite or `invoke`. Its exact saved core contains a direct collector stack. No success credit; older timeout/disconnect samples keep their own classification. |
+| Complete Product, application, baseline and release | **Not accepted** | Local contract, observation and GC-classification results do not replace the original complete entrypoint, matched-condition benchmark or final release requirements. |
+
+[The implementation record](implementation/plan-execution-reliability.md#current-owner-attribution-and-withdrawn-canonical-call-prototypes)
+binds the actual candidate ELFs, current refusal numbers, source restoration
+and invalid-test correction.
+[The actual preparation record](implementation/plan-execution-reliability.md#actual-default-skills-preparation-is-a-separate-approval-boundary)
+separates Provider transport grants from default Skills context approval
+and limits the direct GC classification to its exact failed sample.
+
+At E1395 the public head is documentation-only `81c608a`, behavior remains
+`fb35f53`, and exact remote head/Open/Draft readback succeeds. No private
+candidate is promoted. The task is **not complete**; user-deferred GC has
+**zero pass credit** and PR #49 remains **Draft**.
+

@@ -7852,3 +7852,136 @@ update. Non-GC Core, the first complete model call, remaining non-GC
 Product/application flows, matched baseline and final release remain
 unaccepted. User-deferred GC has zero pass credit; PR #49 stays Draft.
 
+## Current owner attribution and withdrawn canonical-call prototypes
+
+E1382 runs the natural 281-test Host inventory against the E1374
+independently paid derived-input source: all 281 pass. The actual Host ELF
+is `56ce30a046ff2e2d1190a17d1b86f1a1c14dbb90d320ab015393eb8a8b33e5cd`.
+This supplements E1375's Tool79 result, not the failed complete Core.
+`owned-derived1382-host-unit` retains the exact inventory and process
+custody results.
+
+E1379 observes the same E1374 functional candidate with numeric-only
+bank/root/lease and first-export hooks. Every original event is retained
+without threshold filtering. At its actual first refusal:
+
+| Quantity | Actual bytes |
+| --- | ---: |
+| Original bank capacity | 150,994,944 |
+| Charged immediately before refusal | 101,205,084 |
+| This request's incremental growth | 50,331,648 |
+| Overshoot | 541,788 |
+
+The shared-ledger sum, fixed buffers and total bank balance reconcile at
+that event. Root 1 accounts for 50,512,920 bytes. These are E1379's actual
+values, not a reuse of an earlier request's cost or proof of a leak.
+
+All 100 actual canonical plans round-trip exactly. The 33 workspace read
+or grep plans use `read-view-intents/v2`; the 21 Program plans use
+`readonly-delegation/v1` and retain their original input-attachment path.
+The new narrow plain Native read-view path cannot be generalized to
+Program attachments on that evidence.
+
+There are 52 first-unknown metadata exports: root 1 has 21 Legacy executor
+and 28 child-plan validation sites; root 220 has one Legacy and two
+child-plan validation sites. The ten earlier `prepareDerived` Parent
+exports are absent, but first-export location is not last-consumer or
+retirement proof. Six original Store images are retained, every observer
+FD closes, and separate analysis copies pass SQLite `quick_check`.
+`current-debt1379-diagnostic-core`, its unfiltered `events.txt`, and its
+canonical-analysis evidence preserve this failed execution.
+
+E1386 then independently prepays a canonical resolver-call copy before
+the original open resolver callbacks. Tool80 passes in E1387 and Host281
+passes in E1388. Complete Core nevertheless fails **earlier**, at partial
+Program admission with `input_attachment.capacity`; receipt 88 records
+the failure after the second Program rerun's completed receipt 87.
+The Core ELF is
+`c416ae5540e78112ada3f118d971b9677586c48af180a332499a83028ba73b78`.
+No passing aggregate Core result or production acceptance follows.
+
+E1392 additionally keeps the ordinary resolved descriptor inside a closed
+predicate, preserving the original capability, effect and approval
+resolver calls and implementation/schema checks. Its complete Core
+again fails at the same earlier partial Program boundary. Its ELF is
+`d4f5e09eff546f2219d55bf398585505fc92c7aa1a14d51f779e9696bdb93a0a`.
+Six actual Store images survive closure, separate analysis copies pass
+`quick_check`, and receipt 88 again records the capacity failure.
+
+The E1393 natural 82-test Tool execution has 81 individual passes and one
+invalid control-test assertion, **not** a passing Tool suite. That
+assertion incorrectly equates Raw Catalog backing retention with an
+independent Core DATA loan's `held` state. The actual code sets
+`rawAliases159` on the Catalog; it does not set the Core loan's `held`
+flag. A successful loan return therefore neither contradicts Catalog
+retention nor proves the Catalog's DATA was returned.
+
+E1398 withdraws these unpromoted E1386/E1392 prototypes and their obsolete
+tests, including the incorrect control. The assertion is not repinned and
+production code is not changed to satisfy it. The earlier causal claim
+that `resolvedDescriptor` directly holds the whole Core producer is
+withdrawn. Every protected functional source hash is restored exactly to
+E1374, reusing only that source's existing qualification; a newer cached
+Core ELF is explicitly stale, not restored-source evidence.
+`canonical-child1386-complete-core`,
+`closed-descriptor1392-complete-core`, their retained Store evidence,
+`closed-descriptor1393-tool-unit/withdrawal-and-invalid-test.json`, and
+the preserved source snapshots retain the failed attempts and correction.
+No private candidate is promoted and no current numerical charge is
+inferred from E1379 after these later attempts.
+
+## Actual default Skills preparation is a separate approval boundary
+
+E1385 corrects the first-pathname-only CLI capture limitation by retaining
+every distinct observed SQLite inode read-only until actual process
+closure. A throwaway two-generation WAL fixture verifies both lifetimes
+separately. In the real CLI, eleven inodes are retained: one main DB,
+five WALs and five SHMs. No main-DB replacement is inferred from repeated
+WAL creation, and unrelated WAL generations are not combined.
+
+A separate main-only analysis copy passes `quick_check`; its operation
+ID exactly matches the real CLI's printed pending operation, and its
+normalized plan round-trips exactly. The plan is `host.context.read`,
+requires approval for two `outside-workspace.read` absence witnesses
+under the settings root, and also includes the workspace Skills absence
+witness. Actual model attempts, approval decisions and HTTP-handler
+entries are all zero. On CLI exit the actual pending preparation read is
+cancelled with `operation.cancelled_before_execution`.
+
+The first original invocation exits with `approval required` after about
+4.801 seconds; profile two is not attempted. The existing Provider
+transport/credential grants and the read-scope allowlist do not authorize
+this separate preparation read. This is not successful Provider execution
+and does not justify skipping approval or removing default Skills.
+The earlier first-pathname image set's empty Run query is not evidence of
+no admission; E1385's exact operation match supersedes that ambiguous
+analysis. `startup-observation1385`, its retained original inodes, and
+its separate canonical-analysis evidence preserve the actual boundary.
+
+E1390 attempts a distinct focused profile fixture using the supported
+workspace-only context recipe while leaving service grants and read
+scopes byte-identical. It fails during the original operator
+`plugins enable` command, **before** the context rewrite, original
+five-second `invoke`, or either local HTTP request. No focused profile
+success or default Coding acceptance is claimed.
+
+The existing core from that exact failed process supplies direct
+`BaseObject::GetSize → WCollector::MarkObject →
+ConcurrentMarkingWork::Execute → GCPoolThread::WorkerFunc` evidence.
+Only this E1390 sample joins the user-deferred GC set, with zero pass
+credit. Older timeouts and peer disconnects are not retrospectively
+classified. The retained compressed core is 8,461,039 bytes; its SHA-256
+is `9030e858fcd7dd038ec33e9681c040b31b619889b0f227f0f5f049802f3c41e1`.
+`provider-profiles-workspace1390` preserves the process, artifact-bound GC
+classification and private failure evidence; the identical failed path
+is not replayed.
+
+At E1395 the public head is documentation-only `81c608a`; public behavior
+remains `fb35f53`. The existing PR body is preserved through an update and
+the exact head, Open state and Draft flag are read back. The non-GC
+Core gap, first complete model call, remaining Product/application
+acceptance, matched baseline and final release remain unaccepted.
+There is no new external model call, SDK rebuild/replacement, quota,
+stack or deadline increase, manual CI, force update, Ready, merge or
+Issue closure.
+
