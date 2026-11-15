@@ -7317,3 +7317,331 @@ private. The task remains incomplete, GC remains deferred with zero pass
 credit and PR #49 remains Draft. No stored-data migration is introduced;
 rollback restores these two files without deleting retained facts or debts.
 
+
+## Default Native transitive layout still misses the first-request gate
+
+E1337 keeps published `fb35f5345293abf604d12d4d9ae5beabc03e02f8`
+Cangjie sources and all original standalone compiler options. Its only nine
+private source deltas apply the existing MCP executable-transitive-RPATH
+convention to Coding packagers. Every required runtime library, system
+dependency and license remains checked; the pinned Workspace engine is
+byte-exact. No verification result is cached or reused.
+
+The actual complete fresh Coding9 producer passes in 505.81 seconds, followed
+by relocated clean environment, setup and all 51 ModelProvider protocol cases
+with zero failures, errors or skips. Explicit compiler targets stay outside
+the runtime artifact. All eight generated lock serializations are restored
+to exact published bytes. The current public raw App is
+`9882573d3b11d8c5f7f3eb5dcbbf80fbc14940bbe53f97f4cadf54a1c683b96a`;
+this experimental packaged host is
+`45817356245a9f6f947fe39ca3bca94e7313c4c2facb478520b74e1ee7c06f0a`.
+
+The original profile test still times out on its first model request after
+exactly five seconds. Its subsequent temporary-directory cleanup also fails;
+the independent watcher returns and records no remaining, unreaped or
+unknown-identity process. Physical cleanup is not a DATA-consumption ACK.
+No GC cause, deadlock, current canonical Run count or successful first
+request is inferred. This layout remains private and is not a startup fix.
+
+`transitive-rpath1337-current-coding` retains exact commands, per-package
+source/output/runtime/license provenance and the failed result. Its 292,639,424
+bytes across all nine Native packages are artifact-size evidence, not a
+matching performance comparison. PR #49 remains Draft and the task remains
+incomplete.
+
+## Balanced-reader combination stops before the first request in a direct GC fault
+
+E1338 combines only the private E1337 Native layout with the retained balanced
+package reader. The reader preserves full path, mode, size and content
+verification, two prepaid 64 KiB buffers and the original per-entry control
+charges. No compiler option, SDK component, bank, floor, timeout or verification
+cache changes. All nine production stages and the complete fresh Coding9
+producer pass, followed by clean environment, setup and 51/51 ModelProvider
+protocol cases. The producer takes 502.71 seconds; this is not a matched
+performance comparison.
+
+The current raw App is
+`b9feaa0791239abd00b6da8e20e60202776a96dfd04a023ba5f3958a02ea492e`;
+the combined experimental packaged host is
+`21c247606a4b4f4a72311266a44a62c7ba14d6d5e88dc561b8942c9ac5b6fa69`.
+The original profile flow fails during provider-install enable with
+`owner.peer_disconnected`, before its first model request. The watcher closes
+all three adopted processes with no remaining or unknown-identity process.
+That cleanup proves neither a DATA return nor successful activation.
+
+E1342 reads the existing core for this exact packaged worker. The crashing
+thread directly traverses `BaseObject::GetSize`,
+`WCollector::ForwardObjectExclusive`, `TryForwardObject`, `ForwardObject`,
+`Mutator::GCPhasePreForward`, `SlotRoot::VisitWAHGCRoots` and
+`TracingCollector::VisitHeapReferencesOnStack`, under the collector's
+`Preforward` / `DoGarbageCollection`. Runtime mappings bind the stack to this
+artifact. This current sample is within the user-deferred GC scope, with
+zero pass credit. It is not the five-second request timeout and does not
+classify older incomplete failures. Hashing frames on other threads do not
+establish a performance cause.
+
+`transitive-balanced1338-current-coding` and
+`transitive-balanced1342-saved-core-analysis` retain exact commands, artifacts,
+the 746,196,992-byte core and the read-only function trace. Both layout and
+reader candidates remain private. No identical GC-blocked replay, SDK repair
+or external model call is made.
+
+## Broad metadata borrowing is withdrawn, not counted as a capacity fix
+
+E1340 rejects the uncompiled broad Raw-getter replacement. Ordinary catalog
+resolvers, inspectors and process ports are open retention boundaries; a
+callback's return cannot release the Prepared graph or waive its original
+unknown-consumer debt. No build, test, source publication or passing credit
+is assigned to that proposal.
+
+The functional checkout is restored against all 58 retained E1326 source
+hashes, including the original read-view output funding that one restoration
+had accidentally dropped. E1341 additionally checks actual last peaks for
+all 74 measured first-unknown Prepared owners: every one exceeds its existing
+131,072-byte seed. The smallest is 144,272 bytes and the largest 513,424 bytes.
+There is no seed-only excess to refund; lowering or splitting the seed would
+not remove these measured debts.
+
+`metadata1340-withdrawal` retains the exact restoration and numeric-only
+analysis. No strong owner references are retained in the diagnostic output.
+The independent numeric fix remains published, all other Core candidates
+remain private, the task remains incomplete and PR #49 remains Draft.
+
+## Independent text copies reach the next unchanged Core budget boundary
+
+E1344 tests a narrower private alternative to the withdrawn borrowing
+proposal. The original Prepared call, plan and JSON stay private on the
+internal read-view path. Strings handed to open inspectors, process ports
+and result consumers are independently copied and prepaid in the same
+original shared-bank lineage. Each text owner uses the existing 8 KiB
+control granularity, 1 KiB occurrence charge and conservative UTF8
+construction charge; the original whole-Prepared 128 KiB prepay is unchanged.
+Copied unknown DATA remains paid after the original producer and its actual
+consumers return. No callback, process exit or cleanup ACK refunds it.
+
+All 77 naturally enumerated Native Tool cases pass, including two new
+regressions: the original Prepared becomes inaccessible while independent
+exported strings remain usable and paid; a genuinely saturated bank refuses
+a new text copy and the unpublished actual child lease retires without
+refunding any other owner. Existing Raw-export, private-move, consumer,
+Source and saturation controls remain passing. The Tool test ELF is
+`ed35e601232d12fa9297d6b372fb698498f9d245e31c3f6ca2a0f198694be18c`.
+
+The fresh complete Core/recovery consumer builds in 610.24 seconds and runs
+for 80.66 seconds. It passes the previously failing partial Program attachment
+and one-slot handoff assertions, then fails the unchanged
+`parent maxToolCalls blocks the child scheduler reservation` assertion.
+The actual consumer ELF is
+`c2cb6efafac74bad0effbc3b8dc895a9a51d79e87f2a0b8524dda1aaa2bad681`.
+Separate read-only canonical analysis shows the one-call Run has exactly
+one root operation, one failed root receipt containing
+`budget.tool_calls_exceeded`, and zero durable child admissions, but its
+public Run incorrectly completes. The scheduler did refuse; the next
+defect is loss of its typed control failure across the Native business-result
+boundary. The assertion, limit, Source and SQL requirements are not relaxed.
+
+E1345 naturally enumerates and executes all 279 Host cases. Exactly one
+errors because its required actual Native fixture environment variable was
+omitted; 278 pass. This is an incomplete harness invocation, not GC or a
+passing Host module. A subsequent run must provide the original hash-bound
+fixture rather than skip the case or lower its assertions.
+
+`external-text1344-tool-unit`, `external-text1344-complete-core`,
+`external-text1344-store-retained`, `external-text1344-canonical-analysis`
+and `external-text1345-host-unit` retain exact source, commands, failed/public
+outcomes and original Store image identities. Only separate copies are
+opened by SQLite; all original observation FDs close. No complete Core,
+Host, Product, application, startup, matching-baseline or final-release
+credit follows. All these runtime candidates remain private; the task is
+incomplete and PR #49 remains Draft.
+
+## Typed Native scheduler failure reaches a later, separately measured refusal
+
+E1346 preserves the actual shared scheduler's pre-action
+`budget.tool_calls_exceeded` error in the existing paid broker control-error
+field. Native business JSON cannot set that fact. The actual Native helper,
+existing descendant/document fences and current input/attachment checks run
+before the original typed error returns. No cancellation, parallel ledger,
+quota increase or assertion change is introduced.
+
+The unchanged complete Core consumer now passes its parent tool-call budget
+assertion. Separate read-only canonical copies show a failed Run, one failed
+root receipt with the original `budget_exceeded` kind and all three original
+dimension/limit/observed fields, and zero child admissions. The limit is
+still one and the refused observed count two. Its current ELF is
+`8944d88ad4fa98f45695b732deb9b7fe1e50c57069bd31d1d0af0420790b077e`.
+The same full run later fails `input_attachment.capacity` in the first
+forbidden-write Program scenario. This does not establish a permission
+bypass or acceptance of that scenario.
+
+E1347 supplies the original hash-bound Native fixture and passes all 279
+naturally enumerated Host cases, with no skips. Its ELF is
+`231684e4670674dff179fe37290c3571c4976b2643edce7996c6881650c3c523`.
+This qualifies E1346 Host source, not subsequent private candidates.
+
+E1349 uses a fresh diagnostic ABI on the same functional source. The actual
+later refusal has charged 101,172,680 bytes, this request's 50,331,648-byte
+growth and the unchanged 150,994,944-byte bank: overshoot 509,384 bytes.
+All holders reconcile at that exact refusal:
+
+| Holder | Charged bytes | Live shared SUM | Active shared leases |
+| --- | ---: | ---: | ---: |
+| Root 1 | 50,147,704 | 47,929,208 | 553 |
+| Root 220 | 17,126,480 | 6,701,336 | 121 |
+| Root 261 | 16,777,216 | Not shared | Not shared |
+| Requesting root 262 | 16,777,216 | Not shared | Not shared |
+| All 42 fixed buffers | 344,064 | Not shared | Not shared |
+
+The high-water/live-SUM gaps authorize no refunds. Floor, attachment invoice,
+tariffs and actual DATA-return rules remain unchanged. The original numeric
+probe writes a hardcoded append-only sink; its complete raw stream contains
+the older E1332 epoch and the current epoch. The current 767,954-row epoch is
+selected without threshold filtering and bound by its final actual reservation
+to the current function trace. The initially attempted stdout parse is
+recorded as a wrong-input error, not another Core run or missing refusal.
+
+`external-text1346-complete-core`, `external-text1347-host-unit` and
+`external-text1349-diagnostic-core` retain exact source, artifacts, original
+Store identities, numeric extraction and full reconciliation. Original Store
+FDs are closed; only separate copies are opened by SQLite. Complete Core,
+the forbidden-operation matrix, later recovery and final release remain
+unaccepted. All these runtime changes remain private.
+
+## Project-only Native optimization still misses the original request deadline
+
+E1350 keeps the same public `fb35f5345293abf604d12d4d9ae5beabc03e02f8`
+source and immutable default-compiled App as E1337. Eight actual standalone
+Coding projects add dependency-wide `-O2`. Workflow keeps its existing
+`-O2` manifest; its independent producer ELF is not the App ELF. All 57
+verbose compiler invocations across 22 distinct entry/dependency modules
+carry the option. These are repository or pinned application dependencies,
+not builds of the official Cangjie compiler/runtime/std/stdx/SDK.
+The installed fixed SDK remains read-only.
+
+The original complete fresh Coding9 producer passes in 1,007.10 seconds,
+followed by relocated clean environment, setup and 51/51 ModelProvider
+protocol cases. Runtime, system, engine, license and source/post-link
+provenance checks are unchanged. The packaged host remains byte-identical to
+E1337, `45817356245a9f6f947fe39ca3bca94e7313c4c2facb478520b74e1ee7c06f0a`.
+The eight optimized entries are new artifacts; total Native package bytes
+are 271,375,536. Artifact size and producer time are not matched performance
+acceptance.
+
+The first actual local profile model request still times out at the original
+five seconds. Its subsequent temporary-directory cleanup also errors.
+Neither a GC cause nor deadlock is inferred from this output. No external
+model call, deadline increase, integrity cache or performance waiver is used.
+`startup-o2-1350-current-coding` retains the actual dependency-wide commands
+and failed request. The compiler-option/layout combination remains private
+and is not a startup fix. The task remains incomplete and PR #49 stays Draft.
+
+## Private read-view retirement does not resolve Core capacity
+
+E1351/E1352 fail compilation because the new private helper lacks the existing
+serializer import. Neither attempt runs a consumer. E1353 adds that import
+and builds a fresh complete Core ELF,
+`a90adcae390be4f4856aceb0d7025e72080733db317270acac0a64d97856a83e`.
+The unchanged Core contract still stops at the first forbidden-write Program
+scenario. Separate canonical copies show `input_attachment.capacity`, not a
+successful permission-denial result.
+
+The same source passes all 281 naturally enumerated Host cases in E1354,
+including two private callback-lifetime cases. Its Host ELF is
+`07113f21b8b0bd8cf5c97ba350d6f00ba6d26b920d2a4ce0b80e9c0e76474d68`.
+These cases do not establish complete Core or application acceptance.
+The private read-view route is withdrawn. Its three existing Host files
+return to the measured E1346 source, and its two new files are removed.
+Exact sources and both outcomes remain in `private-readview1353-source-retained`,
+`private-readview1353-complete-core` and `private-readview1354-host-unit`.
+
+The E1349 numeric trace identifies the last Root 1 high-water growth with
+lease 17188. Its recorded birth stack reaches
+`PluginRegistryPackageInspectionMemory1248.openWork1248` from current-byte
+package inspection before Native worker startup. That temporary lease reaches
+4,224,792 bytes and then closes. Its return does not lower the Root's bank
+high-water charge or authorize a refund.
+
+## Per-allocation manifest funding remains an unaccepted private candidate
+
+E1356 retains the original 1 MiB manifest bound and growing byte-list reader.
+It prepays the original fourfold byte-list envelope before each growth or
+oversize-sentinel allocation, plus two 64 KiB buffers and 8 KiB control.
+Actual invocation-funded work keeps its existing 4 MiB floor. The original
+144 MiB bank, 16 MiB message floor, 64 MiB attachment work, full package
+verification and private read-return witness are unchanged.
+
+The fresh complete Core build succeeds in 586.52 seconds. Its ELF is
+`c0a65b6c47280a81612ea8718f80dab20dd7e78a365963554314ecbf54c7e022`.
+The unchanged consumer stops earlier, at matched Program sample three after
+a child returns an error. The parent assertion does not expose that child's
+underlying error, so neither capacity nor GC is assigned from this output.
+The first passive Store recorder watches the wrong parent and captures no
+images. Its empty projection supplies no canonical evidence. E1360 corrects
+only that diagnostic directory and observes the same ELF. This diagnostic
+does not reproduce the earlier sample-three failure and grants no acceptance.
+
+E1357 runs every naturally enumerated Extension and Registry case with the
+original isolated bounds. E1359 corrects the actual missing
+`AXYNDRA_REPO_ROOT` prerequisite for three pipe-fixture cases, using the same
+Extension ELF and unchanged source without rebuilding.
+
+| Module | Natural cases | Individually passing cases | Unresolved outcome |
+| --- | ---: | ---: | --- |
+| Extension | 104 | 104 across E1357/E1359 | No second complete-module execution |
+| Registry | 40 | 39 | One unclassified `CheckAndPush` SIGSEGV |
+
+The four manifest-reader cases, including actual allocation refusal without
+publication or false ACK, pass. The real whole-package pressure and
+same-length byte-mutation case also passes. Extension ELF:
+`9431daf23710d9eb80f04c5b25cc936b67957fce4dc3855a6695eb8c236e2c76`.
+Registry ELF:
+`183916b97104744afa7b3d354f364bffcd6bd3d761f3c2405672a667dc330dd1`.
+No usable core is found for the exact Registry crash. Its incomplete runtime
+boundary stack does not establish a user-deferred GC failure.
+
+`reader-growth1356-complete-core`, `reader-growth1357-extension-registry-unit`
+and `reader-growth1359-service-fixture-recheck` retain the exact scope and
+outcomes. The reader change remains private and does not resolve Core.
+The task remains incomplete, user-deferred GC has zero pass credit, and
+PR #49 stays Draft.
+
+## Corrected canonical observation reaches a later forbidden-shell refusal
+
+E1360 runs the unchanged E1356 ELF only to obtain previously missing
+canonical child provenance. The corrected watcher uses the actual mapped
+temporary-directory parent. It retains six original Store files read-only,
+closes every observer FD, and opens only separate analysis copies.
+The copied database passes `quick_check`; raw images remain unchanged.
+
+This execution passes all three matched Program samples and the intervening
+plan scenarios. Its actual forbidden-write root has one failed business
+receipt and zero derived admissions. The following forbidden-shell root has
+`budget_exceeded` / `input_attachment.capacity` and zero derived admissions.
+The unchanged whole Core contract still fails. This is not evidence of a
+shell execution, a permission bypass or the cause of the earlier
+same-ELF sample-three failure.
+
+`reader-growth1360-canonical-observation` and
+`reader-growth1360-canonical-analysis` retain the exact current sequence.
+The older E1349 refusal's numerical balance is not assigned to this run.
+Further attribution of that older trace binds its second shared Root 220
+to the artifact-store-failure Product's actual Registry construction, and
+Root 261 to `ApplicationSession.reserveOwnedCheckpointSlot113`. Neither
+Product close nor checkpoint completion proves their DATA has returned.
+Every E1349 first-unknown Prepared export is retained: 30 Legacy and 28
+`validateChildPlan` origins on Root 1, and one Legacy and two
+`validateChildPlan` origins on Root 220. These are first exports, not
+last-consumer or refund witnesses.
+
+E1362 composes actual reader-growth prepayment with the narrow private
+Native plain read-view route. The revised route independently pays both
+the call ID and complete encoded input before opaque handoff. Its complete
+private loan frames unwind before field clearing on exceptional exits too.
+All other Raw paths, frozen-plan and current capability checks, actual
+worker fences, attachment invoices and DATA acknowledgements remain.
+This composition is private and unverified at this checkpoint. Whole Core,
+application, startup, matched-baseline and final release remain open;
+PR #49 stays Draft.
+
+
+

@@ -3609,3 +3609,108 @@ Core-capacity completion claim; all other runtime candidates remain private.
 The task is **not complete**, GC has **zero pass credit**, and PR #49 remains
 **Draft**.
 
+
+[E1337](implementation/plan-execution-reliability.md#default-native-transitive-layout-still-misses-the-first-request-gate)
+builds a complete fresh default-option Coding9 artifact with full transitive
+runtime/engine/license checks, clean environment, setup and 51/51 actual
+ModelProvider protocol cases. The original first model request still times
+out at five seconds. The new layout is private; neither smaller payloads nor
+physical process cleanup establish startup or DATA-return acceptance. Core,
+the remaining application flows, matching baseline and final release stay
+open, with no additional GC or external-provider passing credit.
+
+[E1338/E1342](implementation/plan-execution-reliability.md#balanced-reader-combination-stops-before-the-first-request-in-a-direct-gc-fault)
+qualify the private balanced-reader/transitive-layout combination only through
+its nine production stages, complete fresh Coding9 producer, clean environment,
+setup and 51/51 ModelProvider protocol cases. Actual provider-install enable
+then disconnects before the first model request. Its exact current worker core
+has a direct Runtime GC forwarding/root-visitation fault; only this sample
+enters the user-deferred GC scope, with zero pass credit. It neither passes
+the five-second request nor explains prior timeouts. Both candidates remain
+private, and physical process cleanup is not a DATA ACK.
+
+[E1340/E1341](implementation/plan-execution-reliability.md#broad-metadata-borrowing-is-withdrawn-not-counted-as-a-capacity-fix)
+reject the uncompiled broad borrowing proposal and restore all 58 original
+functional source hashes. Open catalog/inspector/process receivers cannot be
+treated as scoped metadata borrowers. Every measured first-unknown Prepared
+owner's actual last peak exceeds the unchanged 128 KiB seed; no seed-only
+excess or authorized refund is found. Core capacity and first-request startup
+remain unresolved. The task is **not complete**, GC has **zero pass credit**,
+and PR #49 remains **Draft**.
+
+[E1344/E1345](implementation/plan-execution-reliability.md#independent-text-copies-reach-the-next-unchanged-core-budget-boundary)
+pass all 77 natural Native Tool cases for independent, same-bank text copies
+whose unknown DATA debt stays paid after the original Prepared returns.
+The fresh full Core consumer passes the former partial Program capacity
+boundary, then fails the unchanged parent tool-call budget assertion.
+Canonical read-only copies prove actual refusal, one failed root receipt and
+zero child admissions, but an incorrect completed Run. This is not a passing
+Core contract or an authorized budget increase.
+
+The natural Host run has 278 passes and one missing-real-fixture prerequisite
+error, not a passing module or a GC classification. Runtime candidates stay
+private. All remaining Core, application, startup, matched-baseline and
+release requirements remain open; the task is **not complete**, GC has
+**zero pass credit** and PR #49 remains **Draft**.
+
+[E1346/E1347/E1349](implementation/plan-execution-reliability.md#typed-native-scheduler-failure-reaches-a-later-separately-measured-refusal)
+pass the unchanged parent tool-call budget assertion and all 279 natural Host
+cases with the real Native fixture. Canonical copies retain the original
+typed budget error, limit one, refused count two, one failed root receipt and
+zero child admissions. The full Core run then reaches another attachment
+capacity failure in the forbidden-write scenario.
+
+The later refusal is separately reconciled from all four actual roots and
+42 fixed buffers: charged 101,172,680 plus actual growth 50,331,648 exceeds
+the unchanged 150,994,944-byte bank by 509,384 bytes. No high-water/live-SUM
+gap, callback return or physical cleanup is treated as a refund. The complete
+current numeric epoch and original raw append stream are preserved. These
+runtime changes remain private; whole Core and its remaining matrix are open.
+
+[E1350](implementation/plan-execution-reliability.md#project-only-native-optimization-still-misses-the-original-request-deadline)
+passes a complete fresh Coding9 producer, clean environment, setup and 51/51
+ModelProvider protocols with actual dependency-wide project-only optimizer
+commands. The unchanged App and fixed read-only SDK are preserved, but the
+first local request still misses five seconds. No startup, matched-baseline
+or full-release acceptance is granted; the variant remains private.
+
+The task is **not complete**, user-deferred GC has **zero pass credit**, and
+PR #49 remains **Draft**.
+
+[E1351–E1354](implementation/plan-execution-reliability.md#private-read-view-retirement-does-not-resolve-core-capacity)
+leave complete Core failing the forbidden-write Program scenario with an
+actual attachment-capacity receipt. All 281 natural Host cases pass on that
+source, but the unaccepted private read-view route is withdrawn and its exact
+sources retained. Those results are not acceptance of subsequent candidates.
+
+[E1356/E1357/E1359](implementation/plan-execution-reliability.md#per-allocation-manifest-funding-remains-an-unaccepted-private-candidate)
+prepay actual bounded-reader growth without changing any product quota,
+package verification or DATA-return rule. Its fresh full Core consumer fails
+earlier, at matched Program sample three. The underlying child error is not
+visible in the parent assertion. A wrong passive watch directory captures no
+Store images; no canonical or GC claim follows. E1360 is limited to obtaining
+that missing diagnostic outcome.
+
+The actual reader-refusal, reader-lifetime and whole-package pressure/tamper
+cases pass. Extension has individual passing evidence for all 104 natural
+cases across the original run and corrected real pipe-fixture prerequisites.
+Registry has 39 passes and one unclassified runtime-boundary crash, with no
+usable core. Neither module evidence nor corrected prerequisites close the
+full Core, application, matched-baseline or final-release gaps.
+
+The task is **not complete**, user-deferred GC has **zero pass credit**, and
+PR #49 remains **Draft**.
+
+[E1360](implementation/plan-execution-reliability.md#corrected-canonical-observation-reaches-a-later-forbidden-shell-refusal)
+corrects passive Store observation for the same failed ELF. This execution
+passes the matched samples and obtains an actual denied-write business
+receipt, then fails the forbidden-shell scenario with
+`input_attachment.capacity` and zero derived admissions. Six original
+Store images are retained read-only; only separate copies are queried.
+It does not explain the earlier sample-three failure or grant whole Core
+acceptance. E1362's private composition remains unverified at this checkpoint.
+The task is **not complete**, GC has **zero pass credit**, and PR #49 remains
+**Draft**.
+
+
+
