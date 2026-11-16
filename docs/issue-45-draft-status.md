@@ -3962,3 +3962,85 @@ five-second first call, matched baseline and complete release remain
 unaccepted. **Not complete; GC user-deferred with zero pass credit;
 PR #49 Draft.**
 
+### Current terminal checks and private attachment funding candidate
+
+The public runtime source remains `6b7591a`. E1446 passes only the existing
+`cards` and `ask` headless goldens against the current Coding artifact.
+The initial private captured-PTY label is corrected and retained for audit;
+PIPE-based headless execution is not real-terminal acceptance.
+
+E1447's actual tmux/public-wire Model case succeeds at public package import,
+list and enable, then fails initialization at `loading session` under the
+original 20-second wait. No request key or Provider HTTP request occurs.
+The case is forced; the outer watcher cleans one remaining owned process.
+The other eight cases are not run after the shared prerequisite failure.
+Its exact ANSI/screens, empty input log, configuration and process evidence
+remain failed and unclassified, without MCP or GC credit.
+E1450's separate actual-Store analysis passes integrity, preserves raw/original
+hashes and closes its connection. No Run, Operation, Receipt or model attempt
+is recorded; these facts do not identify the loading failure's cause.
+
+E1445 qualifies a new actual invocation-funding RED from its original SDK
+output: one executed ERROR and 281 filtered cases in the natural Host
+inventory of 282. The original driver's erroneous `TOTAL 1` expectation is
+corrected without rerunning the case or changing an assertion.
+E1449's private full-invoice candidate passes all five affected Host cases,
+including original saturation refusal and parent/output-ACK lifetime checks.
+It uses the genuine invocation supplier, preserves the full 64 MiB attachment
+invoice and original bank/floor/SUM/high-water rules, and does not fall back
+after an offered funding refusal.
+
+The rebuilt complete E1451 Core/recovery contract still fails its first
+completed-child Receipt prerequisite. E1453's actual canonical projections
+now show admitted Workspace/readview children with failed Receipts:
+`host.process.readview` reports `read_view.package_changed`, not the earlier
+zero-child attachment refusal. Capacity and GC are not yet proven causes of
+that new nested error. All twelve original Store inodes are retained,
+observers close and raw integrity is preserved.
+
+[The implementation record](implementation/plan-execution-reliability.md#invocation-funded-attachment-candidate-remains-private-and-incomplete)
+binds current artifacts, corrected classifiers, exact error scope and evidence.
+The candidate remains private. Complete Core cancellation/recovery, real TUI,
+other Product/application flows, first-five-second request, matched baseline
+and final release remain unaccepted.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Nine real Model PTY cases pass; Core and MCP remain open
+
+E1455 accepts all nine original Native Model/public-wire Linux tmux cases
+on the unchanged public Coding ELF. It covers three delayed byte-split
+stream protocols, reasoning/usage, Esc and Ctrl-C cancellation with a usable
+subsequent request, and visible HTTP/timeout/incomplete-EOF/invalid-UTF-8
+failures followed by recovery. Exact keys, ANSI/screens, requests, canonical
+attempts and strict physical-custody receipts are retained.
+
+The fixture changes only its output placement to short absolute paths under
+the task's disk-backed temporary mount. This addresses E1452's actual bridge
+socket-path failure, without changing grants, mediated network policy or
+deadlines. Full performance tracing is off. E1447's earlier initialization
+failure remains independently unclassified. These nine passes do not accept
+mouse/resize, the default five-second profile, performance or full release.
+
+E1456 builds the real current Native MCP package independently under the
+fixed SDK. E1457's actual MCP Tool PTY case still fails service startup with
+`plugin.http_service_grant_invalid` before the MCP exchange.
+Its subsequent private evidence-copy error on a Unix socket is corrected
+from retained originals, not by rerunning or accepting the failed case.
+
+E1454's current private Core numeric sample still fails the first
+completed-child Receipt prerequisite. Its actual new growth request is
+4,194,304 bytes at 149,574,292 charged against 150,994,944 capacity:
+2,773,652 bytes over, with an exactly balanced bank. Actual constructor
+stacks distinguish the checkpoint/attachment group from all three Registry
+holders. Original floor, full 64 MiB attachment invoice, SUM/high-water,
+Source/SQL, actual ACK and reaping rules remain.
+E1460's four actual canonical Store projections preserve raw integrity and
+close every observer and analysis handle.
+
+[The implementation record](implementation/plan-execution-reliability.md#current-four-mib-refusal-and-nine-real-model-terminal-passes)
+contains the exact current accounting, artifacts and distinct failure scopes.
+Real MCP, complete Core cancellation/recovery, the unclassified portable
+Skills case, other Product/application flows, original first-five-second
+request, matched baseline and complete release remain unaccepted.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+

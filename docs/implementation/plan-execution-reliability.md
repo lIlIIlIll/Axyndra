@@ -8413,3 +8413,186 @@ first-call budget, matched baseline and final release remain unaccepted.
 The task is not complete. GC stays user-deferred with zero pass credit,
 and PR #49 stays Draft.
 
+## Current headless goldens and failed real-terminal initialization
+
+E1446 passes the original `cards` and `ask` headless goldens against E1435's
+current Coding ELF, bound to public head `6b7591a`.
+The gate launches PIPE-based headless fixtures, not a PTY, and writes terminal
+diagnostics only on failure. The private driver's initial captured-PTY label
+was incorrect. Its original summary is retained; the corrected summary in
+`public-client1446-current-tui` is authoritative and grants headless credit only.
+
+E1447 runs the original public-wire `rich-responses` case through a real tmux
+PTY with that same Coding ELF and its actually built Native Model package.
+Public import, list and enable operations succeed. The terminal then remains
+at `loading session` and does not reach `Enter send` within the original
+20-second wait. No user request key is sent and the local Provider receives
+zero HTTP requests. The exact ANSI output, screens, empty input log, fixture
+configuration and process receipts are retained in
+`public-client1447-real-pty`.
+
+The case requires forced termination and leaves one owned process for the
+strict outer watcher to clean up. Final cleanup has no remaining, unreaped
+or unknown owned process, but this does not accept the forced case or supply
+a DATA ACK. The other eight Model cases are not run after this shared
+initialization failure. No MCP package is built or imported by this sample.
+There is no direct GC evidence for this failure; its cause remains unclassified.
+This Linux tmux case supplies no mouse, resize or other-platform credit.
+
+E1450 separately copies the failed terminal case's actual persistent
+main/WAL/SHM after final process cleanup. Only analysis copies are opened by
+SQLite; `quick_check` passes and raw and original hashes remain unchanged.
+The connection closes explicitly. The actual Store contains four metadata
+rows and zero recorded Threads, Runs, Operations, Receipts, model attempts
+or approval decisions. These facts do not establish that no uncommitted
+work occurred or identify a GC/deadlock cause.
+`public-client1450-real-pty-canonical` retains the copies and projection.
+
+## Invocation-funded attachment candidate remains private and incomplete
+
+E1445 adds one real Native-bank lifecycle case to the existing Host inventory:
+282 cases naturally enumerate, with the original 281 unchanged. The actual
+Pipeline prepares a read-only allocation fixture against its real canonical
+Store. No Tool or file effect is executed. An actual invocation supplier is
+present, but the original independent attachment allocation fails with
+`input_attachment.capacity` under pressure that admits the full derived invoice.
+
+The fixed SDK reports one executed ERROR, zero passes and 281 filtered cases.
+The private driver initially expected `TOTAL 1` instead of the full module
+total. Its original classification is retained. The corrected qualification
+checks the exact error, all natural-inventory counts, source/ELF identity and
+actual physical closure from the same output; the failing case is not rerun.
+`scoped-attachment1445-red-unit` retains this qualified RED.
+
+E1449's private candidate uses the existing actual invocation-funding channel,
+not a long-lived Registry lease. It transfers a distinct attachment owner
+with the original full 64 MiB invoice in the same 144 MiB bank. Original
+16 MiB floor, SUM and high-water rules remain. Absence of an offered funding
+source keeps the original allocation path; an offered source's refusal never
+falls back to another payer. Attachment Source/SQL checks and actual ACK
+methods are unchanged.
+
+All five affected Host cases pass, including the two original saturation
+refusals. The new case proves that closing the actual parent cannot refund
+the retained work, a returned session with pending output stays paid, and its
+actual allocation-fixture ACK permits return. This allocation-only proof is
+not real Native process/output-consumption acceptance.
+The Host ELF is
+`dbf5206b8d531ec6a3eb6a3c54d834a941e9542a7a5e72e8b50c9d3d10ed856f`;
+`scoped-attachment1449-green-unit` retains all five qualified results.
+
+E1451 rebuilds the complete original Core/recovery contract from that retained
+functional source, under the original compilation and execution deadlines.
+Build and physical closure pass, but Core still fails the prerequisite that
+child one have a completed durable Receipt. Its current ELF is
+`363014e0e1737e9093a8b3e7f480091c116158709e18ff1291c4cba24cc57895`.
+This is not the earlier cached or withdrawn artifact.
+
+E1453 retains twelve original inodes from all four actual Stores, closes every
+observer FD, and checks separate canonical copies without changing raw hashes.
+The actual Program Parent now admits its Workspace/readview children rather
+than failing the earlier attachment admission. Both children fail:
+Workspace reports invalid worker JSON; nested `host.process.readview` reports
+`read_view.package_changed`, `permission_denied`, `worker package is unavailable`.
+The Parent has a failed Receipt and a completed Run. Completion therefore
+does not establish successful Tool execution. Neither capacity nor GC is
+proven as the cause of this new nested error.
+`scoped-attachment1451-full-core` and
+`scoped-attachment1453-canonical-analysis` retain the actual result.
+
+The candidate and its new unit case are not promoted to the public source.
+Cancellation at the intended boundary, recovery and complete Core remain
+unaccepted. The real-terminal initialization failure, remaining Product and
+application flows, original five-second call, matched baseline and full
+release requirements remain open. No external application-model call is made.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Current four-MiB refusal and nine real Model terminal passes
+
+E1454 runs the complete original Core/recovery entrypoint with the current
+private attachment candidate and the established numeric-only overlays.
+Its rebuilt ELF is
+`d6f87118ae847373ecaab773621c55e3e7aba074b7664bd59de108d77ed8364d`.
+Build and actual physical process closure pass; the complete contract still
+fails its first completed-child Receipt prerequisite.
+
+The first actual refusal is a 4,194,304-byte growth request, not the earlier
+50,331,648-byte attachment growth. At that exact decision, the bank holds
+149,574,292 bytes against 150,994,944 capacity; overshoot is 2,773,652.
+The current account balances exactly:
+
+| Actual holder | Refusal-time charge, bytes |
+| --- | ---: |
+| Main Product Registry, root 1 | 48,658,000 |
+| Artifact-failure Product Registry, root 210 | 16,785,348 |
+| Current cancellation/recovery Registry, root 266 | 16,777,216 |
+| Actual owned-checkpoint group, root 271 | 67,263,616 |
+| Four actual fixed buffers | 90,112 |
+| Total charged | 149,574,292 |
+
+The constructor stacks identify the checkpoint group directly. Its actual
+live leases contain the 67,108,864-byte attachment invoice, checkpoint
+134,272 bytes, a 16,384-byte control lease and the refusing zero-valued lease,
+plus their four original 1,024-byte headers. The new lease requests the
+original 4 MiB inspection-work invoice. Main Registry SUM is 35,958,344
+while its paid high-water is 48,658,000; this difference is not a refund
+or leak proof. Original SUM/high-water and actual return rules remain.
+
+`scoped-attachment1454-numeric-core` retains all 34,679,396 event bytes and
+614,348 origin bytes without growth threshold filtering.
+E1460 projects all four actual Stores from twelve retained original inodes:
+integrity and canonical roundtrips pass on separate copies, raw hashes stay
+unchanged and every observer/analysis handle closes.
+Actual Workspace/readview children still fail, including
+`read_view.package_changed`; a completed Parent Run is not successful Tool
+execution. Complete cancellation/recovery and Core remain unaccepted.
+
+E1452's separate TUI diagnostic receives and decodes the actual draft reply,
+then a real submitted request fails before HTTP dispatch with
+`network.gateway_unavailable`: the bridge reports that its Unix socket path
+is too long. Global performance tracing also writes into the terminal.
+This diagnostic remains failed and supplies neither original-public
+acceptance nor a cause for E1447's earlier initialization failure.
+
+E1455 runs the unchanged public Coding ELF through all nine original
+public-wire Model PTY cases, with performance tracing off and only the
+fixture output placed at short absolute paths in the task's disk-backed
+temporary mount. Original permissions, mediated networking, approvals,
+20-second waits and timeout scenarios are unchanged; there is no
+HostNetwork fallback. All nine cases and their strict physical-custody
+checks pass:
+
+- Responses, Completions and Messages display delayed, byte-split SSE text,
+  reasoning and usage while the fixture gates the final chunk.
+- Esc and Ctrl-C show cancellation, reject late cancelled text and permit
+  a subsequent actual request.
+- HTTP error, Run wall timeout, incomplete EOF and invalid UTF-8 show visible
+  failures and complete the subsequent actual request.
+
+`public-client1455-short-pty` retains exact key bytes, ANSI, screenshots,
+wire requests, stream events, canonical model attempts and process receipts.
+This accepts those nine Linux tmux cases, not mouse/resize, the original
+five-second default profile, matched performance or complete release.
+
+E1456 independently builds the actual current Native MCP package with the
+fixed official SDK, normal manifest flags and an own fresh target.
+The package closure passes and its ELF is
+`eb7ce44d01006f9c14a5e9ac6628f48ab919515c2fec094341151912453cf8d4`.
+No compiler/runtime/std/stdx/SDK is rebuilt.
+E1457 uses it with the unchanged public Coding ELF in the original real
+`mcp-tool` PTY case. Public installation succeeds, but service startup is
+denied with `plugin.http_service_grant_invalid` before the actual MCP
+exchange. It has no success or GC credit.
+
+The private evidence copier then fails on a Unix socket, after the native
+case has already failed. Preservation is completed from the retained
+originals without rerunning the case: regular files and symlinks are copied,
+the nonregular endpoint is inventoried and its original node remains.
+Final outer cleanup does not accept the forced case or acknowledge DATA.
+`public-mcp1456-package` and `public-mcp1457-real-pty` retain both boundaries.
+
+The real MCP Tool path, private Core candidate, unclassified portable Skills
+case, remaining Product/application flows, first-five-second request,
+matched baseline and complete release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
