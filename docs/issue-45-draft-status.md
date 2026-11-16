@@ -3790,3 +3790,175 @@ At E1395 the public head is documentation-only `81c608a`, behavior remains
 candidate is promoted. The task is **not complete**; user-deferred GC has
 **zero pass credit** and PR #49 remains **Draft**.
 
+### Actual metadata lifecycle census E1398 and private frame correction
+
+[E1398's refusal-time census](implementation/plan-execution-reliability.md#refusal-time-lifecycle-census-separates-unknown-and-producer-debts)
+joins 94 metadata owners to actual current bank/root/lease charges and
+their real producer leases. All 39 returned owners charge zero; unknown
+owners remain paid after producer return. Three known owners without
+consumers still charge 1,026,456 bytes under the one-slot direct-client
+producer. First export, logical terminal state and process exit remain
+insufficient retirement evidence.
+
+The actual current refusal is 101,205,532 charged + 50,331,648 requested
+against the unchanged 150,994,944-byte bank. Complete Core still fails;
+six original Store images are retained, separate copies pass integrity
+checks, and operation 100 records attachment capacity rather than the
+required forbidden-shell result.
+
+E1402/E1404 privately correct the dropped existing custody in a
+budget-only fixture clone and the missing real public Core request frame.
+The first compile fails on two mistaken constructor-only member forwards;
+no runtime credit follows. The corrected fixture forwards seven existing
+fields and preserves every original acceptance assertion byte-for-byte
+after erasing only those additions. Actual caller request, task, output,
+Source, SQL and ACK obligations are unchanged. The candidate is
+**unaccepted and not delivered**, pending the actual complete run.
+
+Public behavior remains `fb35f53`; the evidence-only `10c4125` update is
+fast-forward and retains all commit and outbound privacy hooks. The task
+remains **not complete**, GC remains user-deferred with **zero pass
+credit**, and PR #49 remains **Draft**.
+
+E1403's exact corrected Core source passes ten selected existing custody
+regressions, with all 54 natural cases retained in the inventory. Only
+those ten have pass credit; complete Core/recovery remains pending and
+no private runtime correction is promoted.
+
+### Public Core frame candidate advances, complete gate still fails
+
+[E1404](implementation/plan-execution-reliability.md#genuine-public-core-frames-advance-to-real-cancellation-recovery)
+passes the original forbidden-shell/static-syntax boundaries and the
+real Native read-cancellation checks. Actual operation 100 now records
+the required denial instead of attachment capacity. Complete Core
+still fails `plugin.duplicate_namespace` during the next independent
+Program cancellation/recovery setup; those recovery assertions have no
+pass credit.
+
+Twelve original images from four stores are retained read-only; all four
+separate analysis copies pass integrity checks and all original hashes
+remain unchanged. E1406 isolates only that independent fixture's
+Workspace using the existing artifact-failure pattern, preserving input
+bytes and every cancellation/Source/SQL/ACK assertion. Its complete run
+is pending. Core/unit sources are unchanged, so only the existing ten-case
+E1403 unit credit is reused.
+
+The task remains **not complete**, runtime changes remain private,
+user-deferred GC has **zero pass credit**, and PR #49 remains **Draft**.
+
+### Real first-child cancellation prerequisite remains unaccepted
+
+[E1406/E1409](implementation/plan-execution-reliability.md#cancellation-recovery-still-requires-an-actual-first-child-receipt)
+reach the actual independent Program cancellation setup, but its Parent
+fails `input_attachment.capacity` before any derived child admission.
+One actual local model attempt completes; there is no first durable
+child Receipt, so the original cancellation/recovery prerequisite stays
+failed. Moving the existing real main Product close to its last use does
+not resolve this refusal or acknowledge unknown DATA.
+
+The all-inode reader retains twelve actual images, all four separate
+analysis copies pass integrity checks and canonical roundtrips, and all
+original hashes and FD closure checks remain valid. Earlier zero-capture
+watcher setup probes are not no-database evidence. No old invoice is
+assigned to this new failure, no Receipt assertion is weakened, and no
+private runtime candidate is delivered.
+
+Complete Core, remaining Product/application flows, first-call budget,
+matched baseline and final release remain unaccepted. **Not complete;
+GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Current refusal and qualified public request-frame RED/GREEN
+
+| Evidence | Scope | Observed result |
+| --- | --- | --- |
+| E1411 | Current private numeric diagnostic | Earlier partial Program with invalid Workspace JSON and missing read-view terminal. No refusal reached. Unclassified, with no GC or cancellation acceptance. |
+| E1417 | Same private functional source, numeric-only output | Actual cancellation Parent refuses 50,331,648-byte growth at 115,775,012 charged against 150,994,944 capacity. Ledger balances; all known zero-consumer metadata producers have returned. Unknown debt and high-water rules stay intact. |
+| E1419 | Unmodified public source, actual Native-backed standalone Product caller | One fixture model request completes. Existing custody correctly waits for application ACK but incorrectly stays paid after the whole caller frame and ACK return. Qualified RED. |
+| E1422 | Four narrow public Core/test changes, same caller and Native package | Actual GREEN requires the original application ACK and then returns request DATA. No private working-funding or billing candidate is included. |
+
+[The implementation record](implementation/plan-execution-reliability.md#current-cancellation-refusal-and-public-request-frame-regression)
+binds exact source and ELF identities, failed harness attempts and private
+evidence locations. The public correction enters real Core frames for all
+public start/resume/decision variants and preserves the owned failure APIs'
+single existing frame. The permanent Native Product regression and nine
+custody tests are separate pending checks.
+
+The public caller result does not turn E1409/E1417's first-child failure
+into cancellation/recovery acceptance. Complete Core, remaining Product
+flows, first-call budget, matched baseline and final release remain
+unaccepted. **Not complete; GC user-deferred with zero pass credit;
+PR #49 Draft.**
+
+### Public custody unit and static checks
+
+E1423 passes the nine selected public custody regressions from a natural
+53-case Core inventory. The following Product build reaches the original
+900-second limit, before running the new permanent Native regression.
+Product receives no runtime credit. Its actual compiler tree is reaped;
+physical cleanup does not acknowledge DATA.
+
+E1426 passes all 129 selected Python regressions and the complete
+architecture gate on the four public Core/test changes. The original
+bounded unit-profile dependency-preparation recipe is used to prepare the
+next Host layer before another Product compilation. The completed Core
+stage and its nine qualified cases remain valid.
+
+[The implementation record](implementation/plan-execution-reliability.md#public-custody-regressions-pass-product-compilation-remains-pending)
+retains exact artifacts, failed build scope and remaining obligations.
+Complete Core cancellation/recovery, the Product regression, first-call
+budget, matched baseline and final release remain unaccepted.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Current production build and actual cancellation holders
+
+E1424 passes the original nine production stages for the public request-frame
+correction. E1428 passes the next original Host unit-profile predecessor.
+Neither accepts the pending permanent Product regression or complete release.
+
+[E1425–E1434](implementation/plan-execution-reliability.md#current-public-production-build-and-exact-remaining-private-holders)
+separates a successful compiler message from its failed process guard,
+proves the narrow kernel exiting-Z parser correction privately, and records
+the actual current Core execution. The old failed entry is not reclassified.
+The current sample has no unknown process observations, but still fails
+attachment capacity before the first durable child Receipt.
+
+Its bank balances at 115,774,804 charged plus 50,331,648 requested against
+150,994,944 capacity. Actual origins distinguish the old artifact-failure
+Registry, the current cancellation Registry, its owned checkpoint slot and
+the requesting attachment. The 57 unknown metadata first exports come from
+two concrete Host paths. These origins do not acknowledge their final
+consumers or justify refunds. Original floors, SUM, high-water, Source,
+SQL, actual ACK and process-reaping rules remain.
+
+Four separate canonical Store projections retain the failed Parent with
+zero child admissions. Current Coding packaging and the permanent Native
+Product regression are separate pending checks.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Permanent public consumer and current Coding artifact
+
+E1440 passes the permanent Native-backed
+`public_client_request_custody_contract`. It uses existing request custody,
+completes one real local fixture-model call through public `client.start`,
+returns the complete caller frame, and proves DATA waits for the actual
+application ACK. The Native package is identical to the public RED/GREEN.
+The executable is registered in both focused and release contract lists.
+
+The newly added test moves out of the monolithic Product unittest build.
+The original Product test source is restored exactly; no existing case is
+removed or weakened. Both original 900-second Product build failures remain
+failed and receive no runtime credit. The new integration result is not
+whole-Product acceptance.
+
+E1435 passes current Coding9 production assembly, clean environment, setup
+and 51 local model-protocol contracts. E1441 passes all 131 selected Python
+regressions and the complete architecture gate after the exact-byte
+promotion of the qualified exiting-Z observer correction.
+[The implementation record](implementation/plan-execution-reliability.md#permanent-public-client-contract-and-current-coding-checks)
+binds all artifacts, source scopes, actual process and ACK evidence.
+
+Complete Core cancellation/recovery, remaining Product/application flows,
+five-second first call, matched baseline and complete release remain
+unaccepted. **Not complete; GC user-deferred with zero pass credit;
+PR #49 Draft.**
+

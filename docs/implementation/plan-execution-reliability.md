@@ -7985,3 +7985,431 @@ There is no new external model call, SDK rebuild/replacement, quota,
 stack or deadline increase, manual CI, force update, Ready, merge or
 Issue closure.
 
+## Refusal-time lifecycle census separates unknown and producer debts
+
+E1398 adds numeric lifecycle events to the exact restored E1374 functional
+candidate. Metadata events contain only bank/root/lease IDs, consumer and
+header counts, retained invoice and four scalar state flags. A separate
+numeric relation joins each metadata payer to its actual Core producer
+lease. No owner/child references are retained in diagnostic logs or
+closures. Erasing the hooks preserves every functional metadata token;
+the other two overlays differ only by their numeric methods/relation and
+unique event sink.
+
+The fresh actual Core ELF is
+`fea54428416085e5acb68ea198152d4a96976fce670b54cb9459f30b4b3482df`.
+Complete Core still fails the forbidden-shell assertion because operation
+100 fails attachment capacity; operation 99 retains its original
+`readonly_delegation.tool_denied` result and zero child admission.
+This execution's actual refusal is **101,205,532 charged +
+50,331,648 requested against 150,994,944 bytes**, 542,236 over. The
+current shared sum, fixed buffers and total bank balance reconcile.
+These values replace neither E1379's different observation nor a DATA ACK.
+
+At that exact refusal, 3,855 lifecycle events describe 94 metadata owners.
+Joining their last actual state to the current ledger gives:
+
+| Root | Metadata state | Owners | Actual current bytes |
+| --- | --- | ---: | ---: |
+| 1 | Returned; producer returned, zero consumers | 38 | 0 |
+| 220 | Returned; producer returned, zero consumers | 1 | 0 |
+| 1 | Known; producer not returned, zero consumers | 3 | 1,026,456 |
+| 1 | Unknown; producer not returned, zero consumers | 6 | 1,606,888 |
+| 1 | Unknown; producer returned, zero consumers | 39 | 10,690,512 |
+| 1 | Unknown; producer returned, one consumer each | 4 | 653,944 |
+| 220 | Unknown; producer returned, zero consumers | 3 | 622,312 |
+
+The 39 actually returned owners all have zero current ledger charge.
+Unknown debts remain paid even where the producer has returned. The
+three known, unreturned owners share the exact producer whose birth stack
+is the original one-slot `product.client.start` scenario. That observation
+does not authorize retiring them before the original task, request,
+output and ACK fences actually return.
+
+The unfiltered numeric file is 29,941,173 bytes. All six original Store
+images survive normal closure; all observer FDs close and separate
+analysis copies pass `quick_check`. `metadata-lifecycle1398-diagnostic-core`
+and its `metadata-census.json` bind every state to the actual refusal.
+The copied proof's old human-readable sink label is corrected explicitly
+in `metadata-lifecycle1398-proof-text-correction.json`; the hashed source
+and actual new unique sink are E1398, not reused E1379 output.
+
+E1402 identifies two concrete missing boundaries on that direct-client
+path: the budget-only fixture clone drops existing custody, and public
+Core entrypoints bypass the real custody frame used by owned result
+APIs. The private correction routes both API result forms through that
+same actual frame and keeps owned wrappers on the private bodies to
+avoid double counting or premature failure cleanup. It does not invent
+custody for ownerless requests, return a caller's retained original
+request, or skip any task/output/ACK fence.
+
+The first compile attempt fails on two mistaken constructor-only member
+forwards, `userRequestedThinking` and `thinkingSource`; no runtime is
+executed. E1404 removes those two mistakes, keeping the original effective
+thinking/model snapshot forwards and seven genuinely existing fields.
+Erasing exactly those seven additions restores the byte-identical full
+original fixture SHA-256
+`03505319750aa97c87a2648b5d27043404f14887e089f7f87b098794afd6c1d9`.
+No original scenario, assertion or limit is removed or relaxed.
+This candidate is still private and **unaccepted**; compiling progress
+or identifying the missing frame is not a passing complete Core run.
+
+E1403 compiles the actual Core unittest module and naturally enumerates
+54 cases. Only the ten existing request-custody cases execute, each in
+its original isolated process and unchanged bound: all ten pass. They
+cover actual task return, caller aliases, unsubmitted/unknown admission,
+typed paid failure with genuine consumer ACK, unknown exceptions and
+ambiguous funding. The actual unittest ELF is
+`83a0a74c805ecf0443ae9e436c3bb5634029a370f7c8d8018c2e1bc8ecf16729`.
+`actual-core-frames1403-custody-unit` retains the complete inventory and
+per-case process evidence. This is not 54/54 or a passing complete
+Core/recovery execution; the separate original full run remains pending.
+
+## Genuine public Core frames advance to real cancellation recovery
+
+E1404's corrected actual build succeeds, then the complete original Core
+run **still fails**, at a new boundary rather than attachment capacity.
+Its ELF is
+`b065a1e83a7aa268fabd3c377408cafa5b6fed140ce4ca6ed4beee32c1769699`.
+The existing forbidden-shell and subsequent static-syntax assertions
+return successfully, followed by the real Native read-cancellation
+contract. Main operation 100 now has the required
+`readonly_delegation.tool_denied` receipt; operations 101–104 retain
+their exact forbidden/static-syntax outcomes. No E1398 charge is assigned
+to this uninstrumented new candidate.
+
+Execution then fails `plugin.duplicate_namespace` in
+`NativeProgramContractBinding` while constructing the separate Program
+cancellation/recovery Product. That fixture uses new settings/state
+directories but the original Workspace, whose Workspace-scope Native
+namespaces are already installed by the earlier Product. Duplicate
+import rejection is correct; the cancellation/recovery assertions have
+not yet executed and receive no pass credit.
+
+The observer now retains **twelve**, not six, original images from four
+actual Store instances. The original two-DB analysis helper is explicitly
+limited to its two queried stores; additional separate copies cover both
+new cancellation stores. All four pass `quick_check`, all twelve original
+hashes remain unchanged and every observer FD closes. The Native-read
+cancellation Store contains one Run/operation; the failed Program setup
+contains neither. `actual-core-frames1404-complete-core`, its retained
+originals and `additional-cancellation-stores.json` preserve these
+distinct scopes.
+
+E1406 corrects only this independent fixture's Workspace isolation,
+following the existing artifact-failure fixture pattern. It copies the
+actual `src/alpha.cj` and `src/beta.cj` bytes into its own Workspace;
+product import rules, real Native packages, permission checks, Source,
+SQL, cancellation/recovery assertions, actual ACK and process cleanup
+remain unchanged. The same Core code and all original limits are reused.
+The combined, actually executed erasure of that setup change and the
+seven budget-clone field forwards restores the exact original fixture
+SHA-256 recorded above; `actual-core-frames1406-fixture-erasure.json`
+states both transformations explicitly.
+
+The separate E1403 ten-case unit result remains applicable: Core runtime
+and unit sources have not changed, and the isolated Workspace setup is
+outside that module. It is not rerun to manufacture more credit.
+The new complete cancellation/recovery execution is pending; neither
+the original-boundary improvement nor fixture setup is whole-Core,
+Product, matched-baseline or release acceptance. All runtime candidates
+remain private and PR #49 stays Draft.
+
+## Cancellation recovery still requires an actual first child Receipt
+
+E1406 builds and reaches the independent cancellation Product without the
+duplicate import. The complete run still fails the original prerequisite:
+`cancellation starts only after child one has a completed durable Receipt`.
+The actual ELF is
+`c6f884d2a5c533a34f8a30017f10555aa90fbfa4850d0f3151f8b78741c45df9`.
+Its separately copied actual Store has one failed Run, one completed local
+model attempt, and only the Parent Operation. The Parent receipt is
+`input_attachment.capacity`; there are zero derived admissions.
+Neither cancellation at the intended boundary nor recovery is accepted.
+The durable-Receipt prerequisite is retained, not weakened or replaced by
+logical completion.
+
+E1409 moves the existing real main `product.close()` to immediately
+after its last use, before starting independent cancellation fixtures.
+It calls the unchanged production cleanup API and supplies no DATA-return
+assertion. Complete Core **still fails** the same first-child prerequisite.
+Its ELF is
+`d7c80312057711fac6055707f4da9f258c1ee200b8cdc23af464f4565aca72fa`.
+The actual post-close cancellation Store still has a failed Parent
+`input_attachment.capacity` receipt and no child admission. Real Product
+closure therefore does not establish that unknown DATA returned or that
+the current refusal was resolved. No earlier charge is reused for it.
+
+E1409 uses the already-validated all-inode reader with Core's actual
+directory-role watcher. Its smoke fixture starts the watcher before
+creating the real `case/state` hierarchy, retains both WAL lifetimes
+and recovers markers 1 and 2 from separate main-only analysis copies.
+The two earlier zero-capture probes used the wrong hierarchy or a
+pre-existing case root; they remain zero, not evidence of no database.
+The Core parent watcher intentionally does not enumerate existing cases.
+
+The actual E1409 execution retains twelve distinct original inodes.
+Each of its four observed sources has one main DB, one WAL and one SHM;
+no repeated WAL generations are combined. All four separate analysis
+copies pass `quick_check`, every normalized plan round-trips, all raw
+hashes remain unchanged and every FD closes. The Native-read cancellation
+Run is actually cancelled; the Program cancellation Run is failed before
+its first child. `actual-core-frames1406-complete-core`,
+`actual-core-frames1406-canonical-analysis/actual-cancellation-boundary.json`,
+`actual-core-frames1409-complete-core` and its separate canonical
+projections retain the actual outcomes.
+
+Current owner/invoice attribution and an independent unmodified-public
+client lifetime reproduction remain separate investigations. A private
+caller invocation initially erases the fixed SDK selector and exits
+before compilation; it has no runtime or failing-before credit. The
+corrected invocation preserves that existing readonly SDK selector.
+No private runtime candidate is promoted, and complete Core remains
+unaccepted.
+
+## Current cancellation refusal and public request-frame regression
+
+E1411's diagnostic ELF fails earlier than the Program cancellation fixture.
+The Parent Program is partial after an invalid Workspace JSON response and
+`read_view.terminal_missing`. No bank-refusal event is observed.
+`current-cancel1411-diagnostic-core` retains that unclassified failure.
+It does not locate the later cancellation refusal or establish a GC cause.
+
+E1417 retains every numeric event but removes diagnostic console stacks.
+The rebuilt ELF is
+`bee7f5f6807dcbb241d0f948c1fd215bc9d49dbccb66377c7722353843108975`.
+The complete gate again reaches the original first-child durable-Receipt
+prerequisite and fails attachment capacity. This is an observed new run,
+not a causal claim about E1411's protocol failure.
+
+| First actual E1417 refusal, bank 2 | Bytes |
+| --- | ---: |
+| Fixed capacity | 150,994,944 |
+| Charged at refusal | 115,775,012 |
+| Actual requested growth, root 292 | 50,331,648 |
+| Overshoot | 15,111,716 |
+
+The complete ledger reconciles exactly. Root 1 is charged 48,657,848 bytes
+with 35,958,192 bytes in live shared leases. Its 41 known returned metadata
+owners have zero charge. No known prepared metadata owner with zero
+consumers is still waiting for its producer return. Unknown metadata remains
+paid. The earlier three missing producer returns are no longer a current
+explanation or an available refund.
+
+`LogicalJsonSharedCustody` deliberately keeps its high-water charge until
+all leases return. The difference between the charge and the current SUM
+is not refundable capacity. The fixed bank, floor, attachment invoice,
+actual ACK and unknown-copy rules remain unchanged.
+`current-cancel1417-stackless-diagnostic-core` retains all 34,133,942 bytes
+of events and `current-refusal-and-metadata-census.json`.
+
+E1419 independently reproduces a narrower bug on public `10c4125` sources.
+A standalone public Product caller installs and enables the actual Native
+Workspace package. Its request has existing paid custody, and one local
+fixture model request completes. The complete request/snapshot helper then
+returns. DATA correctly remains paid before the application ACK, but stays
+retained after that real ACK because public Core did not enter and return
+its request frame.
+
+The earlier missing-SDK-selector invocation never compiled. A fresh Product
+without a Registry payer legitimately has no request custody; its caller's
+`NoneValueException` is not this regression. An unnecessary forced-O2
+caller build reaches its original 900-second limit without runtime credit.
+E1419 uses normal default options and reproduces the exact request-frame
+error. Those failed harness attempts remain recorded.
+
+E1422 changes only public Core frame handling and affected tests.
+The frame helper becomes generic. Public start, continuation, restricted
+start, resume, context-boundary resume, and decision enter the real frame.
+The owned failure APIs call their private bodies inside their existing
+frame, avoiding double counting and premature collection. Typed paid
+failures and unknown exceptions keep their existing obligations.
+No private working-funding, Host, Registry, dependency or billing candidate
+is included. The Core source SHA-256 is
+`cfbc438c76d6fcf25cd31287e03396936a93ccd64473a3eddba3bb45e9ff6a47`.
+
+The exact same caller, Native package, default compiler options, readonly
+official SDK and original limits produce a passing public GREEN.
+The application ACK is required before DATA returns.
+RED and GREEN ELFs are respectively
+`09b402308f4110d9c52d5ded5d9397f0a291f3e95da21061b7284023b7edb7e7`
+and `15d28f589ede38bf1ece78efe4fecd96558fa4690ee224d6ef60872f38c0b0ff`.
+`direct-client1419-default-public-red` and
+`direct-client1422-default-public-green` retain both source maps, unchanged
+caller and Native identities, actual logs and physical process custody.
+
+The permanent Product regression uses the existing Native Workspace
+fixture and a returned request/snapshot helper. Its original nine custody
+regressions and the production build are separate pending checks.
+This public consumer fix does not accept the private complete Core gate,
+remaining Product/application flows, first-call budget, matched baseline
+or final release. The task remains incomplete, GC remains user-deferred
+with zero pass credit, and PR #49 stays Draft.
+
+## Public custody regressions pass, Product compilation remains pending
+
+E1423 passes all nine original public custody regressions. The SDK naturally
+enumerates 53 Core cases; only the selected nine receive runtime credit.
+The actual Core unittest ELF is
+`d76b6986f9ecf4ff5f16296db644c9b64cbaa32f81bc48d90694873862664ba2`.
+The cases retain actual task return, application ACK, accepted-consumer,
+typed paid-failure and unknown-exception checks.
+
+The following one-job Product compilation reaches its unchanged 900-second
+limit. The new permanent Product test is not executed and receives zero
+pass credit. The completed process receipt records cleanup of the owned
+compiler tree, with no remaining processes, unreaped children or unknown
+observations. This physical cleanup is not DATA-consumption evidence.
+`public-request1423-custody-unit` retains the natural Core inventory,
+qualified individual results and failed Product build.
+
+The existing `prepare_workspace_dependencies` recipe explains the recovery:
+a killed monolithic test build does not commit CJPM's incremental index.
+Its bounded test-profile predecessors commit each successful layer.
+The successful Core stage is preserved; the next Host predecessor is
+prepared separately before another Product build. Original limits remain.
+No Product, whole-Core or release acceptance is inferred from compilation.
+
+E1426 passes the unchanged 129 selected Python regressions and complete
+architecture gate over the four public Core/test changes and current
+records. The gate checks 2,978 tracked paths, 72 Markdown files, 39 workspace
+packages and 178 local dependency edges, with zero baseline boundary
+violations. `public-request1426-final-static` retains the actual output.
+These static checks do not resolve the failed complete Core cancellation
+prerequisite or qualify the pending Product regression.
+
+## Current public production build and exact remaining private holders
+
+E1424 passes all nine original production stages for the four public
+Core/test changes. Each stage keeps its original 900-second bound.
+The App SHA-256 is
+`580df41d76db2f40fda7234ff584bb4406f6063a4a4c7b2a914240a34b13e156`;
+Minimal is
+`2e5c7e99f156cbf4abec86f61af1cc2fa15908694b5e9dbdbc64d242f1d9ce10`.
+`public-request1424-nine-production-stages` retains the full source map,
+original stage commands, physical process receipts and artifacts.
+This is build credit only. Current Coding packaging is a separate check.
+
+E1428 passes the original Host unit-profile predecessor at its unchanged
+900-second bound. It commits the next dependency layer after the successful
+Core stage. The permanent Native Product regression remains pending its
+own compilation, natural enumeration and actual filtered execution.
+
+E1425's private diagnostic compiler prints `cjpm build success`, but the
+process guard rejects a numeric `Z / 0 / -1 / -1` exit snapshot with
+`PF_EXITING`. Its overall entry remains failed and Core is not executed.
+No fresh invoice or process-return credit follows from the compiler message.
+
+The [Linux v7.2.11 `do_task_stat` implementation](https://raw.githubusercontent.com/gregkh/linux/v7.2.11/fs/proc/array.c)
+reads state before `lock_task_sighand`. When the later lock fails,
+PPID, PGRP and SID can retain their initialized `0 / -1 / -1` values.
+The private observer correction accepts only this exact exiting-zombie
+shape, preserving its original signed fields. Known owned zombies remain
+unreaped; existing final-observation and actual wait requirements remain.
+Live, partial, unreadable and unproven identities still fail closed.
+
+E1432 reproduces two failing identity/lifetime regressions on the original
+parser. E1433 passes all 47 process-isolation tests after the narrow private
+correction, including real successful-process, detached-live-child and
+timeout controls. The old diagnostics fixture used a valid exiting Z state
+as malformed input; it now uses a genuinely invalid live state. The unrelated
+fixture-byte hash assertion is removed. `zombie-exit1432-identity-red` and
+`zombie-exit1433-identity-green` retain the exact scope. The observer change
+is not yet promoted and does not retroactively accept E1425.
+
+E1434 reuses the completed Cangjie cache with unchanged Cangjie sources,
+then executes under the corrected private observer. Both process receipts
+have zero unknown observations. Complete Core still fails the first-child
+durable-Receipt prerequisite. Its actual ELF is
+`b5d54150873e575bc11da282f5a5f31a64e68c56114eb6a866cbe41bee3f68de`.
+The actual refusal is 115,774,804 charged plus 50,331,648 requested against
+150,994,944 capacity, an overshoot of 15,111,508 bytes. The complete bank
+ledger reconciles exactly. No older refusal amount is assigned to it.
+
+The file-only method/line origins identify the current holders:
+
+| Actual root | Constructor or allocation owner | Current charge |
+| --- | --- | ---: |
+| 1 | Main Product `PluginRegistryMetadataCustody` | 48,657,656 |
+| 220 | Separate artifact-store-failure Product Registry | 16,785,500 |
+| 286 | Program cancellation/recovery Product Registry | 16,777,216 |
+| 291 | Actual `ApplicationSession.reserveOwnedCheckpointSlot113` | 16,777,216 |
+| 292 | Requesting `HostToolInputAttachmentSession` | 16,777,216 |
+
+The 57 live unknown metadata owners first export through
+`HostJavaScriptPluginToolExecutor.executeLegacyActualFrame204` (27) and
+`HostJavaScriptPluginServiceBroker.validateChildPlan` (30).
+These are first-export origins, not last-consumer acknowledgements.
+The current artifact-failure Registry is not the Native-read cancellation
+Registry. Root 291 is a real owned-checkpoint slot, not an inferred request
+or duplicate attachment. Their paid high-water and unknown-copy rules stay
+unchanged.
+
+`current-cancel1434-export-origins-core` retains all 34,136,253 bytes of
+numeric events and 659,624 bytes of method/line origins. Its exact
+refusal-time metadata census preserves the original lease headers.
+The observer retains twelve original inodes from four stores.
+All four separate analysis copies pass integrity and canonical roundtrips,
+all original hashes remain unchanged, and all observer FDs close.
+The Program cancellation Parent has `input_attachment.capacity` and zero
+derived admissions. Cancellation at its intended boundary and recovery
+remain unaccepted. GC remains user-deferred with zero pass credit.
+
+## Permanent public client contract and current Coding checks
+
+E1429's Product-only compilation still reaches its original 900-second
+limit after the successful Host predecessor. Both Product attempts remain
+failed, with no Product runtime credit. Their evidence is retained in
+`public-request1423-custody-unit` and
+`public-request1429-native-product-regression`.
+
+The newly added request-lifetime regression moves to
+`support_tests/public_client_request_custody_contract`, initialized by the
+fixed SDK's `cjpm init`. The original Product test file is restored byte
+for byte. No existing Product test is removed, skipped or weakened.
+The independent public-client executable is registered in both
+`vnext_contract_gate.py` and `release_contracts.txt`, before the existing
+compound Product contract.
+
+E1440 builds and executes this permanent consumer against the current
+Coding Native Workspace package. It installs and enables the real package,
+uses the request's existing paid custody, and completes one local fixture
+model call through public `client.start`. The complete request/snapshot
+helper returns before the outer caller acknowledges. DATA remains paid
+before that actual application ACK and returns afterward. Original Core
+task/output/settlement witnesses remain required.
+
+The actual permanent consumer ELF is
+`1b38a2bc4f256d956955585a9d8ac931228f7a3e28503d81e2ba32640252564c`.
+The Native Workspace ELF remains
+`3ffe67aa889aaf3b8497646ce6e869c5cc8b676f615346e3269facee79d105c1`,
+identical to the qualified public E1419 RED and E1422 GREEN.
+`public-client1440-integration` retains source identities, actual logs and
+complete physical process receipts. The production Core implementation
+bytes are unchanged from the passing nine stages and current Coding build.
+
+E1435 passes original Coding9 assembly, clean-environment, setup and all
+51 local model-protocol contracts. Its Coding ELF is
+`8d089676c8027aac561241b0f87100a1d5dc41957ced5bac26b7328f878e9121`.
+`public-request1435-current-coding` retains the actual Native input/output
+hashes, producer targets, loader checks and provenance.
+No external application-model call is made. These checks do not exercise
+the blocked five-second first call, complete TUI/CLI/ACP, matched baseline
+or full release gate.
+
+The narrow exiting-Z observer and its regression changes are copied to
+the public checkout with exact byte equality to E1433's 47-case result.
+E1441 then passes all 131 selected Python regressions and the complete
+architecture gate on the integrated source. The count changes from 129
+because three semantic state/lifetime cases replace one fixture-byte
+hash assertion. Genuine live-child, timeout, unreadable/partial identity,
+PID-reuse and actual-reaping rejection remain covered.
+
+The permanent consumer is the new regression's integration layer.
+It does not replace or accept the failed complete Product module.
+The nine original Core custody cases retain their narrower E1423 credit.
+Complete Core cancellation/recovery, other Product/application flows,
+first-call budget, matched baseline and final release remain unaccepted.
+The task is not complete. GC stays user-deferred with zero pass credit,
+and PR #49 stays Draft.
+

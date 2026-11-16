@@ -6,8 +6,8 @@ import std.sync.*
 
 private let planRequestDebts204 = PlanRequestDebts204()
 
-func withPlanRequestCustodyFrame204(custody: ?PlanRequestCustody204,
-    invoke: () -> OwnedAgentRunResult113): OwnedAgentRunResult113 {
+func withPlanRequestCustodyFrame204<T>(custody: ?PlanRequestCustody204,
+    invoke: () -> T): T {
     match (custody) { case Some(value) => value.beginCoreFrame204(); case None => () }
     let answer = try { invoke() }
     catch (failure: OwnedCanonicalPaidFailure113) {

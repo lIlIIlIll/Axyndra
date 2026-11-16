@@ -1,0 +1,18 @@
+[package]
+  cjc-version = "1.3.0"
+  name = "public_client_request_custody_contract"
+  organization = ""
+  description = "Public client request DATA lifetime with a real Native Registry"
+  version = "1.0.0"
+  target-dir = ""
+  script-dir = ""
+  output-type = "executable"
+  compile-option = ""
+  override-compile-option = ""
+  link-option = "-lsqlite3"
+  package-configuration = {}
+
+[dependencies]
+  "agent_core" = { path = "../../agent_core", output-type = "static" }
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "agent_product" = { path = "../../agent_product", output-type = "static" }

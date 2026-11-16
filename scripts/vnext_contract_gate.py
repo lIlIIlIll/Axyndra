@@ -24,6 +24,7 @@ CONTRACTS = (
     "tool_runtime_contract",
     "thread_runtime_contract",
     "thread_runtime_integration_contract",
+    "public_client_request_custody_contract",
     "product_thread_runtime_contract",
     "thread_scale_vnext_contract",
     "app_protocol_vnext_contract",

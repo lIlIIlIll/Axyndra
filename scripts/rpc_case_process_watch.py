@@ -32,9 +32,13 @@ def _stat_cells(raw):
 def _cell(raw):
     cells = _stat_cells(raw)
     state, parent, group, session, start = cells[0], int(cells[1]), int(cells[2]), int(cells[3]), cells[19]
-    # A captured Linux dead task may lose both group identities together.
-    # Preserve their original -1 values; this is not evidence of reaping.
+    # do_task_stat captures state before lock_task_sighand. An exiting
+    # zombie can retain its default 0/-1/-1 identity when that lock fails.
+    # Preserve those signed fields; neither Z nor X is evidence of reaping.
     dead_unlinked = state in ('X', 'x') and parent >= 0 and group == -1 and session == -1
+    if state == 'Z' and parent == 0 and group == -1 and session == -1:
+        flags = int(cells[6])
+        dead_unlinked = flags >= 0 and flags & 0x00000004 != 0
     if len(state) != 1 or not state.isalpha() or (min(parent, group, session) < 0 and not dead_unlinked) or not start.isdecimal():
         raise ValueError('invalid process identity fields')
     return dict(state=state, parent=parent, group=group, session=session, start=start)

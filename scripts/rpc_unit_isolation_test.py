@@ -222,14 +222,14 @@ class RpcUnobservableProcessTests(unittest.TestCase):
     def test_malformed_identity_records_numeric_fields_without_opaque_task_name(self):
         raw = bytes.fromhex(RpcDeadIdentity208Tests.observed_hex)
         prefix = raw[:raw.index(b'(') + 1]
-        tail = raw[raw.rindex(b')'):].replace(b' X ', b' Z ')
+        tail = raw[raw.rindex(b')'):].replace(b' X ', b' R ')
         raw = prefix + b'private-task-\xff' + tail
         with patch.object(process_watch, 'Path', return_value=self.Proc(self.Entry(raw))):
             found, uncertain = process_watch.processes()
         self.assertEqual(found, {})
         self.assertEqual(uncertain[0]['reason'], 'process_stat_malformed')
         diagnostic = uncertain[0]['identity_diagnostic']
-        self.assertEqual(diagnostic['state'], 'Z')
+        self.assertEqual(diagnostic['state'], 'R')
         self.assertEqual(diagnostic['parent'], 0)
         self.assertEqual(diagnostic['group'], -1)
         self.assertEqual(diagnostic['session'], -1)
@@ -528,14 +528,6 @@ class RpcDeadIdentity208Tests(unittest.TestCase):
         tail[19] = start
         return raw[:split] + ' '.join(tail) + '\n'
 
-    def test_observed_dead_identity_keeps_original_signed_fields(self):
-        import hashlib
-        raw = bytes.fromhex(self.observed_hex)
-        self.assertEqual(len(raw), 132)
-        self.assertEqual(hashlib.sha256(raw).hexdigest(),
-            '966a47919e9fd8fd4d036119f06c2cb082f3b8bb332b38b760c73a92ebf8d6bb')
-        self.assertEqual(process_watch._cell(raw.decode('ascii')),
-            dict(state='X', parent=0, group=-1, session=-1, start='28749'))
 
     def test_both_preexisting_dead_state_spellings_keep_the_identity(self):
         for state in ('X', 'x'):
@@ -543,8 +535,8 @@ class RpcDeadIdentity208Tests(unittest.TestCase):
                 self.assertEqual(process_watch._cell(self.identity(state)),
                     dict(state=state, parent=0, group=-1, session=-1, start='28749'))
 
-    def test_live_and_zombie_negative_identity_stays_unknown(self):
-        for state in ('R', 'S', 'D', 'T', 't', 'W', 'I', 'Z'):
+    def test_live_negative_identity_stays_unknown(self):
+        for state in ('R', 'S', 'D', 'T', 't', 'W', 'I'):
             with self.subTest(state=state):
                 with self.assertRaises(ValueError):
                     process_watch._cell(self.identity(state))
@@ -576,6 +568,41 @@ class RpcDeadIdentity208Tests(unittest.TestCase):
         actual['parent_cleanup']['unreaped_owned_processes'] = [dead]
         self.assertFalse(process_watch.process_custody_closed(actual))
 
+    def test_zombie_sighand_exit_snapshot_preserves_signed_identity(self):
+        # Linux do_task_stat reads state before lock_task_sighand. A failed
+        # lock leaves PPID/PGRP/SID at 0/-1/-1 even for the captured Z state.
+        self.assertEqual(process_watch._cell(self.identity('Z', start='123')),
+            dict(state='Z', parent=0, group=-1, session=-1, start='123'))
+
+    def test_owned_zombie_exit_snapshot_still_requires_actual_reaping(self):
+        current = process_watch._cell(self.identity('Z', start='123'))
+        owned = {20: dict(state='S', parent=10, group=20, session=20, start='123')}
+        with patch.object(process_watch, 'processes', return_value=({20: current}, [])):
+            observed = process_watch.discover(owned, root_pid=10, root_start='100')
+        zombie = dict(pid=20, **current)
+        self.assertEqual(observed, dict(live=[], returned=[zombie], unknown=[]))
+        receipt = RpcCompilationCustodyTests().process()
+        receipt['unreaped_owned_processes'] = observed['returned']
+        self.assertFalse(process_watch.process_custody_closed(receipt))
+        receipt['unreaped_owned_processes'] = []
+        receipt['parent_cleanup']['unreaped_owned_processes'] = observed['returned']
+        self.assertFalse(process_watch.process_custody_closed(receipt))
+
+    def test_zombie_exit_snapshot_rejects_unproven_or_partial_signed_identity(self):
+        for parent, group, session, flags in [
+                ('1', '-1', '-1', '4'), ('-1', '-1', '-1', '4'),
+                ('0', '-1', '0', '4'), ('0', '0', '-1', '4'),
+                ('0', '-2', '-1', '4'), ('0', '-1', '-2', '4'),
+                ('0', '-1', '-1', '0'), ('0', '-1', '-1', '-1'),
+                ('0', '-1', '-1', 'bad')]:
+            with self.subTest(identity=(parent, group, session, flags)):
+                raw = self.identity('Z', parent, group, session, start='123')
+                split = raw.rindex(')') + 2
+                tail = raw[split:].split()
+                tail[6] = flags
+                with self.assertRaises(ValueError):
+                    process_watch._cell(raw[:split] + ' '.join(tail))
+
 
 class RpcOpaqueTaskNameTests(unittest.TestCase):
     def test_numeric_identity_does_not_decode_the_opaque_comm_bytes(self):
@@ -587,8 +614,6 @@ class RpcOpaqueTaskNameTests(unittest.TestCase):
             dict(state='X', parent=0, group=-1, session=-1, start='28749'))
         with self.assertRaises((UnicodeError, ValueError)):
             process_watch._cell(prefix + b'worker' + tail.replace(b'28749', b'\xff'))
-        with self.assertRaises((ValueError, IndexError)):
-            process_watch._cell(prefix + b'worker' + tail.replace(b' X ', b' Z '))
 
     @unittest.skipUnless(sys.platform.startswith('linux'), 'requires actual Linux procfs')
     def test_actual_non_utf8_task_name_keeps_its_observable_identity(self):

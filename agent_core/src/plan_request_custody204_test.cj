@@ -121,7 +121,7 @@ class PlanRequestCustody204Tests {
         controlConsumer.bindWitness204(Some(scope))
         var transferred: ?OwnedFailureDataConsumer113 = None<OwnedFailureDataConsumer113>
         try {
-            let _ = withPlanRequestCustodyFrame204(Some(owner), { =>
+            let _ = withPlanRequestCustodyFrame204<OwnedAgentRunResult113>(Some(owner), { =>
                 throw OwnedCanonicalPaidFailure113(AgentError(AgentErrorKind.RecoveryRequired,
                     "fixture.original_paid_failure", "complete independent error"),
                     { bytes => source.acquireIndependentDataFrame(bytes) })
@@ -157,7 +157,7 @@ class PlanRequestCustody204Tests {
         let scope = RunScope()
         controlConsumer.bindWitness204(Some(scope))
         var threw = false
-        try { let _ = withPlanRequestCustodyFrame204(Some(owner), { =>
+        try { let _ = withPlanRequestCustodyFrame204<OwnedAgentRunResult113>(Some(owner), { =>
             throw IllegalStateException("unknown request aliases") }) }
         catch (_: IllegalStateException) { threw = true }
         @Expect(threw, true)

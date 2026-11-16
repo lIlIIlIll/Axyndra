@@ -854,15 +854,17 @@ public class AgentCore <: AgentRunner {
     }
 
     public func startContinuation(value: AgentContinuationStart, sink: AgentEventSink): Result<AgentRunOutcome> {
-        startOwned(value.preparation.request, sink, Some(value))
+        withPlanRequestFrame204(value.preparation.request, { =>
+            startOwned(value.preparation.request, sink, Some(value))
+        })
     }
 
     public func start(request: AgentRunRequest, sink: AgentEventSink): Result<AgentRunOutcome> {
-        startOwned(request, sink, None)
+        withPlanRequestFrame204(request, { => startOwned(request, sink, None) })
     }
     public func startRestricted111(request: AgentRunRequest, restriction: AgentRunStartRestriction111,
         events: AgentEventSink): Result<AgentRunOutcome> {
-        startOwned(request, events, None, restriction: Some(restriction))
+        withPlanRequestFrame204(request, { => startOwned(request, events, None, restriction: Some(restriction)) })
     }
 
     private func startOwned(request: AgentRunRequest, sink: AgentEventSink,
@@ -1129,6 +1131,9 @@ public class AgentCore <: AgentRunner {
     }
 
     public func resumeContextBoundary(request: AgentRunRequest, sink: AgentEventSink): Result<AgentRunOutcome> {
+        withPlanRequestFrame204(request, { => resumeContextBoundaryFrame204(request, sink) })
+    }
+    private func resumeContextBoundaryFrame204(request: AgentRunRequest, sink: AgentEventSink): Result<AgentRunOutcome> {
         match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         // Ignore caller continuation data: read the actual current row first.
         let boundary = match (runs.contextBoundary(request.runId)) {
@@ -1203,6 +1208,9 @@ public class AgentCore <: AgentRunner {
         request: AgentRunRequest,
         sink: AgentEventSink
     ): Result<AgentRunOutcome> {
+        withPlanRequestFrame204(request, { => resumeFrame204(request, sink) })
+    }
+    private func resumeFrame204(request: AgentRunRequest, sink: AgentEventSink): Result<AgentRunOutcome> {
         match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         let continuation = match (runs.continuation(request.runId)) {
             case Result.Ok(value) => value
@@ -1678,6 +1686,10 @@ public class AgentCore <: AgentRunner {
         decision: ApprovalDecision,
         sink: AgentEventSink
     ): Result<AgentRunOutcome> {
+        withPlanRequestFrame204(request, { => decideFrame204(request, approval, decision, sink) })
+    }
+    private func decideFrame204(request: AgentRunRequest, approval: ApprovalRequest,
+        decision: ApprovalDecision, sink: AgentEventSink): Result<AgentRunOutcome> {
         match (request.planRequestCustody204) { case Some(value) => value.visitCore204(); case None => () }
         let previous = match (runs.find(request.runId)) {
             case Result.Ok(value) => value
@@ -7542,7 +7554,7 @@ public class AgentCore <: AgentRunner {
     public func startOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
         withPlanRequestFrame204(request, { =>
-            let result = start(request, sink)
+            let result = startOwned(request, sink, None)
             let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
             ownedCheckpointFailureResult113(request.runId, result)
         })
@@ -7558,7 +7570,7 @@ public class AgentCore <: AgentRunner {
     public func resumeContextBoundaryOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
         withPlanRequestFrame204(request, { =>
-            let result = resumeContextBoundary(request, sink)
+            let result = resumeContextBoundaryFrame204(request, sink)
             let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
             ownedCheckpointFailureResult113(request.runId, result)
         })
@@ -7566,7 +7578,7 @@ public class AgentCore <: AgentRunner {
     public func resumeOwnedCheckpointFailure113(request: AgentRunRequest,
         sink: AgentEventSink): OwnedAgentRunResult113 {
         withPlanRequestFrame204(request, { =>
-            let result = resume(request, sink)
+            let result = resumeFrame204(request, sink)
             let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
             ownedCheckpointFailureResult113(request.runId, result)
         })
@@ -7574,13 +7586,13 @@ public class AgentCore <: AgentRunner {
     public func decideOwnedCheckpointFailure113(request: AgentRunRequest, approval: ApprovalRequest,
         decision: ApprovalDecision, sink: AgentEventSink): OwnedAgentRunResult113 {
         withPlanRequestFrame204(request, { =>
-            let result = decide(request, approval, decision, sink)
+            let result = decideFrame204(request, approval, decision, sink)
             let _ = flushOwnedCheckpointFailures113(request.runId, events: request.ownedEvents)
             ownedCheckpointFailureResult113(request.runId, result)
         })
     }
-    private func withPlanRequestFrame204(request: AgentRunRequest,
-        invoke: () -> OwnedAgentRunResult113): OwnedAgentRunResult113 {
+    private func withPlanRequestFrame204<T>(request: AgentRunRequest,
+        invoke: () -> T): T {
         let answer = withPlanRequestCustodyFrame204(request.planRequestCustody204, invoke)
         // The complete start/resume/decide callback has returned. Product's
         // separate request frame remains paid until its own whole return.
