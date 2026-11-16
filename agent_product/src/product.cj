@@ -1040,26 +1040,33 @@ public class ProductRuntime {
             }
             Some(selected)
         } else { None }
-        let generation = vnext.javascriptPlugins.instanceGeneration(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))
-        let manager = match (managedPluginServiceManager()) {
-            case Result.Err(error) => return Result.Err(error)
-            case Result.Ok(value) => value
-        }
         let startupCaller180 = agent_host_runtime.HostCallerCancellation(cancellation, callerCancellation180)
-        let context = ToolInvocationContext(RunId("service-scope"), targetThread, productCapabilities(),
-            epoch: 1, cancellation: startupCaller180.token, toolContext: productToolContext(workspace.rootPath(), operatorOptions180: operatorOptions180), budget: budget)
-        let maintenance = ThreadId(ids.nextSessionId().value)
-        let started = try { if (httpConfiguration.isSome()) {
-            manager.startHttpProtocol(vnext, context, maintenance, httpConfiguration.getOrThrow(),
-                serviceId, route, generation, approvalDecision, budget: budget)
-        } else if(channelConfiguration.getOrThrow().configuration.field("transport").isSome() &&
-            channelConfiguration.getOrThrow().configuration.field("transport").getOrThrow().text=="managed_channel_owned"){
-            manager.startOwnedChannelProtocol(vnext,context,maintenance,channelConfiguration.getOrThrow(),
-                serviceId,route,generation,approvalDecision,budget:budget)
-        } else {
-            manager.startProtocol(vnext, context, maintenance, channelConfiguration.getOrThrow(),
-                serviceId, route, generation, approvalDecision, budget: budget)
-        } } finally { startupCaller180.close() }
+        let started = try {
+            // Owner-mode frontends defer actual plugin mounts. Resolve the
+            // service generation only after the existing assembly is ready.
+            match (ensureExecutionReady(cancellation: Some(startupCaller180.token))) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
+            }
+            let generation = vnext.javascriptPlugins.instanceGeneration(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))
+            let manager = match (managedPluginServiceManager()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(value) => value
+            }
+            let context = ToolInvocationContext(RunId("service-scope"), targetThread, productCapabilities(),
+                epoch: 1, cancellation: startupCaller180.token, toolContext: productToolContext(workspace.rootPath(), operatorOptions180: operatorOptions180), budget: budget)
+            let maintenance = ThreadId(ids.nextSessionId().value)
+            if (httpConfiguration.isSome()) {
+                manager.startHttpProtocol(vnext, context, maintenance, httpConfiguration.getOrThrow(),
+                    serviceId, route, generation, approvalDecision, budget: budget)
+            } else if(channelConfiguration.getOrThrow().configuration.field("transport").isSome() &&
+                channelConfiguration.getOrThrow().configuration.field("transport").getOrThrow().text=="managed_channel_owned"){
+                manager.startOwnedChannelProtocol(vnext,context,maintenance,channelConfiguration.getOrThrow(),
+                    serviceId,route,generation,approvalDecision,budget:budget)
+            } else {
+                manager.startProtocol(vnext, context, maintenance, channelConfiguration.getOrThrow(),
+                    serviceId, route, generation, approvalDecision, budget: budget)
+            }
+        } finally { startupCaller180.close() }
         match (started) {
             case Result.Err(error) => Result.Err(error)
             case Result.Ok(value) => Result.Ok(value.outcome)

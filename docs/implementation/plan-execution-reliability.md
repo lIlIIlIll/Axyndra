@@ -8596,3 +8596,219 @@ case, remaining Product/application flows, first-five-second request,
 matched baseline and complete release remain open.
 **Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
 
+## Current MCP readiness and empty lifetime observation
+
+The public candidate is `1816566` plus changes to `product.cj`,
+`product_owner_peer180.cj` and `process_broker.cj`. Source SHA-256 inventories
+are retained with each build. The fixed official SDK, original budgets,
+deadlines, authority checks and physical-custody rules are unchanged.
+
+`ProductRuntime.startPluginService` now completes the existing deferred
+startup before reading the service instance generation. Existing entry,
+configuration and capability checks still precede startup. The existing
+`HostCallerCancellation` covers startup and the service call.
+E1470 first reaches the real MCP exchange and subsequent request, but fails
+final owner teardown with `owner.peer_read_failed`. It is not a whole-case pass.
+E1473's separate numeric diagnostic build passes the case without reproducing
+that reset; this diagnostic result is not public-artifact acceptance.
+
+`ActualProductOwnerPeer180.readOwnerLifetimeFrame180` is restricted to the
+optional post-frontend observation. An empty reset or EOF can report
+`owner.peer_lifetime_absent` only when no partial physical input remains.
+An authenticated frontend cannot opt into this path.
+`ActualOwnerFrontendRendezvous180` accepts that absence only after its existing
+bounded check proves the same pinned owner returned. Local reader and packet
+retirement still follow whole observation-helper return.
+No process exit, callback return or logical terminal state substitutes for DATA
+ACK. Ordinary reads, partial input, invalid UTF-8 and timeout retain their
+original contracts. E1470 did not record its buffered bytes, so the new rule
+does not retrospectively prove that earlier reset was empty.
+
+E1478 runs all ten new real Unix-socket `ProductOwnerLifetimeReadTests`.
+The focused package compiles every actual Product production source but only
+the new test file. All ten pass; the full Product suite remains unaccepted.
+The ELF is
+`f08cdb9974b0a853ecf23942b846262d61dfcc2637449956ccd62f4941d4acd8`.
+The invocation uses `scripts/pinned_cangjie cjpm test -m agent_product
+--target-dir <isolated-target> --skip-build --no-color --report-format=XML
+--report-path <evidence>/report`.
+E1477's unsupported JSON report option ran no tests. E1478 corrects only that
+option and reuses the successful build and natural ten-case inventory.
+`owner-lifetime1477-focused-native` and `owner-lifetime1478-focused-native`
+retain both outcomes.
+
+E1479 separately builds the current production Product and App. It runs the
+original `support_tests/tui_path_coverage/plugin_acceptance.py` with frozen
+actual Model and MCP packages, the native dependency, a short disk-backed
+fixture path and each original `--case`. All ten pass on App ELF
+`44e30e73df7ff4703d1cb2105470ecec8dbfcac8c54a9ea69f94a71ce51de746`:
+the three rich-stream protocols, Esc cancellation, Ctrl-C, HTTP error, timeout,
+incomplete EOF, invalid UTF-8 and MCP Tool invocation.
+The MCP case includes actual startup, `tools/call`, Tool-result consumption
+by the next model request, service cleanup and a successful subsequent request.
+Every case passes its strict physical-custody check.
+`owner-lifetime1479-real-pty` retains commands, source hashes, keys, ANSI,
+screens, local requests, canonical attempts and process receipts.
+This accepts these Linux tmux paths, not mouse, resize, other platforms,
+the original five-second default profile, matched performance or full release.
+
+The private Core candidate remains separate. E1468 preserves the complete
+matched workflow assertions and returns its seven request-owner handles only
+after the whole actual caller helper returns; an exception cannot reach that
+ACK loop. E1472 builds the candidate and runs the complete original Core
+contract. It fails the cancellation prerequisite at `read_view.output_capacity`.
+Its first refusal is fully reconciled:
+
+| Bank capacity | Charged | Actual requested growth | Overshoot |
+| ---: | ---: | ---: | ---: |
+| 150,994,944 | 150,774,220 | 12,582,912 | 12,362,188 |
+
+The four retained canonical Store projections pass `quick_check`.
+The apparently completed Run contains a failed Program receipt and a failed
+depth-two read-view receipt; it is not a successful cancellation/recovery run.
+`matched-request1472-numeric-core` and `matched-request1474-canonical-analysis`
+retain the actual refusal, raw Store bindings and decoded results.
+The balance does not establish a leak or authorize a refund.
+
+Complete Core, portable Skills classification, remaining Product and
+application flows, the first-five-second request, matched baseline and full
+release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Portable Skills fixture and current native GC classification
+
+The public candidate remains `1816566` plus the E1479 production changes and
+one fixture correction in `skills_migration_test.cj`. Production code is
+unchanged after E1479, so its ten real PTY passes remain applicable.
+
+E1483 runs an independent consumer of the public Product API using the exact
+original portable Codex package contents. Import and enable succeed.
+The first context request then fails `tool.hard_denied`, before a Model attempt.
+The retained canonical `tool_audit` records `sensitive-path.read` for the
+fixture's managed Skills directories: its minimal distribution omitted the
+shipped read scopes. The wrapper exits zero despite the uncaught Cangjie
+exception; missing success markers correctly keep this result failed.
+
+`InstalledSkillsMigrationHost` now calls the existing
+`codingFixtureReadScopeDefaults(bundle)` before opening Product. The helper
+copies the real shipped `coding-read-scopes.json`; production classification,
+credentials protections and operator overrides are unchanged.
+
+E1484 reuses the same consumer ELF,
+`49beab1c1773349958ce129f7abee24d01d8f1c0d777538e3d6860cc3e482db7`,
+with only that recipe added to the otherwise identical bundle.
+The actual public flow passes: import, enable, `$research` selection,
+canonical Skill body and lazy-reference metadata, a second completed Run,
+successful `read_context_resource` with exact immutable bytes, and Product
+close after whole caller-frame return and real owner ACK.
+`portable-codex1483-actual-consumer` and
+`portable-codex1484-actual-consumer` retain RED/GREEN logs and Stores.
+This narrower passing executable does not prove the original native case fixed.
+
+E1487 uses `scripts/pinned_cangjie cjpm test -m agent_product
+--target-dir <isolated-target> --no-run --incremental`, then the natural
+`--skip-build --dry-run` inventory. The complete Product ELF is
+`dbd119bb8e425a5db205dc6b398a4fbef25e4ffabc4ba7d7c281f71c31ad190c`.
+It enumerates 1,096 cases. The sole selected case is
+`PluginRuntimeContractTests.importedPortableCodexSkillsUseInstalledContextProvider`,
+with original `--parallel 1 --timeout-each=60s` and 90-second watcher.
+It fails with SIGSEGV: zero pass, one error, 1,095 excluded.
+`portable-original1487-current-native` retains exact source hashes, the ELF,
+inventory, filter qualification and physical-custody receipts.
+
+E1488 resolves the actual fault at `0x637f21` to
+`MapleRuntime::CheckAndPush(BaseObject*, set&, stack&)`.
+Disassembly of the pinned runtime binds this helper to the
+`Mutator::GcPhaseEnum` reference visitor; the faulting instruction follows
+`BaseObject::GetTypeInfo`. Runtime SHA-256 is
+`99b4841d0ce313a7ca9081af9daa30245d41bbeb6dd04574e37c8bbd7e136c9a`.
+No system core was available for this exact worker. The static caller binding
+is not a recovered dynamic backtrace.
+`portable1488-runtime-classification` preserves this distinction.
+Only this current runtime GC-enumeration failure enters the user-deferred
+scope, with zero pass credit; the historical incomplete SIGABRT is unchanged.
+
+## Current default-request and Core diagnostics remain failed
+
+E1485's first private host copy omitted the production RPATH and never reached
+the request. E1486 applies the existing packaging recipe and provenance helper.
+The relocated App is
+`33a176b980ea89de217d79751a82b5b05e57fc56fe2dce0b13d2dc7bc69fbde9`;
+all original package files except the App, ldd report and host provenance stay
+unchanged. This targeted reassembly is not a fresh complete release producer.
+
+The original `support_tests/provider_profiles_blackbox/check.py` still times
+out on its first request at five seconds, with no captured output or HTTP POST.
+The retained Store has zero Runs, Model attempts and Operations.
+E1489 observes only the actual request descendants with `strace`; it keeps the
+complete defaults, original operator/request limits and strict process cleanup.
+The diagnostic records 63,904 completed selected syscalls, including 34,376
+`readlink` calls and 1,319,548,664 positive read-return bytes.
+These counts are not uninstrumented wall-time attribution.
+The retained E1190 control already found path checks small beside hashing,
+and earlier same-width reader candidates failed or reached directly qualified
+GC failures. No path check, full-byte verification or SDK crypto is replaced.
+`profile1486-current-default` and `profile1489-startup-syscalls` retain the
+original failure and bounded diagnostic evidence.
+
+E1490 separately rebuilds the private E1472 Core candidate with numeric-only
+first-unknown representation labels. No public production source, Source,
+SQL, invoice, quota, ACK or deadline changes.
+The new ELF is
+`795d35ced2f4777deebe8cc4381bc1fe0ddcd531d41a32552869b7520fdc5d58`.
+The complete `--core-and-recovery-contract` still fails the original
+requirement for a completed durable child Receipt before cancellation.
+The first actual refusal is:
+
+| Bank capacity | Charged | Actual requested growth | Overshoot |
+| ---: | ---: | ---: | ---: |
+| 150,994,944 | 150,774,564 | 12,582,912 | 12,362,532 |
+
+The main root's 53 first-unknown exports comprise 25 plugin plans with
+attachment/delegation fields, 23 single-intent plugin plans and five other
+shapes. Labels record scalar identities and field presence, not authorization
+or last-consumer return. Twelve original Store inodes are retained read-only;
+all observer FDs and its thread return. This is not DATA ACK.
+`metadata1490-first-export-shapes` retains the prior sources, exact candidate,
+complete run and original Store images. The candidate remains unaccepted.
+
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Current checkpoint gates and canonical Core refusal
+
+E1493 runs the existing selected Python regression command, full
+`scripts/architecture_gate.sh`, and `scripts/dependency_pin_gate.py` through
+the fixed SDK wrapper. All 131 selected Python tests pass. Architecture,
+documentation, plugin boundaries and dependency pins pass. The eight captured
+source/document/lock hashes are unchanged across these checks.
+`checkpoint1493-static` retains commands, logs and exact source binding.
+This adds no complete Product, Core, baseline or release acceptance.
+
+E1494 analyzes separate copies of all four E1490 Stores after physical
+execution and observer closure. Each passes SQLite `quick_check`; all twelve
+raw-image hashes remain unchanged. The Program cancellation Run is completed,
+but its parent Receipt is failed/partial, its Workspace child fails, and its
+depth-two read-view Receipt reports `read_view.output_capacity`. The original
+completed-child prerequisite remains unsatisfied.
+
+The current refusal-time accounting reconciles exactly, including the fixed
+65,536-byte buffer and three 8,192-byte buffers:
+
+| Actual root | Bank charge | Active shared SUM | Live leases |
+| --- | ---: | ---: | ---: |
+| 1 | 45,663,776 | 32,964,120 | 265 |
+| 210 | 16,785,540 | 5,919,416 | 50 |
+| 266 | 16,777,216 | 13,176,568 | 161 |
+| 271 | 71,457,920 | 67,263,616 | 4 |
+
+These are current E1490 identities and balances, not the older peak's holder
+counts. A charge above active SUM does not authorize reducing its retained
+high-water invoice. Source inspection also confirms that
+`reserveRegistryData180` delegates the requested invoice to an actual child
+lease; its name alone does not establish another Registry metadata copy.
+`metadata1494-canonical-analysis` retains the canonical projection, original
+image preservation receipt and numerical reconciliation. No execution is
+replayed and no DATA owner is acknowledged by this analysis.
+
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+

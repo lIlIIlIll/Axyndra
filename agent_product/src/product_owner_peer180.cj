@@ -84,9 +84,22 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
         } finally { state.unlock() }
     }
     public func readOwnerFrame180(framePaid: LogicalJsonOwnerReservation, deadline: ?MonoTime): Result<String> {
+        readActualOwnerFrame180(framePaid, deadline, false)
+    }
+    // Only the private post-frontend rendezvous uses this reader. It has no
+    // frontend consumer and may observe the idle listener physically exiting.
+    func readOwnerLifetimeFrame180(framePaid: LogicalJsonOwnerReservation, deadline: ?MonoTime): Result<String> {
+        readActualOwnerFrame180(framePaid, deadline, true)
+    }
+    private func readActualOwnerFrame180(framePaid: LogicalJsonOwnerReservation, deadline: ?MonoTime,
+        lifetimeObservation: Bool): Result<String> {
         if (!data.ownsOriginalFramePayment180(framePaid)) { return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
             "owner.peer_frame_bank_mismatch", "actual original peer bank must pay its reader")) }
         state.lock(); try {
+            if (lifetimeObservation && (idle || consumer180.isSome())) {
+                return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                    "owner.peer_lifetime_consumer", "a frontend consumer cannot use the idle lifetime reader"))
+            }
             if(closing && !reading && activeReadBytes180.isNone()){
                 if(begin != end){return Result.Err(AgentError(AgentErrorKind.Protocol,
                     "owner.peer_buffered_input_unknown","original unread peer bytes remain after cooperative close"))}
@@ -97,7 +110,7 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
             reading = true
         } finally { state.unlock() }
         try {
-            let result=readWholeFrameHelper180(framePaid,deadline)
+            let result=readWholeFrameHelper180(framePaid,deadline,lifetimeObservation)
             state.lock();try{
                 match(activeReadBytes180){case Some(bytes)=>
                     if(result.isOk() || bytes.isEmpty()){activeReadBytes180=None<ArrayList<Byte>>}
@@ -109,7 +122,8 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
         catch (failure: Exception) { retainOriginalPhysicalFailure180(failure); Result.Err(AgentError(AgentErrorKind.Transport, "owner.peer_read_failed", failure.message)) }
         finally { state.lock(); try { reading = false } finally { state.unlock() } }
     }
-    private func readWholeFrameHelper180(framePaid: LogicalJsonOwnerReservation, deadline: ?MonoTime): Result<String> {
+    private func readWholeFrameHelper180(framePaid: LogicalJsonOwnerReservation, deadline: ?MonoTime,
+        lifetimeObservation: Bool): Result<String> {
         framePaid.ensureRetainedPeak(16384)
         let bytes = ArrayList<Byte>()
         state.lock();try{activeReadBytes180=Some(bytes)}finally{state.unlock()}
@@ -136,6 +150,13 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
                 }
                 catch (failure: SocketException) {
                     state.lock(); let expectedClose = try { closing && bytes.isEmpty() } finally { state.unlock() }
+                    // The concrete native read returned without a byte or a
+                    // decoded frame. Only this optional control observation
+                    // may report absence; partial frames, timeouts and ordinary
+                    // consumer reads preserve their original failure/debt.
+                    if (lifetimeObservation && bytes.isEmpty() && begin == end) {
+                        return absentOwnerLifetimeFrame180()
+                    }
                     // Closing the actual empty reader is a control wakeup,
                     // not a failed DATA producer. Partial frames and every
                     // unexpected socket exception retain their original debt.
@@ -146,6 +167,7 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
                 if (count <= 0) {
                     if(!bytes.isEmpty()){return Result.Err(AgentError(AgentErrorKind.Protocol,
                         "owner.peer_frame_incomplete","owner peer ended inside an original frame"))}
+                    if (lifetimeObservation) { return absentOwnerLifetimeFrame180() }
                     return Result.Err(AgentError(AgentErrorKind.Transport,
                         "owner.peer_disconnected", "owner peer ended before the next complete frame")) }
                 begin = 0; end = count
@@ -163,6 +185,10 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
             }
         }
         Result.Err(AgentError(AgentErrorKind.Internal, "owner.peer_reader_stopped", "owner frame reader stopped"))
+    }
+    private func absentOwnerLifetimeFrame180(): Result<String> {
+        Result.Err(AgentError(AgentErrorKind.Transport, "owner.peer_lifetime_absent",
+            "idle owner observation ended before any frame bytes"))
     }
     private func decodeOriginalReadFrame180(bytes: ArrayList<Byte>): Result<String> {
         try { Result.Ok(String.fromUtf8(bytes.toArray())) }

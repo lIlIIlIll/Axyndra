@@ -2734,8 +2734,15 @@ class ActualOwnerFrontendRendezvous180 {
         match(peer.getOrThrow().writeOwnerFrame180(encodeAgentValue(packet.getOrThrow()),Some(deadline180))){
             case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
         rawPaid=Some(data.derive(65536))
-        source=Some(match(peer.getOrThrow().readOwnerFrame180(rawPaid.getOrThrow(),Some(deadline180))){
-            case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(value)=>value})
+        source=Some(match(peer.getOrThrow().readOwnerLifetimeFrame180(rawPaid.getOrThrow(),Some(deadline180))){
+            case Result.Err(error)=>
+                // The listener may retire after connect/write but before its
+                // optional observation reply. Empty input is not a DATA ACK:
+                // join the same pinned owner, then let the actual returned
+                // observer helper clear its own local peer/packet payments.
+                if(error.code=="owner.peer_lifetime_absent" && awaitOriginalPhysicalReturn180()){return false}
+                throw OwnedCanonicalDataFailure113(error)
+            case Result.Ok(value)=>value})
         let text=source.getOrThrow()
         let nodes=brokerBorrowedLexicalNodes180(text)
         data.fund(65536+text.size*48+nodes*1024,64+nodes)

@@ -4044,3 +4044,96 @@ Skills case, other Product/application flows, original first-five-second
 request, matched baseline and complete release remain unaccepted.
 **Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
 
+### Ten current Model and MCP PTY cases pass; full acceptance remains open
+
+E1478 passes all ten new `ProductOwnerLifetimeReadTests` against the current
+Product production sources. Real Unix sockets cover complete and absent
+lifetime replies, ordinary disconnect behavior, partial input, invalid UTF-8,
+timeout and authenticated-consumer restrictions. This focused package does
+not run the existing full Product suite.
+
+E1479 rebuilds Product and App from `1816566` plus the service-readiness and
+scoped lifetime-reader changes. All ten original real Model and MCP PTY cases
+pass on App ELF
+`44e30e73df7ff4703d1cb2105470ecec8dbfcac8c54a9ea69f94a71ce51de746`.
+The MCP case now completes actual service startup, Tool invocation, model
+consumption of the Tool result, service cleanup and a subsequent request.
+Each case also passes its strict physical-custody check.
+
+Only an empty optional lifetime observation can use the new absence result.
+The rendezvous still requires the same pinned owner's actual physical return.
+That process witness does not acknowledge DATA. Partial or unknown input is
+not forgiven, and E1470's earlier reset is not retrospectively classified.
+
+The private Core candidate remains failed. E1468 returns seven request-owner
+handles only after their whole real caller frame returns. E1472 then reaches
+the later `read_view.output_capacity` refusal; its completed Run still contains
+failed Program and child receipts. Actual first-refusal growth is 12,582,912
+bytes, not the earlier four-MiB inspection request.
+
+[The implementation record](implementation/plan-execution-reliability.md#current-mcp-readiness-and-empty-lifetime-observation)
+binds these results to sources, artifacts, commands and retained evidence.
+Complete Core, the independently unclassified portable Skills case, remaining
+Product and application flows, the original first-five-second request, matched
+baseline and complete release remain unaccepted.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Portable Skills fixture corrected; current native sample is GC-deferred
+
+E1483 exercises the original portable Codex package through an independent
+public Product consumer. Import and enable succeed, but the first request is
+hard-denied before Model admission. Its canonical audit identifies missing
+ordinary read scopes for the fixture's managed Skills directories.
+`InstalledSkillsMigrationHost` now uses the existing
+`codingFixtureReadScopeDefaults` helper. This adds the shipped narrow defaults,
+not a production permission exemption.
+
+E1484 passes that same consumer ELF with the shipped scope recipe: both Runs
+complete, the installed Skill body and lazy reference appear in canonical
+context, the real reference Tool returns the exact original bytes, and actual
+caller-frame return precedes owner ACK and successful Product close.
+This does not accept the original unittest.
+
+E1487 rebuilds the complete current Product test ELF and naturally enumerates
+1,096 cases. Only `importedPortableCodexSkillsUseInstalledContextProvider`
+runs: zero pass, one SIGSEGV, 1,095 excluded. E1488 binds its actual
+`CheckAndPush` frame to the pinned runtime's GC-enumeration helper. This
+current sample is user-deferred GC, with no pass credit. No core was available;
+the earlier incomplete SIGABRT remains unclassified.
+
+E1486's correctly relocated current Coding package still fails the original
+five-second first-request limit. There are zero HTTP POSTs and zero durable
+Runs, Attempts or Operations. E1489 adds syscall observation to this same
+default workload; its counts do not establish uninstrumented timing or
+authorize removing content/path validation. No hashing change is promoted.
+
+E1490's separate numeric Core build still fails the original cancellation
+prerequisite. Its first refusal requests 12,582,912 bytes at a charged
+150,774,564 bytes against the unchanged 150,994,944-byte bank.
+First-export representation labels identify retained attachment/delegation
+and child-plan paths; they do not prove consumer return or permit refunds.
+
+[The implementation record](implementation/plan-execution-reliability.md#portable-skills-fixture-and-current-native-gc-classification)
+binds the commands, source scope, artifacts and evidence.
+**Not complete. Complete Core, the five-second request, remaining Product
+and application acceptance, matched baseline and full release remain open.
+GC stays user-deferred with zero pass credit; PR #49 stays Draft.**
+
+### Current checkpoint gates pass; canonical Core failure remains
+
+E1493 passes 131 selected Python regressions, the complete architecture gate,
+documentation checks and dependency pins against unchanged captured sources.
+The ten socket and ten real PTY passes remain limited to their recorded scope.
+
+E1494 analyzes all four retained E1490 Stores. All pass `quick_check`, with
+twelve original image hashes preserved. The cancellation Run's completed
+status still encloses failed Program, Workspace and read-view Receipts.
+Current refusal-time roots and fixed buffers reconcile exactly; that
+accounting provides no missing consumer return or refund authority.
+
+[The implementation record](implementation/plan-execution-reliability.md#current-checkpoint-gates-and-canonical-core-refusal)
+records the commands, source scope and distinct canonical failure.
+**Not complete. Core, the five-second request, remaining Product/application
+acceptance, matched baseline and full release remain open. GC stays
+user-deferred with zero pass credit; PR #49 stays Draft.**
+
