@@ -26,6 +26,7 @@ class InstalledSkillsMigrationHost {
         // The installed recipe canonicalizes the caller's settings root.
         // Create that root, rather than only the bundle's own settings root.
         if (!exists(Path(settings))) { Directory.create(settings, recursive: true) }
+        codingFixtureReadScopeDefaults(bundle)
         this.product = lifecycleTestRequire(openProduct(config: ProductConfig(settingsRoot: settings,
             stateRoot: bundle.root + "/migration-state", workspaceRoot: workspace, fixture: true,
             approvalMode: ApprovalMode.Yolo, distributionRoot: bundle.bundle)))
