@@ -4221,3 +4221,58 @@ and the static checks. It does not close Core, remaining Product/application
 acceptance, matched-baseline comparison, the five-second gate or full release.
 **Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
 
+### Local startup checkpoint; complete inventory preflight repaired
+
+E1503 creates local commit `f0e63eb` with accepted startup source hashes and
+passing privacy/hooks. GitHub metadata reads and exact-branch fetch fail at
+the transport boundary. No push or PR write occurs; the last verified remote
+head remains `290f9fd`, Open/Draft.
+
+E1504's broader non-GC preflight finds nine existing test files missing from
+the inventory before any fixture or Product execution. E1505 adds all nine
+paths and the original complete inventory-only gate passes: 29 packages,
+576 files, zero executable-test credit. The 491 remaining selected cases are
+not yet accepted.
+[The implementation record](implementation/plan-execution-reliability.md#local-startup-checkpoint-and-complete-inventory-repair)
+records the local commit, transport failures, red/green evidence and scope.
+**Not complete; GC user-deferred with zero pass credit; no Ready or merge.**
+
+### Current Product sweep: 499 passes, with GC and Core still unaccepted
+
+E1504 completes all 17 original Native fixture builders. E1506's monolithic
+Product build fails its original outer watcher bound and executes no tests;
+cleanup does not turn that build into a pass. E1508 then passes the existing
+six-stage unit-build DAG without increasing any stage deadline. Its Product
+ELF is identical to E1498/E1501 and both actual enumeration frontends report
+1,098 cases.
+
+The remaining 491 selected cases produce 475 passes and 16 native SIGSEGV
+errors. E1509 binds those current failures to GC enumeration/forwarding using
+their actual frames and the fixed SDK's direct `CheckAndPush` call sites.
+They are user-deferred with zero pass credit, not successful cases or a
+retroactive classification of earlier incomplete crashes.
+
+E1510 adds ten passing lifetime-reader cases on the same ELF: complete and
+partial responses, EOF/reset, invalid UTF-8, timeout and authenticated-frontend
+isolation. With the 14 distinct E1501 passes, the current count is **499 passed,
+16 GC-stack failures and 583 unexecuted**, not a complete Product pass.
+
+E1507's private full Core diagnostic still fails the required first durable
+child receipt. Its actual refusal is 150,773,900 charged bytes plus 12,582,912
+requested bytes against the unchanged 150,994,944-byte bank.
+Constructor identities and live invoices reconcile; they do not prove leakage,
+authorize a refund or establish a passing Core result. All four separately
+copied canonical Stores pass integrity checks, and all 12 original retained
+DB/WAL/SHM images keep their hashes. The Program child actually fails with
+`read_view.output_capacity`; a completed parent Run does not accept cancellation.
+
+E1512's live read finds PR #49 Open/Draft at `290f9fd`, and an exact fetch
+verifies that head is an ancestor of the local checkpoint. The prior transport
+blocker is cleared; the publication boundary remains fast-forward-only.
+[The implementation record](implementation/plan-execution-reliability.md#current-non-gc-product-sweep-and-bounded-build-recovery)
+binds commands, source scopes, artifacts and retained evidence.
+
+**Not complete. Complete Core, remaining application acceptance, the original
+five-second gate, matched baseline and full release remain open. GC stays
+user-deferred with zero pass credit; PR #49 stays Draft.**
+

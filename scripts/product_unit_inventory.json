@@ -114,6 +114,9 @@
   "agent_runtime": [
     "agent_runtime/src/checkpoint_protocol_read159_test.cj",
     "agent_runtime/src/direct_post_canonical_scope_test.cj",
+    "agent_runtime/src/model_input_limit_pressure240_test.cj",
+    "agent_runtime/src/model_lane_copy_reuse_test.cj",
+    "agent_runtime/src/model_lane_validation_custody_test.cj",
     "agent_runtime/src/owned_agent_event_test.cj",
     "agent_runtime/src/owned_copied_display_test.cj",
     "agent_runtime/src/owned_failure_data113_test.cj",
@@ -122,6 +125,7 @@
     "agent_runtime/src/owned_tool_snapshot_identity159_test.cj",
     "agent_runtime/src/paid_error_encoder113_test.cj",
     "agent_runtime/src/plan_review_snapshot_test.cj",
+    "agent_runtime/src/terminal_lane_transfer_test.cj",
     "agent_runtime/src/tool_snapshot_measure159_test.cj"
   ],
   "agent_store": [
@@ -206,11 +210,13 @@
     "agent_core/src/owned_canonical_delivery_test.cj",
     "agent_core/src/owned_canonical_tool_start_test.cj",
     "agent_core/src/plan_request_custody204_test.cj",
+    "agent_core/src/scoped_context_sequence240_test.cj",
     "agent_core/src/tool_token_estimate204_test.cj"
   ],
   "agent_host_runtime": [
     "agent_host_runtime/src/artifact_digest_test.cj",
     "agent_host_runtime/src/canonical_projection_transfer173a_test.cj",
+    "agent_host_runtime/src/catalog_schema_work1217_test.cj",
     "agent_host_runtime/src/configuration_temporary_directory204_test.cj",
     "agent_host_runtime/src/context_private_output_test.cj",
     "agent_host_runtime/src/explicit_workspace_capabilities_test.cj",
@@ -376,6 +382,7 @@
     "agent_product/src/continuation_owned_startup11318_test.cj",
     "agent_product/src/direct_post_canonical_checkpoint_test.cj",
     "agent_product/src/direct_preparation_test.cj",
+    "agent_product/src/distribution_existing_record_test.cj",
     "agent_product/src/distribution_read_scopes_test.cj",
     "agent_product/src/distribution_test.cj",
     "agent_product/src/external_entry_test.cj",
@@ -558,6 +565,7 @@
     "agent_product/src/process_channel_test.cj",
     "agent_product/src/process_observation_merge201_test.cj",
     "agent_product/src/process_output_window_test.cj",
+    "agent_product/src/product_owner_lifetime_test.cj",
     "agent_product/src/provider_dialect_test.cj",
     "agent_product/src/recoverable_fixture_transcript11318_test.cj",
     "agent_product/src/run_inspection_test.cj",
@@ -568,6 +576,7 @@
     "agent_product/src/skill_reference_discovery_test.cj",
     "agent_product/src/skills_migration_test.cj",
     "agent_product/src/task_context_scope_test.cj",
+    "agent_product/src/todo_cold_frontend_test.cj",
     "agent_product/src/todo_editor_approval_test.cj",
     "agent_product/src/todo_native_frontend_test.cj",
     "agent_product/src/workflow_name_matching205_test.cj",

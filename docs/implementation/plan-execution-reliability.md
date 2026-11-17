@@ -8987,3 +8987,130 @@ comparison, the original five-second gate and full release remain open.
 
 **Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
 
+## Local startup checkpoint and complete inventory repair
+
+E1503 commits the approved startup transaction as
+`f0e63ebd086cc1768cdf917692257d3665f42fbc`, preserving the E1498/E1501
+Cangjie source hashes. Staged privacy validation, commit hooks and the final
+documentation check pass. GitHub GraphQL, command-local HTTP/1.1 REST,
+independent REST retrieval and exact-branch fetch then fail with EOF,
+connection reset or TLS errors. No push or PR write is attempted.
+`startup-transaction1503-publication/receipt.json` retains the local commit
+and the last verified remote checkpoint, `290f9fd`, Open/Draft.
+
+E1504 selects 491 previously qualified non-GC Product cases not already
+covered by E1501. Its first preflight fails before fixture execution because
+the complete unit inventory omits nine existing test files: four Runtime,
+one Core, one Host and three Product files. The failure remains in
+`non-gc-product1504-fixtures/inventory-preflight-failure.json`.
+
+E1505 adds all nine missing paths to `scripts/product_unit_inventory.json`,
+without deleting tests or changing assertions. The original
+`scripts/product_unit_gate.py --inventory-only` entry passes for all 29
+inventoried packages and 576 test files. `unit-inventory1505-green/summary.json`
+records the actual inventory-only result: zero executable-test credit.
+No Cangjie source changes, and the remaining 491-case execution is not yet
+accepted.
+
+**Not complete; GC user-deferred with zero pass credit; no Ready or merge.**
+
+## Current non-GC Product sweep and bounded build recovery
+
+E1504 finishes all 17 original Native fixture builders, the read-view helper
+and the Native C fixture with the fixed SDK and Clang 15. Package entrypoints,
+bundled libraries, provenance and source hashes are recorded in
+`non-gc-product1504-current-inventory-fixtures/summary.json`.
+Fixture preparation alone gives no Product credit.
+
+E1506's monolithic Product build exceeds its original 900-second outer
+watcher bound. Its worker receipt is missing, the watcher exits `-9`, and
+the private reporting code then raises a secondary `KeyError`.
+`non-gc-product1506-current-cases/failure-disposition.json` preserves the
+failed build and cleanup evidence. No case executes and no build pass is
+claimed. The deadline is not increased.
+
+E1508 uses the existing six-stage unit-build DAG: Runtime, Tool, Store, Core,
+Host and Product. Each stage passes under its original 900-second bound;
+Product retains `--jobs 1`. The resulting Product ELF is byte-identical to
+E1498/E1501:
+`d71aab889ffe4e835170b146e5c0fe1f9ccdaaef32d78f3f0a1435667b98def1`.
+Both the actual CJPM frontend and direct ELF naturally enumerate the same
+1,098 cases. The 491 selected executions produce **475 passes and 16 native
+SIGSEGV errors**, with complete physical-process custody receipts.
+Evidence is `non-gc-product1508-original-unit-dag/summary.json` and
+`non-gc-product1508-current-cases/summary.json`.
+
+E1509 classifies only those 16 current samples. Fourteen fault in
+`MapleRuntime::CheckAndPush`; the fixed SDK binary has four direct call or
+tail-jump sites for that helper, all in `Mutator::GcPhaseEnum` or
+`Mutator::GCPhasePreForward` visitors. The other two samples directly name
+those GC phases. Runtime SHA-256 is
+`99b4841d0ce313a7ca9081af9daa30245d41bbeb6dd04574e37c8bbd7e136c9a`.
+`runtime-checkandpush-callers.json` and the corrected
+`failure-signatures.json` retain the exact evidence. Static caller binding is
+not a recovered dynamic stack or proof of the corruption's root cause.
+These samples enter the user's GC deferral with **zero pass credit**.
+No earlier incomplete crash is reclassified and no failed case is replayed.
+
+E1510 runs the ten lifetime-reader cases added since the old 1,081-case
+inventory and absent from E1501/E1508. All ten pass on the same current ELF,
+covering complete responses, ordinary and lifetime EOF/reset, partial bytes,
+invalid UTF-8, timeout and authenticated-frontend isolation.
+`non-gc-product1510-lifetime/summary.json` binds the source, existing natural
+enumeration, original bounds, actual logs and custody receipts. An initial
+relative-driver-path launch fails before executing Product; the absolute
+driver path runs the cases without changing sources or limits.
+
+Together with the 14 distinct E1501 passes, this gives **499 passing current
+case identities, 16 current GC-stack failures and 583 unexecuted identities**.
+The acceptance applies to `f0e63eb` behavior sources and the E1505 inventory
+repair. It is not complete Product, DATA ACK, performance or release evidence.
+
+## Current Core constructor attribution still exposes a capacity failure
+
+E1507 adds function-only constructor-stack observation to the private Core
+diagnostic candidate; no public behavior, invoice, limit or ACK changes.
+The original full Core contract builds and runs under its original bounds,
+but still fails the Program-cancellation prerequisite: child one has not
+completed its required durable receipt. Diagnostic ELF SHA-256 is
+`0927f017c107b82755f5b2280558ac15087e9b75dabbbe00b98e59d1e74ac346`.
+The observer source is restored after capture. This is not public `f0e63eb`
+Core acceptance.
+
+`metadata1507-all-constructor-origins/attribution.json` reconciles 21,770
+actual derived-constructor identities and 336,066 numeric balance checks,
+without an amount threshold. At the main metadata owner's peak, 541 live
+leases sum to its exact 45,663,216-byte charge. The refusal records:
+
+| Quantity | Bytes |
+| --- | ---: |
+| Bank capacity | 150,994,944 |
+| Charged at refusal | 150,773,900 |
+| Actual requested growth | 12,582,912 |
+| Overshoot | 12,361,868 |
+
+The peak includes 53 Prepared copies billed at 14,055,280 bytes, 30 mounted
+tool owners at 5,825,088 bytes, four snapshots at 3,483,904 bytes and 13
+registry-data reservations at 3,280,384 bytes. These constructor identities
+locate billed custody; they do not prove leakage or permit retirement.
+Later closed leases do not authorize refunding the owner's high-water mark.
+
+All 12 original DB/WAL/SHM inode images are retained. Separate analysis copies
+of all four Stores pass `quick_check`; original hashes remain unchanged and
+all analysis connections close. The actual Program Run is completed with a
+failed partial parent receipt, a failed Workspace child and a depth-two
+`read_view.output_capacity` failure. The Native cancellation Store is cancelled
+and the artifact-failure Store is completed. These distinct canonical facts
+do not make the failed Program-cancellation assertion pass.
+`canonical-analysis/projection.json` retains the projection and raw-image
+integrity result.
+
+E1512 restores GitHub metadata retrieval and exact-branch fetch. PR #49 is
+Open/Draft at `290f9fd`; that fetched head is an ancestor of the local
+checkpoint. Publication remains fast-forward-only, with no Ready, merge,
+issue closure or manual CI action.
+
+**Not complete. Complete Core, remaining application acceptance, the original
+five-second gate, matched baseline and full release remain open. GC stays
+user-deferred with zero pass credit; PR #49 stays Draft.**
+
