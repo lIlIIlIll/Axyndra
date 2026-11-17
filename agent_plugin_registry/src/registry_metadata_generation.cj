@@ -5,9 +5,10 @@ import agent_extension_runtime.*
 import std.collection.*
 import std.sync.*
 
-// An allocation owner only. No cached record, digest, or generation can arm a
-// pin: every capture still reloads the full installed state and inspects the
-// actual package. Sharing is limited to these immutable file snapshots.
+// An allocation owner only. Ordinary captures reload the full installed state.
+// An explicit startup transaction owns its separately paid inspected state;
+// its captures still inspect current target/dependency bytes before arming.
+// Sharing here remains limited to immutable metadata file snapshots.
 class PluginRegistryMetadataGeneration {
     private let lock = Mutex()
     private let custody: PluginRegistryMetadataCustody

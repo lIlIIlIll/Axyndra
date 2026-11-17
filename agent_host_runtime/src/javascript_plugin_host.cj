@@ -613,13 +613,14 @@ public open class HostJavaScriptPluginHost {
         generation: UInt64): Result<AgentValue> {
         hostValidatePluginReadViewParent(this, settingsRoot, prepared.operationPlan, namespace, tool, generation)
     }
-    public func mount(record: ProductPluginRecord): Result<Array<JavaScriptToolDescriptor>> {
+    public func mount(record: ProductPluginRecord,
+        startup!: ?PluginRegistryStartupTransaction = None): Result<Array<JavaScriptToolDescriptor>> {
         // Registry locking/reload is outside the Host lock. The same object is
         // shared with management; the captured pin never calls back into it.
         let registry = synchronized(lock) { installedRegistry }
         let actualRegistry = match (registry) { case Some(value) => value; case None =>
             return hostPluginResourceError("plugin.registry_owner_missing", "activation requires the actual installed registry") }
-        let pin = match (actualRegistry.captureExecutionPin(record)) {
+        let pin = match (actualRegistry.captureExecutionPin(record, startup: startup)) {
             case PluginRegistryResult.Err(error) => return hostRegistryOwnedError81(error)
             case PluginRegistryResult.Ok(value) => value
         }

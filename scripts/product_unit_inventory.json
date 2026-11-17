@@ -7,6 +7,7 @@
     "agent_plugin_registry/src/registry_digest_work_test.cj",
     "agent_plugin_registry/src/registry_execution_pin_test.cj",
     "agent_plugin_registry/src/registry_metadata_generation_test.cj",
+    "agent_plugin_registry/src/registry_startup_transaction_test.cj",
     "agent_plugin_registry/src/registry_state_custody_test.cj",
     "agent_plugin_registry/src/registry_test.cj",
     "agent_plugin_registry/src/registry_writer_test.cj"
@@ -541,6 +542,7 @@
     "agent_product/src/plugin_shell_managed_job_test.cj",
     "agent_product/src/plugin_shell_service_test.cj",
     "agent_product/src/plugin_skills_provider_test.cj",
+    "agent_product/src/plugin_startup_transaction_test.cj",
     "agent_product/src/plugin_task_projection151_test.cj",
     "agent_product/src/plugin_transport_budget_test.cj",
     "agent_product/src/plugin_view_interaction_test.cj",

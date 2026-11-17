@@ -349,14 +349,98 @@ public open class PluginRegistry {
         try { requireOpenLocked(); captureContextComponentSnapshotLocked(kinds) } finally { registryLock.unlock() }
     }
 
-    // The object record is only a requested identity. The pin is minted from
-    // actual installed files under the same ordered OS locks used by writers.
-    // A caller cannot restore a pin from a JSON record, digest or old snapshot.
-    public func captureExecutionPin(requested: ProductPluginRecord): PluginRegistryResult<PluginRegistryExecutionPin> {
+    public func beginStartupTransaction(): PluginRegistryResult<PluginRegistryStartupTransaction> {
         registryLock.lock()
         try {
             requireOpenLocked()
-            requested.withRecord({ value => captureInstalledLocked78(Some(value), value.descriptor.namespace, Some(value.scope)) })
+            let memory = PluginRegistryStateMemory(metadataCustody)
+            try {
+                memory.charge(8192)
+                let phase = PluginRegistryStartupOwnedPhase()
+                try { beginStartupOwnedFrame(memory, phase) }
+                finally {
+                    // The complete loader frame returned. A published startup
+                    // transaction has its own full typed-state payment.
+                    if (!phase.transferred) {
+                        match (phase.generation) { case Some(value) => value.release(0); case None => () }
+                        match (phase.payment) { case Some(value) => value.close(); case None => () }
+                    }
+                    phase.generation = None; phase.payment = None
+                }
+            } finally { memory.close() }
+        } catch (error: PluginRegistryWriteError) {
+            ownValueResult78(pluginImportError<PluginRegistryStartupTransaction>(error.code, error.message))
+        } catch (_: LogicalJsonPayloadError) {
+            pluginRegistryStaticFailure78("plugin.registry_metadata_capacity")
+        } catch (_: Exception) {
+            ownValueResult78(pluginImportError<PluginRegistryStartupTransaction>(
+                "plugin.registry_execution_stale", "startup installed state cannot be captured"))
+        } finally { registryLock.unlock() }
+    }
+
+    private func beginStartupOwnedFrame(memory: PluginRegistryStateMemory,
+        phase: PluginRegistryStartupOwnedPhase): PluginRegistryResult<PluginRegistryStartupTransaction> {
+        let held = PluginRegistryWriterFence(settingsRoot, workspaceRoot, shared: true)
+        try {
+            held.validate(); pluginRequireRegistryPublicationComplete(settingsRoot, workspaceRoot)
+            let scratch = memory.openDataPayment78()
+            let shared = try {
+                match (executionMetadata) {
+                    case Some(value) => if (value.tryRetain(scratch)) { value } else {
+                        let next = PluginRegistryMetadataGeneration(settingsRoot, workspaceRoot, metadataCustody, scratch)
+                        executionMetadata = Some(next); next
+                    }
+                    case None =>
+                        let next = PluginRegistryMetadataGeneration(settingsRoot, workspaceRoot, metadataCustody, scratch)
+                        executionMetadata = Some(next); next
+                }
+            } finally { scratch.close() }
+            phase.generation = Some(shared)
+            let admission = shared.reserveFence()
+            try {
+                shared.validateAdmission103()
+                let initial = pluginLoadRegistryInitialState(settingsRoot, workspaceRoot, memory: Some(memory))
+                if (!initial.loadErrors.isEmpty()) {
+                    let error = initial.loadErrors[0]
+                    return ownValueResult78(pluginImportError<PluginRegistryStartupTransaction>(error.code, error.message))
+                }
+                // Bind the complete fresh load to unchanged physical metadata,
+                // including same-byte rewrites, workspace grants and ABA.
+                shared.validateAdmission103(); held.validate()
+                let invoice = pluginRegistryRetainedStateInvoice103(initial.records, initial.history, initial.loadErrors)
+                if (initial.records.size > (134217728 - 8192) / 128) {
+                    throw LogicalJsonPayloadError("startup control metadata exceeds the original aggregate")
+                }
+                let retained = memory.openDataPayment78(); phase.payment = Some(retained)
+                retained.ensureRetainedPeak(pluginRegistryInvoiceAdd78(invoice, initial.records.size * 128 + 8192))
+                let transaction = PluginRegistryStartupTransaction(
+                    PluginRegistryStartupState(metadataCustody, shared, initial, retained))
+                phase.transferred = true
+                PluginRegistryResult.Ok(transaction)
+            } finally { shared.releaseFence(); admission.close() }
+        } finally { held.close() }
+    }
+
+    // The object record is only a requested identity. The pin is minted from
+    // actual installed files under the same ordered OS locks used by writers.
+    // A caller cannot restore a pin from a JSON record, digest or old snapshot.
+    public func captureExecutionPin(requested: ProductPluginRecord,
+        startup!: ?PluginRegistryStartupTransaction = None): PluginRegistryResult<PluginRegistryExecutionPin> {
+        registryLock.lock()
+        try {
+            requireOpenLocked()
+            try {
+                requested.withRecord({ value =>
+                    match (startup) {
+                        case Some(transaction) => transaction.withState(metadataCustody, { state =>
+                            captureInstalledLocked78(Some(value), value.descriptor.namespace, Some(value.scope), startupState: Some(state))
+                        })
+                        case None => captureInstalledLocked78(Some(value), value.descriptor.namespace, Some(value.scope))
+                    }
+                })
+            } catch (error: PluginRegistryWriteError) {
+                ownValueResult78(pluginImportError<PluginRegistryExecutionPin>(error.code, error.message))
+            }
         } finally { registryLock.unlock() }
     }
     public func captureInstalledExecutionPin(namespace: String, scope: PluginInstallScope): PluginRegistryResult<PluginRegistryExecutionPin> {
@@ -365,7 +449,8 @@ public open class PluginRegistry {
         finally { registryLock.unlock() }
     }
 
-    private func captureInstalledLocked78(requested: ?RawProductPluginRecord, namespace: String, requestedScope: ?PluginInstallScope): PluginRegistryResult<PluginRegistryExecutionPin> {
+    private func captureInstalledLocked78(requested: ?RawProductPluginRecord, namespace: String, requestedScope: ?PluginInstallScope,
+        startupState!: ?PluginRegistryStartupState = None): PluginRegistryResult<PluginRegistryExecutionPin> {
         requireOpenLocked()
             // One REAL original-custody phase, prepaid before fence paths,
             // generation construction, parser callbacks or source copying.
@@ -385,7 +470,7 @@ public open class PluginRegistry {
                     finally { loading.close() }
                 }
             let phase = PluginRegistryCaptureOwnedPhase101(); phase.loadingPayment103 = Some(loading)
-            try { captureInstalledOwnedFrame101(requested, namespace, requestedScope, held, phase) }
+            try { captureInstalledOwnedFrame101(requested, namespace, requestedScope, held, phase, startupState) }
             finally {
                 // The full partial-load frame has RETURNED. Only the adopted
                 // owned result and genuinely published state/pin may survive.
@@ -401,23 +486,34 @@ public open class PluginRegistry {
 
     private func captureInstalledOwnedFrame101(requested: ?RawProductPluginRecord, namespace: String,
         requestedScope: ?PluginInstallScope, held: PluginRegistryWriterFence,
-        phase: PluginRegistryCaptureOwnedPhase101): PluginRegistryResult<PluginRegistryExecutionPin> {
+        phase: PluginRegistryCaptureOwnedPhase101, startupState: ?PluginRegistryStartupState): PluginRegistryResult<PluginRegistryExecutionPin> {
             try {
                 held.validate(); pluginRequireRegistryPublicationComplete(settingsRoot, workspaceRoot)
-                let shared = match (executionMetadata) {
-                    case Some(value) => if (value.tryRetain(phase.loadingPayment103.getOrThrow())) { value } else {
-                        let next = PluginRegistryMetadataGeneration(settingsRoot, workspaceRoot, metadataCustody, phase.loadingPayment103.getOrThrow())
-                        executionMetadata = Some(next); next
+                let shared = match (startupState) {
+                    case Some(startup) =>
+                        if (!startup.generation.tryRetain(phase.loadingPayment103.getOrThrow())) {
+                            return ownValueResult78(pluginImportError<PluginRegistryExecutionPin>(
+                                "plugin.registry_execution_stale", "startup installed metadata changed"))
+                        }
+                        startup.generation
+                    case None => match (executionMetadata) {
+                        case Some(value) => if (value.tryRetain(phase.loadingPayment103.getOrThrow())) { value } else {
+                            let next = PluginRegistryMetadataGeneration(settingsRoot, workspaceRoot, metadataCustody, phase.loadingPayment103.getOrThrow())
+                            executionMetadata = Some(next); next
+                        }
+                        case None =>
+                            let next = PluginRegistryMetadataGeneration(settingsRoot, workspaceRoot, metadataCustody, phase.loadingPayment103.getOrThrow())
+                            executionMetadata = Some(next); next
                     }
-                    case None =>
-                        let next = PluginRegistryMetadataGeneration(settingsRoot, workspaceRoot, metadataCustody, phase.loadingPayment103.getOrThrow())
-                        executionMetadata = Some(next); next
                 }
                 phase.pendingMetadata = Some(shared)
                 let actual = PluginRegistryExecutionPin(settingsRoot, workspaceRoot, shared); phase.pin = Some(actual)
                 phase.pendingMetadata = None
                 actual.beginLoad(phase.loadingPayment103.getOrThrow())
-                let initial = pluginLoadRegistryInitialState(settingsRoot, workspaceRoot, captured: Some(actual))
+                let initial = match (startupState) {
+                    case Some(startup) => startup.inspectedState()
+                    case None => pluginLoadRegistryInitialState(settingsRoot, workspaceRoot, captured: Some(actual))
+                }
                 actual.retainLoadedState103(initial)
                 if (!initial.loadErrors.isEmpty()) {
                     let error = initial.loadErrors[0]; return ownValueResult78(pluginImportError<PluginRegistryExecutionPin>(error.code, error.message))
@@ -425,7 +521,8 @@ public open class PluginRegistry {
                 held.validate()
                 // Inspect detached paid state. Do not publish it and release
                 // its loading owner before arm succeeds.
-                for (record in pluginEffectiveRegistryRecords(initial.records) where record.descriptor.namespace == namespace) {
+                let effective = pluginEffectiveRegistryRecords(initial.records)
+                for (record in effective where record.descriptor.namespace == namespace) {
                     if (!record.enabled || record.explicitlyDisabled ||
                         (match (requestedScope) { case Some(scope) => !pluginScopeEquals(record.scope, scope); case None => false })) {
                         return ownValueResult78(pluginImportError<PluginRegistryExecutionPin>("plugin.registry_execution_stale", "requested package differs from the actual enabled effective installation"))
@@ -437,6 +534,19 @@ public open class PluginRegistry {
                                 pluginPackageDiagnosticValue(record.descriptor).stringify() != pluginPackageDiagnosticValue(value.descriptor).stringify()) {
                                 return ownValueResult78(pluginImportError<PluginRegistryExecutionPin>("plugin.registry_execution_stale", "requested package differs from the actual enabled effective installation"))
                             }
+                        case None => ()
+                    }
+                    match (startupState) {
+                        case Some(startup) =>
+                            startup.consume(record)
+                            actual.beginRecordInspection103()
+                            match (pluginCheckRegistryComponentDependencies(
+                                record, effective, true, Some(actual.inspectionMemory()))) {
+                                case PluginImportResult.Err(error) =>
+                                    return ownValueResult78(pluginImportError<PluginRegistryExecutionPin>(error.code, error.message))
+                                case PluginImportResult.Ok(_) => ()
+                            }
+                            actual.finishRecordInspection103(initial.records, initial.history, initial.loadErrors)
                         case None => ()
                     }
                     actual.arm(record); held.validate(); actual.prepareStatePublication103(initial)
@@ -1254,28 +1364,7 @@ public open class PluginRegistry {
 
     private func checkComponentDependenciesLocked(record: RawProductPluginRecord,
         verifyContent!: Bool = true): PluginImportResult<Unit> {
-        let nodes = effectiveRawRecords().map { value => PluginDependencyNode(value.descriptor, value.enabled) }
-        let ordered = match (resolvePluginDependencies(record.descriptor, nodes)) {
-            case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
-            case PluginPackageResult.Ok(value) => value
-        }
-        if (verifyContent) {
-            for (descriptor in ordered) {
-                let current = if (descriptor.namespace == record.descriptor.namespace) { record } else { match (getLocked(descriptor.namespace)) {
-                    case Some(value) => value
-                    case None => return pluginImportError("plugin.component_dependency_missing", descriptor.namespace)
-                } }
-                let actual = match (inspectLocked(descriptor.root)) {
-                    case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
-                    case PluginPackageResult.Ok(value) => value
-                }
-                if (current.contentLock == "" || actual.contentDigest != current.contentLock ||
-                    actual.namespace != descriptor.namespace || actual.version != descriptor.version) {
-                    return pluginImportError("plugin.component_dependency_changed", "immutable dependency package changed: " + descriptor.namespace)
-                }
-            }
-        }
-        PluginImportResult.Ok(())
+        pluginCheckRegistryComponentDependencies(record, effectiveRawRecords(), verifyContent, inspectionAccounting())
     }
 
     // Topological startup order is derived from the existing effective records.

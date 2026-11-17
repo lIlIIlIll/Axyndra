@@ -8812,3 +8812,178 @@ replayed and no DATA owner is acknowledged by this analysis.
 
 **Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
 
+## Approved single-startup verification transaction
+
+E1496 identifies repeated full Registry/package inspection in the existing
+startup loop. Each installed-plugin pin calls `pluginLoadRegistryInitialState`.
+The retained E1489 trace contains 75 successful manifest opens across nine
+installed packages. Manifest-open counts are not complete-verification counts
+or uninstrumented timing.
+
+The fixed SDK digest library already calls native SHA-256. E1190's complete
+34,649,056-byte fixture hashes in 69.347–90.554 ms. An independent OpenSSL-backed
+Python control over those same 22 files takes 73.129–83.892 ms across five
+samples, with the same aggregate digest. This does not establish a benefit
+from replacing SDK crypto. `startup1496-fresh-verification-analysis` retains
+the source chain, byte identities and measurements.
+
+The user explicitly approves extending verification reuse from first
+installation to one already-installed-plugin startup transaction. Reuse
+across startups remains prohibited. This supersedes the earlier first-install-only
+restriction for this bounded path; it does not waive current-byte inspection,
+Source/Registry identity, tamper rejection, resource accounting or five seconds.
+
+The candidate adds `PluginRegistryStartupTransaction`, created under the
+existing Registry mutex and shared writer fence. It owns the fully inspected,
+paid Registry state and its validated metadata generation. Each namespace can
+be captured once. Each capture checks the generation and current identity,
+then freshly verifies the selected package and its dependency bytes before
+using the existing execution pin and admission fence.
+
+Product passes this transaction only through installed-plugin startup.
+Ordinary management/mount calls retain their fresh full inspection; first
+installation is unchanged. Product closes the transaction before a quarantine
+mutation and opens a fresh one for remaining records. Final closure detaches
+the inspected state only after active capture frames return. Existing pins and
+admission leases retain their own actual custody.
+
+E1497 rebuilds with the fixed official CJC `1.3.0-alpha.20261104001050` and CJPM
+`1.3.0-alpha.09`. Its Registry test ELF is
+`8cd09f3d36383110e4f03c717595a2e1d5fc1f701e25f5c82b2d99b24fac0711`.
+Natural inventory is 50. All 47 selected non-GC cases pass, including 11 new
+startup cases:
+
+- Each installed identity is captured once; closed and foreign transactions
+  cannot mint pins.
+- Target and dependency-byte changes are rejected. A fresh transaction rejects
+  a corrupt unselected package.
+- Metadata ABA, same-byte metadata replacement and Workspace publication revoke
+  the batch; fresh capture preserves the effective Workspace scope.
+- Concurrent duplicate captures admit one pin.
+- Closing the transaction and pins does not refund custody held by a real
+  admission lease. Capacity becomes available after that lease returns.
+
+The three previously qualified GC cases are not rerun and receive zero pass
+credit. Commands, complete inventory, individual qualified results, exact
+source copies and hashes are in `startup-transaction1497-registry`.
+
+E1498 builds the complete current Product test ELF,
+`d71aab889ffe4e835170b146e5c0fe1f9ccdaaef32d78f3f0a1435667b98def1`,
+and naturally enumerates 1,098 cases. Nine selected cases pass:
+
+- Three installed Native C packages start and retain independent per-process
+  invocation counters.
+- An actual middle-package registration mismatch quarantines that package.
+  The other packages remain usable; close/reopen preserves the disabled state
+  and starts fresh working processes.
+- The five existing distribution/operator-record regressions pass.
+- Ordinary Native Tool and command-only Product entries still execute through
+  canonical Receipts and the existing disable path.
+
+`startup-transaction1498-product` retains the fixed-SDK build, complete
+inventory, original per-case limits, real C fixture identities and qualified
+results with physical process custody closed. The other 1,089 Product cases
+are not run and receive no pass credit.
+Both gates apply to `290f9fd` plus the uncommitted startup changes, bound by
+their source hashes. The original five-second request still needs proof.
+
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Current startup candidate builds; profile prerequisite has direct GC evidence
+
+E1499 passes all nine original production stages against the E1498 source
+hashes, with the original 900-second per-stage limits. Raw App SHA-256 is
+`349ed674193dd5797d8cd3de78d0e368b2dd31d18a0a3d80b4f6886c581ed62b`;
+Minimal is
+`39cc8748f2fedfdc64e85f7c16bb249f5e12b420033ca548edcae704fd1204de`.
+The complete accepted Product test executable is retained before target reuse.
+`startup-transaction1499-production` records every command, exit and artifact.
+
+E1500 keeps the frozen 255-file Coding package's Native plugins, auxiliary
+library and SDK runtime bytes. Only the App, loader report and explicit
+derivative provenance change. Packaged App SHA-256 is
+`5678c1a0d611f1617068f40dd558b611839e50f7b64f415955c51ee2241c57a1`.
+This is a source-bound App comparison package, not a complete fresh release.
+
+Two private preparation failures occur before any fixture execution.
+The Native identity guard first rejects the current Clang 23 helper against
+the frozen Clang 15 helper, despite identical C source. The comparison retains
+the original package's exact helper bytes instead of introducing that second
+variable. The atomic provenance publisher then rejects the copied old receipt.
+That receipt is retained separately; publication resumes after the already
+completed App relocation and loader check. Neither failure is request evidence.
+
+The original `provider_profiles_blackbox/check.py` then fails during the
+operator's `plugin list --json`, before either five-second Model invocation.
+The client reports `owner.peer_disconnected`; actual HTTP POSTs are zero.
+All 33 observed execution processes have closed custody. This is not DATA ACK.
+
+The matching owner SIGABRT core is retained and read with GDB, with arguments,
+locals and automatic debugger downloads disabled. Its faulting thread has
+direct `RegionInfo::MarkObject → WCollector::MarkObject →
+ConcurrentMarkingWork::Execute → GCPoolThread::WorkerFunc` frames.
+The loaded packaged runtime SHA-256 is
+`f035bb72edce6867a6a4e0bff8a06a9cef66fb4a3f795b019d5ec7e7ef7599ad`.
+The core is 744,689,664 bytes, SHA-256
+`d6e661f11e7bcc1fc89e5ea0a9c876366d27ed756ee6405f9f445b473d307f95`.
+`startup-transaction1500-profile/owner-core-diagnosis.json` binds the actual
+owner, App, runtime, core and function backtrace.
+
+This current sample is user-deferred GC with zero pass credit. The original
+E1486 five-second timeout is not reclassified. No replay, larger deadline,
+capacity change, disabled check or SDK replacement is used. The new startup
+transaction has no passing five-second performance result.
+
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Direct Native dependency restart and rollback evidence
+
+E1501 runs the preserved E1498 Product test executable with the fixed SDK and
+Clang 15 Native helper. All 14 selected cases pass: the nine E1498 cases plus
+dependency-first restart, transitive disable, old-generation update rejection,
+cycle/corrupt-dependency rejection and failed-dependent-handshake isolation.
+The helper SHA-256 is
+`36ca7f5f003c1136239f64cde95195b7371beaf4acafcafb355526a5363ee790`.
+The Product ELF and Cangjie source hashes remain those accepted by E1498.
+
+Production target reuse made CJPM's skip-build enumeration return zero cases.
+That preflight was rejected. Direct execution of the preserved test ELF then
+enumerated the same 1,098 identities as E1498. A second private preflight
+rejected reused observer output paths before launch; fresh paths were used.
+
+The 14 real executions each report one passing case and 1,097 skipped cases,
+exit zero and close physical process custody. The driver nevertheless labels
+them failed because its parser requires CJPM's additional project-summary
+section, which the direct executable does not emit.
+`startup-transaction1501-direct-native-dependencies/direct-elf-qualification.json`
+checks the actual package, suite, case, full inventory, totals, exit and custody
+against the retained raw logs. It rejects five malformed-result controls.
+No output is synthesized, no case is replayed, and the original failed driver
+summary remains intact.
+
+This is 14-case Native Product evidence, not complete Product, DATA ACK,
+five-second performance or release acceptance. The production-source change
+also adds its two test files to the existing unit inventory.
+
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Current startup source static gates
+
+E1502 passes 131 selected Python regressions, the complete architecture gate
+and dependency-pin validation. Its source guard covers the E1498 Cangjie
+inputs, unit inventory, root lock and both acceptance records; every guarded
+file is unchanged during execution.
+`startup-transaction1502-static/summary.json` records commands, exits and
+source hashes. The private launcher first rejected a non-executable Python
+driver before execution; invoking it through Python ran the original gates.
+The generated root lock is then restored to its tracked dependency entries.
+The final pin check passes with 32 llm4cj locks; no behavior source changes
+after E1502.
+
+The accepted scope remains the 47 Registry cases, 14 selected real Native
+Product cases, nine production build stages and these static checks.
+Complete Core, remaining Product/application acceptance, matched-baseline
+comparison, the original five-second gate and full release remain open.
+
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+

@@ -816,7 +816,7 @@ public class ProductVnextControl <: HostServiceToolControl {
     /// mounted host/catalog. Every other caller keeps the global lifecycle
     /// lock so activation stays one product lifecycle boundary.
     public func activateImportedPluginWithLock(record: ProductPluginRecord,
-        serialize!: Bool = true): Result<Unit> {
+        serialize!: Bool = true, startup!: ?PluginRegistryStartupTransaction = None): Result<Unit> {
         let descriptor = record.descriptor
         if (descriptor.ecosystem == PluginEcosystem.Pi ||
             descriptor.ecosystem == PluginEcosystem.Codex) {
@@ -861,7 +861,8 @@ public class ProductVnextControl <: HostServiceToolControl {
                     javascriptPlugins,
                     catalog,
                     serviceRuntime: Some(ProductJavaScriptPluginServiceRuntime(catalog, pipeline, operations, askRuntime,
-            canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173))
+            canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173)),
+                    startup: startup
                 )) {
                     case Result.Ok(_) => Result.Ok(())
                     case Result.Err(error) =>
@@ -875,7 +876,7 @@ public class ProductVnextControl <: HostServiceToolControl {
         if (descriptor.ecosystem != PluginEcosystem.Axyndra) {
             return Result.Ok(())
         }
-        activateAxyndraImportedPlugin(record, serialize: serialize)
+        activateAxyndraImportedPlugin(record, serialize: serialize, startup: startup)
     }
 
     func restoreImportedPlugin(record: ProductPluginRecord): Result<Unit> {
@@ -886,7 +887,7 @@ public class ProductVnextControl <: HostServiceToolControl {
 
     private func activateAxyndraImportedPlugin(
         record: ProductPluginRecord,
-        serialize!: Bool = true
+        serialize!: Bool = true, startup!: ?PluginRegistryStartupTransaction = None
     ): Result<Unit> {
         let descriptor = record.descriptor
         if (descriptor.entryKind != PluginEntryKind.NativeExecutable) {
@@ -961,7 +962,8 @@ public class ProductVnextControl <: HostServiceToolControl {
                 serviceRuntime: Some(ProductJavaScriptPluginServiceRuntime(
                     catalog, pipeline, operations, askRuntime,
                     canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173
-                ))
+                )),
+                startup: startup
             )
         } finally {
             if (serialize) { javascriptPluginLifecycleLock.unlock() }
@@ -1765,11 +1767,12 @@ func mountAndRegisterJavaScriptPlugin(
     record: ProductPluginRecord,
     hostManager: ProductJavaScriptPluginHost,
     catalog: ToolCatalog,
-    serviceRuntime!: ?ProductJavaScriptPluginServiceRuntime = None
+    serviceRuntime!: ?ProductJavaScriptPluginServiceRuntime = None,
+    startup!: ?PluginRegistryStartupTransaction = None
 ): Result<Unit> {
     let borrowed: ?HostJavaScriptPluginServiceRuntime = match (serviceRuntime) {
         case Some(value) => Some(value); case None => None }
-    hostMountAndRegisterPluginTools(record, hostManager, catalog, serviceRuntime: borrowed)
+    hostMountAndRegisterPluginTools(record, hostManager, catalog, serviceRuntime: borrowed, startup: startup)
 }
 
 func directControlModelLane(runId: RunId, capabilities: CapabilitySet, threadId!: ?ThreadId = None,

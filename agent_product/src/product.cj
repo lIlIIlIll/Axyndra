@@ -377,13 +377,26 @@ public class ProductRuntime {
 
     func activateStartupPlugins(): Result<Unit> {
         let records = pluginRuntime.startupEffectiveRecords()
+        var startup: ?PluginRegistryStartupTransaction = None
         try {
             for (index in 0..records.size) {
+                if (startup.isNone()) {
+                    match (pluginRuntime.beginStartupTransaction()) {
+                        case PluginRegistryResult.Ok(value) => startup = Some(value)
+                        case PluginRegistryResult.Err(error) =>
+                            try { return Result.Err(AgentError(AgentErrorKind.Configuration, error.code,
+                                "installed plugin startup state cannot be verified")) }
+                            finally { error.close() }
+                    }
+                }
                 let record = records.take(index)
                 try {
-                    match (activateProductPlugin(record)) {
+                    match (activateProductPlugin(record, startup: startup)) {
                         case PluginRegistryResult.Ok(_) => ()
                         case PluginRegistryResult.Err(activationError) =>
+                            // Quarantine publishes a different installed state.
+                            // No later activation may borrow this transaction.
+                            startup.getOrThrow().close(); startup = None
                             match (setPluginEnabled(
                                 productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), false, record.scope
                             )) {
@@ -406,7 +419,10 @@ public class ProductRuntime {
                 } finally { record.close() }
             }
             Result.Ok(())
-        } finally { records.close() }
+        } finally {
+            match (startup) { case Some(value) => value.close(); case None => () }
+            records.close()
+        }
     }
 
     public func reviewExecutionPlan(document: String, sessionId!: ?SessionId = None<SessionId>): Result<String> {
@@ -1422,22 +1438,24 @@ public class ProductRuntime {
         }
     }
 
-    private func activateProductPlugin(record: ProductPluginRecord): PluginRegistryResult<Unit> {
-        return activateProductPluginVerified(record, verifyContent: true)
+    private func activateProductPlugin(record: ProductPluginRecord,
+        startup!: ?PluginRegistryStartupTransaction = None): PluginRegistryResult<Unit> {
+        return activateProductPluginVerified(record, verifyContent: true, startup: startup)
     }
 
     // First-install assembly just verified every default package under one
     // writer fence, so re-hashing each dependency here would repeat the same
     // known-current bytes N times. Every other check still runs.
     private func activateProductPluginVerified(record: ProductPluginRecord,
-        verifyContent!: Bool, serialize!: Bool = true): PluginRegistryResult<Unit> {
+        verifyContent!: Bool, serialize!: Bool = true,
+        startup!: ?PluginRegistryStartupTransaction = None): PluginRegistryResult<Unit> {
         match (pluginRuntime.checkComponentDependencies(record, verifyContent: verifyContent)) {
             // Keep the complete paid error, including source/field bytes. The
             // Registry result must not round-trip through an unowned Raw error.
             case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(_) => ()
         }
-        match (vnext.activateImportedPluginWithLock(record, serialize: serialize)) {
+        match (vnext.activateImportedPluginWithLock(record, serialize: serialize, startup: startup)) {
             case Result.Err(error) => productRegistryFailure83(pluginRuntime, error.code, error.message)
             case Result.Ok(_) =>
                 codexHookRuntime.activatePlugin(record)

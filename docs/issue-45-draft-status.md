@@ -4137,3 +4137,87 @@ records the commands, source scope and distinct canonical failure.
 acceptance, matched baseline and full release remain open. GC stays
 user-deferred with zero pass credit; PR #49 stays Draft.**
 
+### Single-startup transaction approved; Registry and Native Product cases pass
+
+E1496 finds repeated full Registry/package inspection in installed-plugin
+startup. The user approves one bounded startup verification transaction,
+extending the earlier first-install-only rule. Cross-startup reuse remains
+prohibited. Current bytes, Source/Registry identity, tamper rejection, actual
+custody and the original five-second limit remain required.
+
+E1497 builds the candidate Registry ELF and naturally enumerates 50 cases.
+All 47 selected non-GC cases pass, including 11 new cases for single use,
+foreign/closed transactions, target and dependency tampering, metadata ABA,
+same-byte replacement, Workspace publication, concurrent capture and admission
+lease custody. Three known GC cases are not rerun and receive zero pass credit.
+
+E1498 builds the complete Product test ELF and naturally enumerates 1,098
+cases. Nine selected cases pass with real Native C processes: independent
+startup state, a middle registration failure with quarantine and working
+remaining plugins, close/reopen, five existing operator-record regressions,
+and ordinary Native Tool and command-only entries. The other 1,089 cases are
+not run and receive no pass credit.
+
+Both gates apply to `290f9fd` plus uncommitted startup changes. The original
+five-second request remains unverified for this candidate.
+[The implementation record](implementation/plan-execution-reliability.md#approved-single-startup-verification-transaction)
+binds the authorized scope, sources, artifacts, commands and retained evidence.
+**Not complete. Core, the five-second request, remaining Product/application
+acceptance, matched baseline and full release remain open. GC stays
+user-deferred with zero pass credit; PR #49 stays Draft.**
+
+### Current production build passes; profile operator fails in GC before requests
+
+E1499 passes all nine original production build stages with unchanged
+per-stage limits and source hashes matching the startup transaction tests.
+E1500 compares the new App with the original Coding package's exact Native
+plugin, auxiliary-library and SDK runtime bytes.
+
+The original profile fixture fails at its operator `plugin list --json`,
+before either five-second Model invocation. Its actual owner SIGABRT core
+contains `RegionInfo::MarkObject`, `WCollector::MarkObject`,
+`ConcurrentMarkingWork::Execute` and `GCPoolThread::WorkerFunc`.
+This current sample is user-deferred GC with zero pass credit. No HTTP POST
+occurs. Physical process custody closes but provides no DATA ACK.
+
+The old E1486 timeout remains distinct and unclassified. The startup candidate
+still has no passing five-second result.
+[The implementation record](implementation/plan-execution-reliability.md#current-startup-candidate-builds-profile-prerequisite-has-direct-gc-evidence)
+records the build, comparison binding, pre-execution preparation corrections
+and existing-core evidence.
+**Not complete. Core, performance, remaining Product/application acceptance,
+matched baseline and full release remain open. GC stays user-deferred with
+zero pass credit; PR #49 stays Draft.**
+
+### Native dependency restart and rollback cases pass on the retained ELF
+
+E1501 adds five actual Native dependency cases to the nine E1498 cases:
+dependency-first restart, transitive disable, old-generation update rejection,
+corrupt/cyclic dependency rejection and failed-dependent-handshake isolation.
+All 14 pass with the fixed SDK and Clang 15 helper; complete enumeration remains
+1,098. Physical process custody closes.
+
+The driver initially rejects direct ELF output because it expects CJPM's
+project-summary section. Offline qualification verifies the actual identities,
+totals, exits and custody without replay or fabricated output, retaining the
+original failed summary.
+[The implementation record](implementation/plan-execution-reliability.md#direct-native-dependency-restart-and-rollback-evidence)
+binds the source, ELF, helper and raw-log evidence.
+This adds no whole-Product, DATA ACK, performance or release credit.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Current startup source static checks pass
+
+E1502 passes 131 selected Python regressions, the complete architecture gate
+and dependency-pin validation with unchanged guarded source, inventory and
+lock bytes. The generated root lock is subsequently restored to its tracked
+entries and dependency-pin validation passes again. Documentation changes only
+record these results.
+Evidence is `startup-transaction1502-static/summary.json`.
+
+This checkpoint accepts the bounded startup transaction's verified scope:
+47 Registry cases, 14 real Native Product cases, nine production build stages
+and the static checks. It does not close Core, remaining Product/application
+acceptance, matched-baseline comparison, the five-second gate or full release.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+

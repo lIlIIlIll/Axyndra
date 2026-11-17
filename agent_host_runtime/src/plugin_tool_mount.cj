@@ -16,11 +16,12 @@ public func hostMountAndRegisterPluginTools(
     record: ProductPluginRecord,
     hostManager: HostJavaScriptPluginHost,
     catalog: ToolCatalog,
-    serviceRuntime!: ?HostJavaScriptPluginServiceRuntime = None
+    serviceRuntime!: ?HostJavaScriptPluginServiceRuntime = None,
+    startup!: ?PluginRegistryStartupTransaction = None
 ): Result<Unit> {
     let owner = match (hostRegistryMountDescriptorCopy159(record.descriptor)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-    let result = try { hostMountCatalogFrame159(record, hostManager, catalog, serviceRuntime, owner) }
+    let result = try { hostMountCatalogFrame159(record, hostManager, catalog, serviceRuntime, owner, startup) }
     catch (error: Exception) { owner.retainLegacy159(); throw error }
     owner.returnedMountFrame159()
     result
@@ -29,7 +30,7 @@ public func hostMountAndRegisterPluginTools(
 private func hostMountCatalogFrame159(record: ProductPluginRecord,
     hostManager: HostJavaScriptPluginHost, catalog: ToolCatalog,
     serviceRuntime: ?HostJavaScriptPluginServiceRuntime,
-    owner: HostRegistryMountDescriptor159): Result<Unit> {
+    owner: HostRegistryMountDescriptor159, startup: ?PluginRegistryStartupTransaction): Result<Unit> {
     let descriptor = owner.mountDescriptor159()
     // Same-bank catalog owner is registered before any copied identity.
     // Each declaration's recursive schema and callbacks are paid below.
@@ -37,7 +38,7 @@ private func hostMountCatalogFrame159(record: ProductPluginRecord,
     catch (_: LogicalJsonPayloadError) {
         return hostPluginResourceError("plugin.registry_metadata_capacity", "catalog identity cannot fit the original shared capacity") }
     identity.beginCatalogConstruction159()
-    let result = try { hostMountCatalogIdentityFrame159(record, hostManager, catalog, serviceRuntime, owner, descriptor, identity) }
+    let result = try { hostMountCatalogIdentityFrame159(record, hostManager, catalog, serviceRuntime, owner, descriptor, identity, startup) }
     catch (error: Exception) { identity.retainCatalogConstructionFailure159(); throw error }
     finally { identity.returnedCatalogConstruction159() }
     result
@@ -46,8 +47,9 @@ private func hostMountCatalogFrame159(record: ProductPluginRecord,
 private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
     hostManager: HostJavaScriptPluginHost, catalog: ToolCatalog,
     serviceRuntime: ?HostJavaScriptPluginServiceRuntime, owner: HostRegistryMountDescriptor159,
-    descriptor: PluginPackageDescriptor, identity: HostRegistryCatalogIdentity159): Result<Unit> {
-    let tools = match (hostManager.mount(record)) {
+    descriptor: PluginPackageDescriptor, identity: HostRegistryCatalogIdentity159,
+    startup: ?PluginRegistryStartupTransaction): Result<Unit> {
+    let tools = match (hostManager.mount(record, startup: startup)) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
