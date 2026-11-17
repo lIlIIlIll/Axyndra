@@ -4276,3 +4276,53 @@ binds commands, source scopes, artifacts and retained evidence.
 five-second gate, matched baseline and full release remain open. GC stays
 user-deferred with zero pass credit; PR #49 stays Draft.**
 
+### Current Product cancellation and ten real App PTY cases pass
+
+E1512 publishes `8d7721a` by fast-forward and verifies the remote head and
+updated PR body. PR #49 remains Open/Draft.
+
+E1513 passes
+`PluginRuntimeContractTests.piExtensionHostRestartsQueuedCallAfterCancellation`
+on the unchanged current Product ELF with the original case/process bounds.
+The distinct current count is **500 passes, 16 user-deferred GC-stack failures
+and 582 unexecuted identities** out of the natural 1,098-case enumeration.
+This is not a complete Product pass.
+
+E1514 passes all ten original real Linux tmux/App cases on the current
+`f0e63eb`-source App: three rich stream protocols, cancellation, Ctrl-C,
+HTTP error, timeout, incomplete EOF, invalid UTF-8 and actual MCP execution.
+The Model/MCP packages and Native helper are the retained, byte-identical
+E1479 fixtures. Actual keys, local requests, ANSI output, terminal snapshots,
+canonical assertions and process exit/custody receipts are preserved.
+Mouse, resize, other platforms and newly assembled distribution packages
+are not covered by this PTY result.
+
+[The implementation record](implementation/plan-execution-reliability.md#current-queued-cancellation-and-real-app-pty-acceptance)
+binds the commands, source scope, ELF hashes and E1513/E1514 evidence.
+Complete Core, the separately blocked packaged CLI/ACP paths, the original
+five-second gate, matched-baseline comparison and full release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Private policy metadata tests pass; original complete Core still fails
+
+E1516's unpromoted concrete descriptor-policy candidate passes ten Native
+metadata regressions, including preservation of an opaque resolver's retained
+arguments and billed debt. It does not authorize returning a real Core frame.
+
+E1517 rebuilds and runs the unchanged full Core/recovery contract with the
+original SDK, fixtures, assertions and bounds. Compilation passes, but the
+required first completed child Receipt assertion still fails. Actual retained
+canonical records show a failed partial Program parent, a Workspace protocol
+error and `read_view.output_capacity` in the depth-two child.
+
+All four Store copies pass integrity and canonical-binding checks. All twelve
+raw DB/WAL/SHM captures retain their hashes, and process/observer custody closes.
+Historical E1507 export analysis locates 25 Legacy attachment-parent copies
+and 28 child-validation copies; it is not evidence of current refunds.
+[The implementation record](implementation/plan-execution-reliability.md#private-concrete-policy-candidate-still-fails-complete-core)
+records the exact private source scope, binaries and evidence.
+
+The policy candidate remains outside the PR. The current public Product count
+and ten App PTY passes above are unchanged. **Not complete; GC user-deferred
+with zero pass credit; PR #49 Draft.**
+

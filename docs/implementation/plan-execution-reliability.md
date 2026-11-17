@@ -9114,3 +9114,118 @@ issue closure or manual CI action.
 five-second gate, matched baseline and full release remain open. GC stays
 user-deferred with zero pass credit; PR #49 stays Draft.**
 
+## Current queued cancellation and real App PTY acceptance
+
+E1512 publishes the startup fix and inventory checkpoint by fast-forward to
+`8d7721a`. The remote head and PR body are read back; PR #49 remains Open/Draft.
+The exact selected diff, privacy checks, hooks and publication receipts are
+retained in `publication1512-current-read`.
+
+E1513 runs the remaining inherited non-GC queued-cancellation regression on
+the unchanged current Product ELF:
+
+```sh
+scripts/pinned_cangjie <product-unit-elf> \
+	--filter=PluginRuntimeContractTests.piExtensionHostRestartsQueuedCallAfterCancellation \
+	--parallel=1 --timeout-each=60s --no-color --no-progress
+```
+
+The case passes under the original 90-second process bound, with actual
+process-custody closure. The existing complete enumeration still contains
+1,098 cases; this invocation executes one and excludes 1,097 by its filter.
+`non-gc-product1513-cancellation/summary.json` binds the source, command,
+Native result and process receipt to Product ELF SHA-256
+`d71aab889ffe4e835170b146e5c0fe1f9ccdaaef32d78f3f0a1435667b98def1`.
+The distinct current total is now **500 passes, 16 user-deferred GC-stack
+failures and 582 unexecuted case identities**. There is no complete Product
+pass or DATA ACK inference.
+
+E1514 executes all ten original real Linux tmux PTY cases using the current
+E1499 App. Its SHA-256 is
+`349ed674193dd5797d8cd3de78d0e368b2dd31d18a0a3d80b4f6886c581ed62b`.
+The App binds to `f0e63eb` behavior sources; `8d7721a` changes only the two
+acceptance records and test inventory. The Model package, MCP package and
+Native helper are the byte-identical retained E1479 fixtures, not newly
+built distribution packages.
+
+Each case runs the existing entrypoint with its original assertions and
+bounds:
+
+```sh
+python3 support_tests/tui_path_coverage/plugin_acceptance.py \
+	--candidate <current-app> \
+	--model-package <retained-model-package> \
+	--mcp-package <retained-mcp-package> \
+	--native-library <retained-native-library> \
+	--output <private-disk-output> --case <case>
+```
+
+All ten pass: `rich-responses`, `rich-completions`, `rich-messages`, `cancel`,
+`ctrl-c`, `http-error`, `timeout`, `incomplete-eof`, `invalid-utf8` and
+`mcp-tool`. These exercise actual App keys, local Model HTTP/SSE requests,
+delayed chunks, MCP execution, visible states and continued use after
+cancellation. `real-pty1514-current-app/summary.json` binds the exact inputs,
+package files, ANSI output, terminal snapshots, canonical assertions and
+exit/custody receipts. Every case exits zero with its actual passing result.
+
+No external model is called and no SDK component is rebuilt. Mouse, resize
+and other platforms remain unverified. These ten App flows do not replace
+the separately blocked packaged CLI/ACP paths, complete Core, the original
+five-second gate, matched-baseline comparison or full release acceptance.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Private concrete-policy candidate still fails complete Core
+
+E1515's fixed-SDK probe establishes that function values do not expose an
+`Object` identity through `Any`; it does not attest that a callback is closed.
+The unpromoted E1516 candidate instead implements the existing read-view and
+readonly-delegation descriptor policies as concrete code. Descriptors with
+opaque call resolvers retain the original Raw metadata path and debt.
+
+The first unit build fails on two test-only language mistakes: using
+`getOrThrow` on the domain `Result`, and capturing a mutable local in an
+escaping lambda. The corrected tests use the existing Result variants and
+an immutable reference to the retained-call holder. No assertion is relaxed.
+The rebuilt complete Native ELF enumerates 82 cases and executes ten:
+seven existing metadata cases and three new policy/retention cases. All ten
+pass, including a successful opaque resolver that keeps its arguments alive
+and continues to reject full-bank acquisition after producer return.
+The result covers unit DATA behavior, not actual Core caller acknowledgement.
+`metadata1516-fixed-policy-units-compile2/summary.json` binds these results to
+ELF `8381c35af1cd9fe16e5264fa4bb25ab72b618a2a7e3dfdbebb8de47eac2af386`.
+
+E1517 rebuilds the unchanged full Core/recovery contract from this candidate
+and runs `--core-and-recovery-contract` with the original fixed SDK, fixtures
+and two 900-second build/run bounds. Build exits zero; the actual contract
+exits one at the required completed-first-child Receipt assertion.
+ELF SHA-256 is
+`2d6784a46f7cb17c73d51e97437b3d43b77bf2c5b19316b55f33b0bac748c3a3`.
+No candidate Core changes are promoted to the PR.
+
+All four actual Stores are retained without modifying live SQL or deletion.
+Twelve raw DB/WAL/SHM images retain their hashes. Separate analysis copies
+pass `quick_check`, exact canonical plan roundtrip, operation/effect plan
+agreement and reserved Receipt identity checks; all connections and observer
+FDs close. The Program Run is completed with a failed partial parent,
+`workspace.protocol` on its first child and `read_view.output_capacity` at
+depth two. This is not successful cancellation or GC evidence.
+`metadata1517-fixed-policy-core/summary.json`, `canonical-retention.json` and
+`canonical-analysis/projection.json` retain the source, command, process and
+canonical facts. The initial offline JSON-decoder assumption is separately
+recorded as an analysis error; Store plans use the existing canonical codec.
+
+Further analysis of the already captured E1507 history covers all 53 live
+Prepared-copy identities:
+
+| First Raw export | Identities | Billed bytes |
+| --- | ---: | ---: |
+| Legacy Native execution frame | 25 | 7,237,928 |
+| Child-plan validation | 28 | 6,817,352 |
+
+All have an actual producer-return witness and remain marked unknown at that
+historical refusal; four also retain a concrete consumer. The Legacy group
+uses readonly-delegation plans with input attachments. This locates remaining
+consumers but does not prove their DATA return or the candidate's current
+charge. No quota, floor, working invoice, Source, SQL or actual ACK rule changes.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
