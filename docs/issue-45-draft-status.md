@@ -16,6 +16,10 @@ Local checkpoints and updates to the existing Draft PR are authorized.
 Ready-for-review, merge and Issue closure are not authorized. Evidence paths below are relative to the retained `<evidence>`
 directory; local paths, credentials, and host identifiers are not publication inputs.
 
+Latest completed private ownership/Core evidence is summarized in
+[the Native stack and scalar-receiver checkpoint](#private-native-stack-and-scalar-receiver-checkpoint).
+Historical artifact labels below do not replace that source-specific scope.
+
 App03 is `734dfbe5e8a57af08a593877186f1682c69570380125263b3d987b130a96c83c`.
 App04 is `f10971cd673aa89fba82cd6683c08f43b025f2c9e0a0809549118d867d8a8a58`.
 Both use frozen native library
@@ -4325,4 +4329,63 @@ records the exact private source scope, binaries and evidence.
 The policy candidate remains outside the PR. The current public Product count
 and ten App PTY passes above are unchanged. **Not complete; GC user-deferred
 with zero pass credit; PR #49 Draft.**
+
+### Private Native stack and scalar-receiver checkpoint
+
+E1519–E1533 are unpromoted private work. Public `f0e63eb` behavior, the
+500 distinct Product passes, 16 current GC failures, 582 unexecuted Product
+identities and ten actual App PTY passes retain their previous applicability.
+
+E1520/E1522 fail the original complete Core with stack-overflow traces.
+The attachment-only frame split does not fix the actual no-attachment path.
+E1526 binds the Runtime C2N guard and a valid 69-frame chain; the first visible
+native-write source frame is not the cause. E1527 moves only the post-Native
+result body out of the active caller, preserving actual ownership and ACK
+handling. The unchanged Core proceeds without stack overflow, but still fails
+the first completed child-Receipt prerequisite.
+
+E1521 passes three original attachment-owner cases on that private source.
+E1529 then replaces the derived scheduler's tool-name String with a scalar
+kind while preserving the distinct Root and child admission predicates.
+E1531 passes all 84 naturally enumerated Tool cases and the same three
+Host invoice/ACK cases in isolated Native processes. These are not complete
+Core, Host, Product, aggregate single-process suite or public-source results.
+
+E1530 still fails complete Core with `read_view.output_capacity`.
+E1532 observes the same frozen ELF: scheduler-name Raw exports are gone,
+but six preview-validation exports and one Legacy export remain. Its actual
+locked read-view output refusal exceeds the unchanged bank by 7,080,444
+bytes. Exact request/charge values, original bounds, source/ELF identities and
+four-Store canonical retention checks are recorded in
+[the implementation record](implementation/plan-execution-reliability.md#private-native-stack-repair-and-scalar-receiver-evidence).
+Export counts do not prove a leak, DATA return or permitted refund.
+
+E1533 implements a concrete denied-network preview policy and retains exact
+host-only identity, frozen-parent and capability checks. E1534 rebuilds it and
+still fails original complete Core at the child-Receipt prerequisite, with
+`read_view.output_capacity` and no stack-overflow trace. E1535 passes all 86
+naturally enumerated Tool cases, including the new regressions, and the same
+three Host invoice/ACK cases in isolated Native processes. It also corrects
+and passes the old opaque
+resolver test's oversized allocation probe: previous retained-data and positive
+occupancy observations remain valid, but the oversized request alone did not
+establish full-bank saturation. No product resource bound is relaxed.
+
+E1536 reconciles the actual instrumented bank refusal exactly, including fixed
+buffers and the in-flight full output invoice. Only one first Raw metadata
+export remains, but another reservation group has four real consumers still
+outstanding after producer return. Most other live lease types remain
+unclassified. These states do not permit an early refund or invented ACK;
+the implementation record binds the exact numbers, source and diagnostic ELF.
+E1537 joins all four outstanding consumers to the actual file-plan proposal
+error path, using stable numeric identities from the same run. The four failed
+canonical operations retain their original errors. No retirement fix is
+applied yet; debugger success is not Core success, and the inferior still
+fails the original Receipt prerequisite.
+
+E1523 reconciles the 582 unexecuted identities with retained, source-specific
+failure evidence without rerunning deferred paths or adding current pass credit.
+Complete Core, remaining application acceptance, the original five-second gate,
+matched baseline and final-source release remain open.
+**Not complete; GC remains user-deferred with zero pass credit; PR #49 Draft.**
 

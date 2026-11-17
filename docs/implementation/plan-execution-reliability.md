@@ -6,6 +6,10 @@
 > new integration. All affected requirements must pass again before complete acceptance.
 > Current integration results are recorded separately below. Schema v29 preserves
 > the new base's v25-v28 migrations and adds plan state.
+>
+> Latest completed private Core/ownership results are recorded in
+> [the Native stack and scalar-receiver checkpoint](#private-native-stack-repair-and-scalar-receiver-evidence).
+> They do not replace the public `f0e63eb` behavior source or establish complete acceptance.
 
 This record tracks the approved seven-part reliability change. Operation receipts
 remain the execution facts. Step decisions reference those facts without
@@ -9186,11 +9190,11 @@ The first unit build fails on two test-only language mistakes: using
 `getOrThrow` on the domain `Result`, and capturing a mutable local in an
 escaping lambda. The corrected tests use the existing Result variants and
 an immutable reference to the retained-call holder. No assertion is relaxed.
-The rebuilt complete Native ELF enumerates 82 cases and executes ten:
-seven existing metadata cases and three new policy/retention cases. All ten
+The rebuilt complete Native ELF enumerates 82 cases. All ten selected cases
 pass, including a successful opaque resolver that keeps its arguments alive
-and continues to reject full-bank acquisition after producer return.
-The result covers unit DATA behavior, not actual Core caller acknowledgement.
+and retains positive billed debt after producer return. Its allocation probe
+was oversized rather than an otherwise admissible full-bank request; see the
+E1533 correction below. These unit DATA results are not actual Core acknowledgements.
 `metadata1516-fixed-policy-units-compile2/summary.json` binds these results to
 ELF `8381c35af1cd9fe16e5264fa4bb25ab72b618a2a7e3dfdbebb8de47eac2af386`.
 
@@ -9228,4 +9232,256 @@ uses readonly-delegation plans with input attachments. This locates remaining
 consumers but does not prove their DATA return or the candidate's current
 charge. No quota, floor, working invoice, Source, SQL or actual ACK rule changes.
 **Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Private Native stack repair and scalar-receiver evidence
+
+E1519–E1533 remain task-private candidates and diagnostics. None of these
+behavior changes is promoted to the PR. The public behavior source remains
+`f0e63eb`; the 500 distinct Product passes, 16 current GC failures, 582
+unexecuted Product identities and ten real App PTY passes retain their
+previous source and artifact scopes.
+
+All Core runs below use the original complete
+`--core-and-recovery-contract`, fixture source SHA-256
+`3b1b82119de930fe60072180bc57fed02f5ed8e823be5682fab41334f941a9a7`,
+fixed official SDK and unchanged 900-second build/run bounds. The Native
+helper remains
+`36ca7f5f003c1136239f64cde95195b7371beaf4acafcafb355526a5363ee790`.
+No compiler, Runtime, std, stdx or SDK is rebuilt or replaced.
+
+### Actual Native stack boundary, not the first visible source frame
+
+E1519 gives the readonly attachment lane concrete metadata consumers,
+independently paid encoded Strings and a revocable observer. Its full
+attachment invoice still waits for actual parent return, output ACK and
+successful attachment close. E1520 builds successfully but fails the original
+Core contract with printed stack-overflow traces. E1522 reduces the new
+attachment-only helper's static frame from 3,880 to 2,072 bytes, but does not
+fix that failure: the actual artifact-failure Root has no input attachment
+and takes the Legacy lane.
+
+E1524's breakpoint on the first visible `nativeProcessWriteAdmitted`
+prologue records no hit. E1525 observes one actual Runtime stack-overflow
+throw; its ordinary debugger unwind past `C2NStub` is invalid and interprets
+JSON bytes as return addresses. That unwind is not heap-corruption evidence.
+E1526 instead binds the loaded Runtime and reads a bounded, monotonic
+69-entry frame-pointer chain through the actual C2N guard. Native argument
+stack bytes are zero, remaining guard space is minus 128 bytes, and the
+shortfall is 128 bytes.
+
+E1527 moves the original post-Native result/SQL/output/cleanup body verbatim
+into a private helper entered only after the actual Native invocation
+returns. The active Legacy caller's static frame falls from 10,632 to 4,664
+bytes. No stack size, deadline, authority, failure precedence or ACK rule
+changes. The rebuilt original Core run has zero `StackOverflowError`
+traces and reaches the later cancellation prerequisite, but still exits one
+because the first child lacks the required completed durable Receipt.
+Its ELF is
+`89e3537d2d3320c5f7069916a6280d911ad441b16f834a705080b15f290daca2`.
+This repairs the private candidate's stack regression, not complete Core.
+
+E1521 rebuilds the original five-member unit dependency DAG on E1527 source
+and passes the three existing attachment-owner cases: actual initial
+reservation refusal, actual growth refusal with its attempted lease returned,
+and full-invoice retention until both parent return and output ACK. The Host
+ELF naturally enumerates 282 cases; only those three execute.
+Its SHA-256 is
+`d75be6ca9159a5e78db0068c236e241936b8ab6963e46b88df6c7e1859313e10`.
+
+Retained entry points:
+
+- `metadata1520-attachment-custody-core/summary.json`
+- `metadata1522-attachment-custody-core/failure-classification.json`
+- `metadata1526-c2n-frame-chain/actual-frame-chain.json` and
+  `actual-boundary-contract.json`
+- `metadata1527-actual-native-result-frame-core/summary.json` and
+  `verbatim-result-ownership-body.json`
+- `metadata1521-attachment-owner-units/summary.json`
+
+### Scalar receiver removes a real export, but Core still fails
+
+E1528 observes 32 actual first Raw exports: 25 through the derived scheduler's
+tool-name argument, six through readonly preview validation, and one through
+the no-attachment Legacy Native lane. This is export-site evidence, not a
+count of refundable owners.
+
+E1529 replaces the scheduler's retained String with a three-way value kind,
+not the previously withdrawn paid name-copy experiment. The frozen call is
+classified under a private loan before the opaque scheduler callback.
+The original distinction remains: `run_program` or `plugin.*` may yield a
+Root frame, but only `plugin.*` may enter a derived frame. Source checks,
+operation identities, transition ordering, depth/width/operation bounds and
+actual slot release remain unchanged; all callback and frame callers migrate.
+
+E1530 rebuilds the complete original Core and still fails the completed-child
+Receipt prerequisite, without a stack-overflow trace. Actual canonical records
+show the partial failed Program, `workspace.protocol` and the depth-two
+`read_view.output_capacity`. The ELF is
+`cef1c871477cc247962e5c5afd9ce8d9df2f28843bc6e370542f9ca6b928854f`.
+
+E1531 passes all 84 naturally enumerated Tool cases, including the two new
+scheduler-policy boundary cases, and the same three Host invoice/ACK cases.
+Every case runs in a separately qualified Native process with the original
+30-second case and 90-second process bounds. This proves complete Tool
+inventory coverage in isolation, not aggregate single-process suite behavior
+or complete Host/Core/Product acceptance. The unit artifacts are:
+
+| Module | ELF SHA-256 | Natural inventory | Actual passes |
+| --- | --- | ---: | ---: |
+| Tool | `e67bc248957bf0e784dd2472989ddcdafca2c1205631a3d3eb0e387063bb69ee` | 84 | 84 |
+| Host | `b27df9a812e66f57e3db3df5d765a3c462773a28b7823c42e5060b9e5ca153fe` | 282 | 3 |
+
+E1532 observes the unchanged E1530 ELF without Cangjie instrumentation.
+The scheduler-name exports are absent; six preview-validation exports and
+one Legacy export remain. Exact disassembly binds all budget fields and
+stack slots. One real `grow` refusal occurs while the bank mutex is held:
+
+| Refusal fact | Bytes |
+| --- | ---: |
+| Fixed bank capacity | 150,994,944 |
+| Actually charged | 145,492,476 |
+| Actual requested increment | 12,582,912 |
+| Remaining capacity | 5,502,468 |
+| Overshoot | 7,080,444 |
+
+Four message slots and four fixed buffers are charged at that observation.
+The actual caller is the read-view output path through
+`InvocationWorkingFunding1255.acquireOutputData1272`,
+`acquireDerivedMessageData1272` and shared-ledger `ensure`. This establishes
+real saturation rather than merely trusting the generic output-capacity error.
+It does not identify every live payer, equate Raw exports with refundable
+owners, or permit high-water refunds. No owner address is treated as a stable
+identity and the debugger retains no application owner reference.
+
+E1530 and E1532 each retain four actual Stores and twelve raw DB/WAL/SHM
+images. Separate analysis copies pass integrity, canonical roundtrip,
+operation/effect-plan and reserved-Receipt checks. Raw hashes remain unchanged;
+process custody, observer threads and observer FDs close.
+
+Retained entry points:
+
+- `metadata1528-current-first-export-sites/first-export-events.json`
+- `metadata1529-slot-kind-contract/contract.json`
+- `metadata1530-slot-kind-core/summary.json`,
+  `failure-classification.json` and `canonical-analysis/projection.json`
+- `metadata1531-slot-kind-units/summary.json`
+- `metadata1532-current-refusal-boundary/observed-boundaries.json`,
+  `exact-boundary-bindings.json`, `current-conclusion.json` and
+  `canonical-analysis/projection.json`
+
+### Remaining private preview work and corrected test evidence
+
+E1533 replaces the actual preview primitive's constant denied-network closure
+with a concrete policy implementation. The validator still requires its exact
+frozen parent, current host-only descriptor, immutable implementation/schema
+and current capability ceiling. Ordinary contribution callers explicitly
+require non-host-only descriptors. Opaque resolvers keep their original Raw
+export and debt; no successful callback becomes a DATA acknowledgement.
+The original policy identity flags are preserved rather than inventing an
+additional capability resolver. E1535 passes all 86 naturally enumerated Tool
+cases, including both new preview/authority regressions, and the same three
+Host invoice/ACK cases. All original five unit-build stages pass. Each case
+still runs in its own actual Native process with unchanged bounds; complete
+Host/Core/Product and aggregate single-process acceptance remain unproved.
+Tool ELF: `98c04e5dcbf8d0b6d00c5100cd71d4d9a70209d42d5b4cbf26f10b7cb67e1b68`.
+Host ELF: `43024e4b304688902f6b484802821b10c57b3a503e7bb2b4078302f4409906e0`.
+See `metadata1535-preview-policy-units/summary.json`.
+
+E1534 rebuilds that exact candidate successfully and runs the original complete
+Core. It still exits one at the completed-child Receipt prerequisite, with zero
+stack-overflow traces. Its actual depth-two read-view operation reports
+`read_view.output_capacity`; that generic error alone is not a new complete
+bank/owner attribution. The frozen ELF is
+`33e6f5e51c77c33ab49e366ca1139cb38515012d847a68a4bff0008c00f6b2a7`.
+Four actual Stores and twelve raw images are retained and checked only through
+independent analysis copies; observer FDs and actual process custody close.
+See `metadata1534-preview-policy-core/summary.json`,
+`failure-classification.json` and `canonical-analysis/projection.json`.
+
+E1533 also corrects the existing opaque-resolver test's bank probe. Its former
+16 MiB raw request invoiced 128 MiB against a 16 MiB bank, so rejection alone
+could not prove retained debt. Earlier actual retained-text and positive
+occupancy assertions remain valid, and recorded pass counts are unchanged.
+The corrected probe requests one raw byte, which invoices exactly the
+original 16 MiB floor. E1535 executes and passes the corrected case without
+changing any product quota, invoice or retirement rule.
+See `metadata1533-preview-policy-contract/opaque-probe-correction.json`.
+
+E1523 reconciles all 582 unexecuted public Product identities against retained
+failure evidence: 575 in the earlier complete cursor, six in the reviewed
+seven-case classification, and the portable Codex case in E1487/E1488.
+The last item has an exact Runtime GC fault/call-site binding, not a recovered
+dynamic backtrace; it does not reclassify the older incomplete SIGABRT.
+This read-only reconciliation executes no case and changes no current pass
+count. `product1523-unexecuted-dispositions.json` records the source artifacts.
+
+### Current refusal distinguishes opaque exports from outstanding consumers
+
+E1536 adds only task-private scalar events to the E1533 behavior. Exact token
+comparison after erasing named observation code preserves all original
+non-observer code, including string literals and quota/lifecycle rules.
+Logging allocation, stack and timing overhead remain real; this is not
+clean-source or performance acceptance. The diagnostic retains numeric bank,
+reservation-group and lease IDs, never an owner reference or a stack capture,
+and records every custody growth rather than applying a size threshold.
+
+The rebuilt original complete Core still fails the same Receipt prerequisite.
+Its actual bank refusal is capacity 150,994,944, charged 145,130,404,
+incremental request 12,582,912 and overshoot 6,718,372 bytes. The request is the
+original full 16 MiB output invoice less 4 MiB of already billed high-water
+slack, not a smaller output invoice. Replaying all bank events reconciles the
+charged balance exactly, including 90,112 bytes in four fixed buffers.
+
+| Diagnostic reservation group | Billed bytes | Live ledger SUM | Live leases | Instrumented metadata state at refusal |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 39,887,000 | 26,258,008 | 292 | Four owners have producer returned, one consumer outstanding each, and no unknown export |
+| 210 | 16,918,156 | 5,699,136 | 49 | One unknown owner has producer returned and zero consumers |
+| 266 | 16,777,216 | 13,388,656 | 164 | Three metadata owners and their current Core scope remain active |
+| 271 | 71,457,920 | 67,263,616 | 4 | The actual pending 16 MiB child invoice requests the refused growth |
+
+Only one first Raw metadata export remains in this run; the six earlier preview
+exports are absent. That does not explain all live leases: most have not yet
+been attributed to concrete receiver types. In particular, the four outstanding
+consumers are not unknown exports and cannot be cleared merely because their
+producer, Operation or process ended. Their actual creation and return paths
+still require attribution. No early refund or invented ACK is applied.
+
+The diagnostic ELF is
+`dc829c7144ae6f1ea1d1d45d5a56a7391ae202bc37f2ba103428d3587bb7e175`.
+Four actual Stores and twelve raw images again pass separate-copy canonical
+checks with unchanged raw hashes and closed observer/process custody.
+Retained entry points under `metadata1536-current-owner-attribution/`:
+`summary.json`, `current-conclusion.json`,
+`numeric-analysis/bank-reconciliation.json`,
+`numeric-analysis/live-owner-states.json` and `canonical-analysis/projection.json`.
+
+E1537 reuses that exact frozen diagnostic ELF without another build. At the
+disassembly-bound scalar event boundary, a read-only debugger captures 98 actual
+metadata-consumer origins with zero capture errors. Register/stack values
+already contain numeric bank/group/lease identities; no managed owner pointer
+is followed. Within this run, all four consumers still outstanding after
+producer return join to `productFilePlanResultMetadata204`, called by
+`PluginFilePlanProposeExecutor.execute`.
+
+The actual canonical rows identify the four failures: invalid path, path-byte
+limit, stale precondition and existing create target. The helper returns their
+original `Result.Err` without a metadata-consumer retirement path. Its success
+path separately waits for the actual result payload ACK. This does not justify
+calling the failure a DATA acknowledgement: a safe fix must preserve the error
+and account for any original or independently copied data still held by its
+receiver. No error code, SQL outcome, Source check or ACK is changed in E1537.
+Other live lease types remain unclassified, so retiring these four alone is
+not claimed to solve capacity.
+
+The debugger exits zero but the actual inferior exits one at the original
+Receipt prerequisite. Its independent bank reconciliation is exact; canonical
+retention again checks four Stores and twelve unchanged raw images.
+See `metadata1537-live-consumer-origins/outstanding-consumer-origins.json`,
+`exact-boundary-binding.json`, `numeric-analysis/bank-reconciliation.json`
+and `canonical-analysis/projection.json`.
+
+Complete Core, the remaining application flows, original five-second request
+gate, matched-baseline comparison and final-source release acceptance remain
+open. **Not complete; GC remains user-deferred with zero pass credit;
+PR #49 stays Draft.**
 
