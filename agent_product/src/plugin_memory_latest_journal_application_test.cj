@@ -96,6 +96,38 @@ func latestJournalApplicationSeedEvents(f:MemoryPolicyFixture,count:Int64):Unit{
 }
 
 @Test
+class MemoryJournalSeedTests {
+    @TestCase
+    func escapedAndNearLimitEventsKeepExactTextInBothTables(): Unit {
+        let directory = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp")
+        let db = SqliteDatabase(directory.join("state.db").toString())
+        try {
+            let repository = MemoryV3Repository(db)
+            let scope = MemoryScope(MemoryScopeKind.Workspace, key: "workspace")
+            let small = lifecycleTestRequire(repository.retain(MemoryV3Draft(
+                MemoryKind.Preference, scope, "quotes \" and ', newline\nand 雪")))
+            let expected = encodeAgentValue(legacyOracle_memoryV3EventValue("retain", small))
+            let smallRows = db.query("SELECT e.payload,m.payload FROM memory_events e JOIN memories m " +
+                "ON e.memory_id=m.id AND e.revision=m.revision WHERE e.memory_id=?", [SqlParameter.Text(small.id)])
+            @Expect(smallRows.size, 1)
+            @Expect(smallRows[0].required(0), expected)
+            @Expect(smallRows[0].required(1), expected)
+
+            let content = "needle MEMORY-STREAM-63-MIB " + String.fromUtf8(Array<Byte>(66060288, repeat: b'x'))
+            let large = lifecycleTestRequire(repository.retain(MemoryV3Draft(MemoryKind.Preference, scope, content)))
+            // Compare the whole value inside SQLite; fetching it as another
+            // managed String would reintroduce the oracle's peak allocation.
+            let verified = db.query("SELECT count(*) FROM memory_events e JOIN memories m " +
+                "ON e.memory_id=m.id AND e.revision=m.revision WHERE e.memory_id=? AND e.operation='retain' " +
+                "AND typeof(e.payload)='text' AND typeof(m.payload)='text' AND e.payload=m.payload " +
+                "AND length(CAST(e.payload AS BLOB)) BETWEEN 66060289 AND 67108863 " +
+                "AND json_extract(e.payload,'$.record.content')=?", [SqlParameter.Text(large.id), SqlParameter.Text(content)])
+            @Expect(verified[0].required(0), "1")
+        } finally { db.close(); remove(directory, recursive: true) }
+    }
+}
+
+@Test
 class InstalledNativeLatestJournalApplicationTests {
     @TestCase
     func genuineSixMiBOneReadMatchesWholeOriginalContextAndHistoryOracle():Unit{

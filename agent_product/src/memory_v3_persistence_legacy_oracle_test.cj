@@ -11,6 +11,7 @@ import std.convert.*
 import std.overflow.*
 import std.deriving.*
 import std.fs.*
+import std.io.*
 import std.sync.*
 import std.time.*
 
@@ -255,6 +256,22 @@ public interface MemoryEmbeddingPort {
 public interface MemoryRetrievalPolicy {
     func retrieve(query: String, records: Array<MemoryV3Record>, options: MemoryV3SearchOptions,
         embedding: ?MemoryEmbeddingPort): Result<MemoryV3SearchResult>
+}
+
+// Measure with the same JSON writer so the destination needs exactly one
+// allocation, even for a large escaped scalar. No second String or SQL literal.
+private class MemoryEventByteCount <: OutputStream {
+    var size: Int64 = 0
+    public func write(bytes: Array<Byte>): Unit { size += bytes.size }
+    public func flush(): Unit {}
+}
+
+private func memoryEventBytes(event: AgentValue): Array<Byte> {
+    let count = MemoryEventByteCount()
+    event.writeJson(count)
+    let buffer = ByteBuffer(count.size)
+    event.writeJson(buffer)
+    buffer.bytes()
 }
 
 // Every mutation appends a complete record state to events.jsonl. Replay keeps
@@ -783,19 +800,19 @@ public class MemoryV3Repository {
                             throw IllegalStateException("memory expected record changed") }
                         case None => () }
                     for (record in records) {
-                        let payload = encodeAgentValue(legacyOracle_memoryV3EventValue(operation, record))
+                        let payload = memoryEventBytes(legacyOracle_memoryV3EventValue(operation, record))
                         transaction.execute(
-                            "INSERT INTO memory_events(memory_id,revision,operation,payload,created_at_millis) VALUES(" +
-                                sqliteText(record.id) + "," + record.revision.toString() + "," +
-                                sqliteText(operation) + "," + sqliteText(payload) + "," +
-                                legacyOracle_memoryV3NowMillis().toString() + ")"
-                        )
+                            "INSERT INTO memory_events(memory_id,revision,operation,payload,created_at_millis) " +
+                            "VALUES(?,?,?,CAST(? AS TEXT),?)", [
+                                SqlParameter.Text(record.id), SqlParameter.Int64Value(record.revision),
+                                SqlParameter.Text(operation), SqlParameter.Blob(payload),
+                                SqlParameter.Int64Value(legacyOracle_memoryV3NowMillis())
+                            ])
                         transaction.execute(
-                            "INSERT OR REPLACE INTO memories(id,thread_id,kind,payload,revision) VALUES(" +
-                                sqliteText(record.id) + ",NULL," +
-                                sqliteText(legacyOracle_memoryV3KindName(record.kind)) + "," +
-                                sqliteText(payload) + "," + record.revision.toString() + ")"
-                        )
+                            "INSERT OR REPLACE INTO memories(id,thread_id,kind,payload,revision) " +
+                            "SELECT memory_id,NULL,?,payload,revision FROM memory_events WHERE memory_id=? AND revision=?",
+                            [SqlParameter.Text(legacyOracle_memoryV3KindName(record.kind)), SqlParameter.Text(record.id),
+                                SqlParameter.Int64Value(record.revision)])
                     }
                 })
                 return Result.Ok(())
