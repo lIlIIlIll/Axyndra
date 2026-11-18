@@ -846,6 +846,24 @@ func fixtureWorkflowUsageLine(
         " receipts=" + receipts.toString()
 }
 
+private func startCoreFixtureRun(product: ProductRuntime, prompt: String, session: SessionId, assertion: String,
+    context!: ?InvocationContextProjection = None, lane!: LaneId = LaneId("main")): RunId {
+    let (owner, runId) = runCoreFixtureCallerFrame(product, prompt, session, assertion, context, lane)
+    expect(!owner.isDataReturned204(), "the caller must acknowledge its request DATA")
+    owner.returnApplicationFrame204()
+    expect(owner.isDataReturned204(), "request DATA returns after both the caller and Core consumers")
+    runId
+}
+
+private func runCoreFixtureCallerFrame(product: ProductRuntime, prompt: String, session: SessionId,
+    assertion: String, context: ?InvocationContextProjection, lane: LaneId): (PlanRequestCustody204, RunId) {
+    let request = product.request(prompt, sessionId: Some(session), contextSnapshot: context, executionLaneId: lane)
+    expect(product.client.start(request, {_ => ()}).isOk(), assertion)
+    // Only the independently generated Run identity is needed for SQL readback.
+    // Neither the paid request nor a result snapshot leaves this caller frame.
+    (request.planRequestCustody204.getOrThrow(), request.runId)
+}
+
 func runMatchedProductWorkflowContract(
     product: ProductRuntime,
     stateRoot: String,
@@ -2176,15 +2194,9 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
         let productContext = InvocationContextProjection(contributions: [InvocationContextContribution(
             "contract.context", "product-review", "context://product-review",
             "Use the Product immutable context contract.", ContextContentTrust.UserSelected)])
-        let skillResult = product.client.start(
-            product.request(
-                "run active skill",
-                sessionId: Some(SessionId("durable-product-skill-thread")),
-                contextSnapshot: Some(productContext)
-            ),
-            {_ => ()}
-        )
-        expect(skillResult.isOk() && product.fixtureProbe.getOrThrow().withLastRequest159({ view =>
+        let _ = startCoreFixtureRun(product, "run active skill", SessionId("durable-product-skill-thread"),
+            "Product executes the explicit context request", context: Some(productContext))
+        expect(product.fixtureProbe.getOrThrow().withLastRequest159({ view =>
             view.systemContains159("<run_context ") &&
             view.systemContains159("Use the Product immutable context contract.")
         }), "Product freezes explicit generic context into the Run")
@@ -2349,10 +2361,8 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
             "Product exposes durable shared-history Lane creation and branch projection")
 
         let laneExecutionSession = SessionId("durable-product-review-execution")
-        expect(product.client.start(product.request(
-            "seed the review execution branch",
-            sessionId: Some(laneExecutionSession)
-        ), {_ => ()}).isOk(), "Product seeds a canonical main Lane before branching")
+        let _ = startCoreFixtureRun(product, "seed the review execution branch", laneExecutionSession,
+            "Product seeds a canonical main Lane before branching")
         let laneExecutionMain = product.vnext.laneBranch(
             ThreadId(laneExecutionSession.value), LaneId("main")
         ).value().getOrThrow()
@@ -2364,19 +2374,12 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
             forkItemId: Some(laneExecutionMain[laneExecutionMain.size - 1]),
             createdAtMillis: 30
         )).isOk(), "Product creates the non-main execution Lane")
-        let reviewExecutionRequest = product.request(
-            "execute the complete model step on review",
-            sessionId: Some(laneExecutionSession),
-            executionLaneId: LaneId("review")
-        )
-        expect(product.client.start(reviewExecutionRequest, {_ => ()}).isOk(),
-            "Product executes AgentCore through an explicit non-main Lane")
+        let reviewExecutionRunId = startCoreFixtureRun(product, "execute the complete model step on review",
+            laneExecutionSession, "Product executes AgentCore through an explicit non-main Lane", lane: LaneId("review"))
 
         let corruptQueueSession = SessionId("durable-product-corrupt-queue")
-        expect(product.client.start(product.request(
-            "seed the corrupt queue recovery fixture",
-            sessionId: Some(corruptQueueSession)
-        ), {_ => ()}).isOk(), "Product seeds a Thread for queued recovery evidence")
+        let _ = startCoreFixtureRun(product, "seed the corrupt queue recovery fixture", corruptQueueSession,
+            "Product seeds a Thread for queued recovery evidence")
         let corruptEntryId = scopedInboxEntryId(
             ThreadId(corruptQueueSession.value), LaneId("main"), "corrupt-payload"
         )
@@ -2734,7 +2737,7 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
         product.close().value().getOrThrow()
         runSignedPluginProductContract(root)
 
-        requireProductCoreDurableReadback96(root, workspace, stateRoot, programBinding, sessionId, toolSessionId, seededSession, forkedSession, deliveredSession, laneExecutionSession, reviewExecutionRequest, programSessionId, programSource, partialProgramSessionId, partialProgramRunId)
+        requireProductCoreDurableReadback96(root, workspace, stateRoot, programBinding, sessionId, toolSessionId, seededSession, forkedSession, deliveredSession, laneExecutionSession, reviewExecutionRunId, programSessionId, programSource, partialProgramSessionId, partialProgramRunId)
 }
 
 func requireProductCoreDurableReadback96(
@@ -2748,7 +2751,7 @@ func requireProductCoreDurableReadback96(
     forkedSession: SessionId,
     deliveredSession: SessionId,
     laneExecutionSession: SessionId,
-    reviewExecutionRequest: AgentRunRequest,
+    reviewExecutionRunId: RunId,
     programSessionId: SessionId,
     programSource: String,
     partialProgramSessionId: SessionId,
@@ -2758,18 +2761,18 @@ func requireProductCoreDurableReadback96(
         try {
             expect(database.scalarInt(
                 "SELECT COUNT(*) FROM run_lane_bindings WHERE run_id='" +
-                    reviewExecutionRequest.runId.value + "' AND thread_id='" +
+                    reviewExecutionRunId.value + "' AND thread_id='" +
                     laneExecutionSession.value + "' AND lane_id='review'"
             ) == 1 && database.scalarInt(
                 "SELECT COUNT(*) FROM step_records WHERE run_id='" +
-                    reviewExecutionRequest.runId.value + "' AND lane_id='review'"
+                    reviewExecutionRunId.value + "' AND lane_id='review'"
             ) >= 1 && database.scalarInt(
                 "SELECT COUNT(*) FROM context_manifests manifest JOIN step_records step " +
                     "ON step.id=manifest.step_id WHERE step.run_id='" +
-                    reviewExecutionRequest.runId.value + "' AND manifest.lane_id='review'"
+                    reviewExecutionRunId.value + "' AND manifest.lane_id='review'"
             ) >= 1 && database.scalarInt(
                 "SELECT COUNT(*) FROM item_tree_edges edge JOIN items item ON item.id=edge.item_id " +
-                    "WHERE item.turn_id='turn-" + reviewExecutionRequest.runId.value +
+                    "WHERE item.turn_id='turn-" + reviewExecutionRunId.value +
                     "' AND edge.lane_id='review'"
             ) >= 1,
                 "non-main Product Run keeps Run, Step, Context and Item Lane enclosure aligned")
