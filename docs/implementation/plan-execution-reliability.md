@@ -10433,3 +10433,48 @@ was cancelled with no approval decision. There were no model attempts or
 HTTP requests, and the second profile did not run. Evidence:
 `profile1597-existing-operator/`. This is a separate failure from the E1486
 timeout and the E1500 fresh-setup GC crash.
+
+### Production packages, terminal flows and the two first-request failures
+
+E1598 built all nine production targets at `d0e8e2ae` using the pinned
+toolchain. E1599 assembled three fresh distributions from those outputs.
+All three passed the clean-environment check. Minimal passed all six
+empty/offline cases; Coding and Full passed setup. All build and package
+stages returned with physical process custody closed. Evidence:
+`public1598-production/summary.json` and `release1599-production-packages/summary.json`.
+
+| Package | Bundled plugins | Packaged ELF SHA-256 |
+| --- | ---: | --- |
+| Minimal | 0 | `614cc4a1a9451a04474e90ac91bb3c4a30e68d95e8bdba399930cd993a538bff` |
+| Coding | 9 | `4b1d7cc06afa0209b9b11335ba892163e9c15fbce58887eb716ec9c063821b47` |
+| Full | 17 | `4b1d7cc06afa0209b9b11335ba892163e9c15fbce58887eb716ec9c063821b47` |
+
+E1601 passed all ten original real-PTY scenarios on the E1598 application
+(`cca7ae89bb7da4046187d095d61e1473738f3acd92b1248e80054d14ae019f67`).
+They exercised Responses, Completions and Messages streaming, cancel and
+Ctrl-C with recovery, HTTP error, timeout, incomplete EOF, invalid UTF-8
+and an MCP tool. The local servers ran in an isolated network namespace.
+The process receipts, terminal output and snapshots are in
+`pty1601-final-production/`. No mouse or resize case was run.
+
+E1602 compared two copies of a nine-plugin operator home, starting from the
+same 245 files. Only the workspace arm changed `plugins/context.json`; both
+retained the same installed packages, read scopes and service grants.
+The original `invoke` ran against the E1599 Coding executable.
+
+| First request | Default Skills | Workspace-only Skills |
+| --- | --- | --- |
+| CLI observation | `approval required` at 3.913 s | Original 5 s timeout |
+| Context-read Receipt | Cancelled, no approval decision | Completed; context safe cut committed |
+| Model attempt | None | Created, dispatch state `prepared`; no dispatch timestamp |
+| HTTP and second profile | Neither reached | Neither reached |
+| Physical custody | Closed | Five surviving descendants required exact-PID cleanup; none remained afterward |
+
+The workspace arm's journal records `running → failed` and a nonretryable
+`runtime.run_stale` diagnostic before any dispatch claim. The guard checks
+the Run ID, epoch, settlement and cancellation; this diagnostic alone does
+not distinguish them or establish their ordering relative to the CLI
+timeout. Both database analysis copies passed `quick_check`. Evidence:
+`profiles1602-final-coding/`, including `durable-timepoints.json` and the
+workspace arm's `pre-dispatch-diagnostic.json`. This is not a Provider
+connection failure or a successful alternative default.

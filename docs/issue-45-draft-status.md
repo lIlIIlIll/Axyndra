@@ -4694,3 +4694,13 @@ GC remains deferred with zero pass credit. PR #49 remains Draft.
 | E1597: existing Coding operator | The first `--print` command exited at 4.52 s for lack of approval to run `host.context.read`. The store recorded zero model attempts and the two local servers received no requests. | The profile did not reach the model. This does not clear the earlier timeout or the fresh-install GC failure. |
 
 [Source versions, receipts and measurements](implementation/plan-execution-reliability.md#read-view-budget-refusal-and-first-request-approval).
+
+### Production packages, terminal flows and the two first-request failures
+
+| Evidence at `d0e8e2ae` | Result | Remaining gap |
+| --- | --- | --- |
+| E1598–1599: production and packaging | All nine production builds passed. Fresh Minimal, Coding and Full packages passed clean-environment startup; Minimal passed six empty/offline cases; Coding and Full passed setup. | Selected entrypoints, not full release acceptance. |
+| E1601: TUI | All ten real PTY cases passed on the rebuilt application, including two cancellation paths with a subsequent request, protocol failures and MCP. | Loopback fixtures on Linux; no mouse, resize or packaged-Coding credit. |
+| E1602: Coding first request | Default Skills preparation required approval. With workspace-only Skills the context read completed, but the first model attempt was never claimed for dispatch. Neither local server received a request. | Neither arm passed the original five-second two-profile gate. Five descendants in the workspace-only arm required watcher cleanup. |
+
+[Artifacts and exact failure boundaries](implementation/plan-execution-reliability.md#production-packages-terminal-flows-and-the-two-first-request-failures).
