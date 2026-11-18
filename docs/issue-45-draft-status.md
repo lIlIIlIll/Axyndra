@@ -4832,3 +4832,7 @@ At `d51eaef287`, E1727–E1731 separate the read-only workspace's real Registry 
 | Streaming and cancellation at the TUI | E1734 passed ten real PTY cases on App `9f2057a0693a`, with local Provider/MCP processes. | Unbundled App; no packaged first-request, mouse or resize credit. |
 | Product Native suite | In E1719 the dependency builds succeeded, but the original Product build timed out. The only test executable left was the older seed. | No enumeration or cases on a new executable. |
 | Matched concurrent output and process reap | E1741 matched all 238 tracked runtime inputs and the worker fixtures to `d51eaef287`. | E1720 still applies, including the slower large-output reap P95; it is not a final release comparison. |
+
+E1735 assembled Coding, Minimal and Full for `d51eaef287`. All eleven assembly and selected entrypoint checks passed: clean environment on all three, Skills and setup on Coding/Full, and the empty offline host on Minimal. This qualifies packaging, not the full release or the five-second model request. [Package and Todo evidence](implementation/plan-execution-reliability.md#packaged-entrypoints-and-the-todo-save-approval).
+
+E1728 did not reproduce the successful E1726 first save on the subsequent E1711 package, even with a writable workspace Registry directory. The load Run completed. The save Run received a user approval for its context read, but no decision for the Workflow Todo operation; it was cancelled before execution. No document was written. This differs from failure to acquire the read-only fence.
