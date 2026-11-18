@@ -330,6 +330,24 @@ class SkillsNativeTests(unittest.TestCase):
             self.assertTrue(result['ok'])
             self.assertEqual(result['result']['contributions'][0]['content'], 'Review instructions from the immutable package.\n')
 
+    def test_workspace_only_selection_does_not_fall_back_to_immutable_package(self):
+        with Peer() as peer:
+            query = self.snapshot_query([dict(kind='absence', path='workspace', text='')], ('workspace',))
+            query.update(include_packaged=False, action='prepare')
+            prepared = peer.invoke(query)
+            self.assertTrue(prepared['ok'], prepared)
+            resolved = prepared['result']['query']
+            self.assertIs(resolved['include_packaged'], False)
+            self.assertEqual(resolved['selected'], [])
+            query.update(action='resolve')
+            result = peer.invoke(query)
+            self.assertTrue(result['ok'], result)
+            self.assertEqual(result['result']['contributions'], [])
+            query['include_packaged'] = True
+            self.assertIn('immutable package', peer.invoke(query)['result']['contributions'][0]['content'])
+            query['include_packaged'] = 'false'
+            self.assertEqual(peer.invoke(query)['result']['error'], 'skills.package_policy')
+
     def test_snapshot_duplicate_escape_and_missing_envelope_are_typed_errors(self):
         with Peer() as peer:
             item = dict(kind='directory', path='user')

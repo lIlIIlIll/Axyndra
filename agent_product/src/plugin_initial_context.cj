@@ -144,9 +144,15 @@ func parseInitialContextSelection(settingsRoot: String, text: String, runtime: ?
         let kinds = ArrayList<String>(); var sources: ?ProductContextComponentSnapshot = None
         if (componentMode) {
             let profile = value.field("component_sources").getOrThrow()
-            if (runtime.isNone() || !contextComponentProfileValid(profile)) { return initialContextError("context.component_configuration_invalid") }
-            for (kind in profile.field("kinds").getOrThrow().items) { kinds.add(kind.text) }
-            sources = Some(runtime.getOrThrow().contextComponentSnapshot(kinds.toArray()))
+            // Version 4 binds directory templates to the current workspace.
+            // An explicit false uses those resources only, without consulting the registry.
+            let resourcesOnly = value.field("version").getOrThrow().asNumberText() == "4" &&
+                profile.unifiedKind == ValueKind.Boolean && !profile.asBool()
+            if (!resourcesOnly) {
+                if (runtime.isNone() || !contextComponentProfileValid(profile)) { return initialContextError("context.component_configuration_invalid") }
+                for (kind in profile.field("kinds").getOrThrow().items) { kinds.add(kind.text) }
+                sources = Some(runtime.getOrThrow().contextComponentSnapshot(kinds.toArray()))
+            }
         }
         Result.Ok(ProductInitialContextSelection(settingsRoot, value, configurationText ?? text, runtime, kinds.toArray(), sources))
     } catch (_: Exception) { initialContextError("context.initial_configuration_invalid") }

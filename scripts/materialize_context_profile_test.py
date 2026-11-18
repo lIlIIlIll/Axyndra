@@ -17,10 +17,10 @@ class ContextProfileTests(unittest.TestCase):
                 workspace_root=root, namespace='axyndra:skills', package_digest='sha256:' + 'a' * 64))
             self.assertEqual(value['version'], 4)
             self.assertEqual(value['package_digest'], 'sha256:' + 'a' * 64)
-            self.assertEqual([x['path'] for x in value['resources']], ['managed', 'user', 'workspace'])
-            self.assertTrue(value['resources'][0]['source'].endswith('/settings/managed-skills'))
-            self.assertTrue(value['resources'][2]['source'].endswith('/.omp/skills'))
-            self.assertEqual(value['component_sources']['index']['max_directories'], 1024)
+            self.assertEqual([(x['path'], x['source']) for x in value['resources']],
+                             [('workspace', (Path(root).resolve() / '.omp/skills').as_posix())])
+            self.assertEqual(value['query']['resource_roots'], ['workspace'])
+            self.assertIs(value['component_sources'], False)
             self.assertNotIn('capabilities', value)
 
     def test_unknown_profile_variable_and_noncanonical_digest_fail(self):

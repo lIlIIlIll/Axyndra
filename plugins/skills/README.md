@@ -15,6 +15,7 @@ not runtime interpreters. No SDK path is part of the package contract.
 
 Resolve query: `{"schema":"axyndra.skills-query/v1","action":"resolve","prompt":"$review"}`.
 An optional `selected` array overrides routing, including an explicit empty list.
+Set `include_packaged` to `false` to use only the host's observed resource roots, even if those roots contain no Skills. Omitting this field keeps package discovery enabled for existing queries.
 Catalog query: `{"schema":"axyndra.skills-query/v1","action":"catalog"}`.
 Resource queries use the generic resource schema and only accept exact reference
 IDs declared by a packaged Skill. No query field opens a filesystem root.

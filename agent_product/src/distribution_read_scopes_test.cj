@@ -19,12 +19,12 @@ func codingFixtureReadScopeDefaults(fixture: CodingDistributionFixture): Unit {
 @Test
 class CodingReadScopeDefaultsTests {
     @TestCase
-    func normalCodingOpenSeedsMissingDataRootsAndUsesCanonicalApprovedReads(): Unit {
+    func codingReadsManagedSkillsOnlyAfterOperatorSelectsThem(): Unit {
         let f = CodingDistributionFixture()
         try {
             codingFixtureReadScopeDefaults(f)
             writeObservedSkill(f.root + "/settings/managed-skills", "SEEDED-CONTEXT-DATA")
-            Directory.create(f.root + "/workspace")
+            writeObservedSkill(f.root + "/workspace/.omp/skills", "DEFAULT-WORKSPACE-DATA")
             let product = lifecycleTestRequire(f.open(f.root + "/workspace"))
             try {
                 let path = f.root + "/settings/plugins/read-scopes.json"
@@ -33,10 +33,12 @@ class CodingReadScopeDefaultsTests {
                     canonicalAgentValue(parseUnifiedJson(String.fromUtf8(File.readFrom("profiles/coding-read-scopes.json")))))
                 let host = product.vnext.javascriptPlugins
                 let scopes = lifecycleTestRequire(host.captureContextReadScopes())
-                @Expect(scopes.permission(host, f.root + "/settings/managed-skills", "outside-workspace.read"), "outside-workspace.read")
+                @Expect(scopes.permission(host, f.root + "/settings/managed-skills", "outside-workspace.read"), "sensitive-path.read")
                 @Expect(scopes.permission(host, f.root + "/settings/managed-skills/credentials", "outside-workspace.read"), "sensitive-path.read")
                 @Expect(product.applicationSession().submit("$review").isOk())
-                @Expect(product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("SEEDED-CONTEXT-DATA"))
+                let initial = product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system
+                @Expect(initial.contains("DEFAULT-WORKSPACE-DATA"))
+                @Expect(!initial.contains("SEEDED-CONTEXT-DATA"))
                 @Expect(applyProductDistributionDefaults(product, f.bundle).isOk())
                 @Expect(String.fromUtf8(File.readFrom(path)), contents)
                 let database = SqliteDatabase(f.root + "/state/state.db")
@@ -44,6 +46,24 @@ class CodingReadScopeDefaultsTests {
                     @Expect(database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'") >= 2)
                     @Expect(database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='context_snapshot_safe_cut'"), 1)
                 } finally { database.close() }
+                let selectionPath = f.root + "/settings/plugins/context.json"
+                let selection = parseUnifiedJson(String.fromUtf8(File.readFrom(selectionPath)))
+                let resource = selection.field("resources").getOrThrow().items[0]
+                resource.put("source", textValue("$" + "{settings_root}/managed-skills"))
+                resource.put("path", textValue("managed"))
+                selection.field("query").getOrThrow().put("resource_roots", listValue([textValue("managed")]))
+                let operatorSelection = stringifyUnifiedJson(selection)
+                let operatorScopes = "{\"version\":1,\"roots\":[\"" + "$" + "{settings_root}/managed-skills\"]}"
+                File.writeTo(selectionPath, operatorSelection.toArray())
+                File.writeTo(path, operatorScopes.toArray())
+                @Expect(applyProductDistributionDefaults(product, f.bundle).isOk())
+                @Expect(String.fromUtf8(File.readFrom(selectionPath)), operatorSelection)
+                @Expect(String.fromUtf8(File.readFrom(path)), operatorScopes)
+                let configured = lifecycleTestRequire(host.captureContextReadScopes())
+                @Expect(configured.permission(host, f.root + "/settings/managed-skills", "outside-workspace.read"), "outside-workspace.read")
+                @Expect(configured.permission(host, f.root + "/settings/managed-skills/credentials", "outside-workspace.read"), "sensitive-path.read")
+                @Expect(product.applicationSession().submit("$review").isOk())
+                @Expect(product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("SEEDED-CONTEXT-DATA"))
             } finally { let _ = product.close() }
         } finally { f.close() }
     }

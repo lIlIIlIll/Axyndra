@@ -22,9 +22,6 @@ class CodingDistributionFixture {
     let bundle: String
     let digest: String
     init() {
-        // The shipped recipe binds ${settings_root}/... sources and the initial
-        // context parser canonicalizes that root, so the fixture must create the
-        // settings root it hands to openProduct, like the other fixtures do.
         if (!exists(Path(root + "/settings"))) { Directory.create(root + "/settings", recursive: true) }
         let target = root + "/installed/share/axyndra"
         Directory.create(target + "/plugins/skills", recursive: true)
@@ -61,6 +58,8 @@ class CodingDistributionTests {
         let f = CodingDistributionFixture()
         try {
             writeObservedSkill(f.root + "/workspace/.omp/skills", "DEFAULT-CODING-WORKSPACE")
+            writeObservedSkill(f.root + "/settings/managed-skills", "MUST-NOT-DISCOVER-MANAGED")
+            writeObservedSkill(f.root + "/settings/skills", "MUST-NOT-DISCOVER-USER")
             let product = lifecycleTestRequire(f.open(f.root + "/workspace"))
             try {
                 @Expect(productRegistryRecords83(product.pluginSnapshots()).size, 1)
@@ -72,7 +71,10 @@ class CodingDistributionTests {
                     @Expect(database.scalarInt("SELECT COUNT(*) FROM operations"), 0)
                     let app = product.applicationSession()
                     @Expect(app.submit("$review").isOk())
-                    @Expect(product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("DEFAULT-CODING-WORKSPACE"))
+                    let system = product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system
+                    @Expect(system.contains("DEFAULT-CODING-WORKSPACE"))
+                    @Expect(!system.contains("MUST-NOT-DISCOVER-MANAGED"))
+                    @Expect(!system.contains("MUST-NOT-DISCOVER-USER"))
                     @Expect(database.scalarInt("SELECT COUNT(DISTINCT run_id) FROM operations"), 1)
                     @Expect(database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='context_snapshot_safe_cut'"), 1)
                     @Expect(Int64.parse(database.query("SELECT COUNT(*) FROM operation_effect_records e JOIN operation_receipts r ON r.operation_id=e.operation_id WHERE e.tool_id=? AND r.outcome='completed'",

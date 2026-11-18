@@ -1,6 +1,12 @@
 # Context content data directories
 
-The operator may create `settingsRoot/plugins/read-scopes.json` with:
+Fresh Coding and Full installations discover Skills only in `${workspace_root}/.omp/skills`. In version 4 of `plugins/context.json`, `component_sources: false` excludes installed plugin components and `query.include_packaged: false` excludes Skills bundled with the provider itself. Minimal installs no Skills provider. Updating the distribution preserves existing operator selections and read scopes.
+
+The workspace-only recipe requires a provider that accepts `include_packaged`. An older provider can still serve its existing configuration. If it rejects the new recipe, update it explicitly; do not remove the field to make the request succeed, since that would re-enable packaged Skills.
+
+To include a settings directory, add it to `settingsRoot/plugins/context.json` as a resource and add its logical `path` to `query.resource_roots`. Keep the installed provider's namespace and package digest. For example, copy the workspace resource, change `source` to `${settings_root}/skills`, and change `path` to `user`. Add `user` to `query.resource_roots`.
+
+List the settings directories you select in `settingsRoot/plugins/read-scopes.json`. For example, an operator who selects both managed and user Skills can use:
 
 ```json
 {"version":1,"roots":["${settings_root}/managed-skills","${settings_root}/skills"]}

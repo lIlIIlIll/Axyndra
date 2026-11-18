@@ -47,6 +47,13 @@ class DistributionProfileTests(unittest.TestCase):
                 for row in result['plugins']:
                     self.assertEqual(row['package_digest'], module.package_digest(root / row['path']))
                     self.assertEqual(set(row), {'path', 'namespace', 'version', 'package_digest', 'enabled'})
+                context = json.loads((root / result['context']['recipe']).read_bytes())['context']
+                self.assertEqual([(x['path'], x['source']) for x in context['resources']],
+                                 [('workspace', '${workspace_root}/.omp/skills')])
+                self.assertEqual(context['query']['resource_roots'], ['workspace'])
+                self.assertIs(context['query']['include_packaged'], False)
+                self.assertIs(context['component_sources'], False)
+                self.assertEqual(result['read_scopes']['roots'], [])
                 self.assertEqual(set(result['policies']), {'workflow', 'compaction', 'memory'})
                 self.assertEqual(result['policies']['workflow'],dict(namespace='axyndra:workflow',provider='propose',plan_tool='plan_write'))
                 workflow=next(row for row in result['plugins'] if row['namespace']=='axyndra:workflow')

@@ -86,16 +86,20 @@ func skillsQuery(frame: JsonNode, queryLimit: Int64, resultLimit: Int64): JsonNo
     if (skillsText(query, "schema") == "axyndra.managed-skill-policy/v1") {
         if (skillsText(frame, "kind") != "context_provider") { throw SkillError("skills.resource_query", "Managed Skill policy is a context query") }
         return managedSkillPolicy(query) }
-    let root = getWorkingDirectory().toString() + "/skills"
     if (skillsText(query, "schema") == "axyndra.context-sources-query/v1") {
         if (skillsText(frame, "kind") != "context_provider") { throw SkillError("skills.resource_query", "Source planning is a context query") }
         return skillsSourcePlan(query) }
     if (skillsText(query, "schema") == "axyndra.skills-query/v1" && skillsText(query, "action") == "discover") {
         if (skillsText(frame, "kind") != "context_provider") { throw SkillError("skills.resource_query", "Source discovery is a context query") }
         return skillsDiscoverSourceHeaders(query) }
-    let packaged = PackagedSkillContentLoader([root])
+    let includePackaged = query.field("include_packaged") ?? jsonBool(true)
+    if (includePackaged.unifiedKind != UnifiedJsonKind.Boolean) {
+        throw SkillError("skills.package_policy", "include_packaged must be boolean")
+    }
+    let roots: Array<String> = if (includePackaged.asBool()) { [getWorkingDirectory().toString() + "/skills"] } else { [] }
+    let packaged = PackagedSkillContentLoader(roots)
     let loader = SnapshotSkillLoader(packaged, query)
-    let combined = ArrayList<SkillDescriptor>(discoverPackagedSkills([root], packaged))
+    let combined = ArrayList<SkillDescriptor>(discoverPackagedSkills(roots, packaged))
     for (descriptor in loader.descriptors()) { packagedSkillReplace(combined, descriptor) }
     let descriptors = boundedPackagedSkillDescriptors(combined.toArray())
     if (skillsText(frame, "kind") == "resource_provider") {
@@ -114,7 +118,7 @@ func skillsQuery(frame: JsonNode, queryLimit: Int64, resultLimit: Int64): JsonNo
     if (skillsText(query, "schema") != "axyndra.skills-query/v1") {
         throw SkillError("skills.query_schema", "Expected a versioned Skills query")
     }
-    for (field in query.fields where !["schema", "action", "prompt", "selected", "resource_roots", "_axyndra_context_read", "include_catalog", "allow_unavailable", "lazy_references", "component_sources"].contains(field.name)) {
+    for (field in query.fields where !["schema", "action", "prompt", "selected", "resource_roots", "_axyndra_context_read", "include_catalog", "include_packaged", "allow_unavailable", "lazy_references", "component_sources"].contains(field.name)) {
         throw SkillError("skills.query_field", "Unknown Skills query field")
     }
     let metadata = descriptors.map { value => SkillMetadata(value) }
