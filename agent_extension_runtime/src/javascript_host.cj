@@ -465,6 +465,7 @@ public class JavaScriptExtensionHost {
     // One retained native cleanup owner. A signal acknowledgement does not
     // release the process, its streams, or the stderr task.
     private let cleanupLock = Mutex()
+    private let cleanupWake: Condition
     private var cleanupStarted = false
     private var cleanupFuture: ?Future<Unit> = None
     private let cleanupDone = AtomicBool(false)
@@ -505,6 +506,7 @@ public class JavaScriptExtensionHost {
         this.hooksValue = hooks
         this.observer = observer
         this.watchdogWake = synchronized(stateLock) { stateLock.condition() }
+        this.cleanupWake = synchronized(cleanupLock) { cleanupLock.condition() }
         let child = process
         // An allocation/scheduling failure after spawn must not lose native
         // ownership by throwing out of this constructor.
@@ -1250,6 +1252,7 @@ public class JavaScriptExtensionHost {
                 // Keep the process/host owner available for explicit retry.
                 cleanupFailed.store(true)
                 cleanupDone.store(true)
+                cleanupWake.notifyAll()
             }
         } finally { cleanupLock.unlock() }
     }
@@ -1332,10 +1335,15 @@ public class JavaScriptExtensionHost {
         }
         requestAbort()
         let deadline = MonoTime.now() + Duration.millisecond * timeoutMillis
-        // Do not probe Future.tryGet: its task-completion lock may block.
-        while (!cleanupDone.load() && MonoTime.now() < deadline) { sleep(Duration.millisecond) }
         cleanupLock.lock()
         try {
+            // A worker signal or exited leader is insufficient. Wait for the
+            // cleanup worker's outcome without joining a potentially blocked Future.
+            while (!cleanupDone.load()) {
+                let now = MonoTime.now()
+                if (now >= deadline) { break }
+                let _ = cleanupWake.wait(timeout: deadline - now)
+            }
             if (cleanupFailed.load()) {
                 return hostError("extension.cleanup_failed", "native endpoint cleanup failed and remains retained for retry")
             }
@@ -1374,8 +1382,11 @@ public class JavaScriptExtensionHost {
             } catch (_: Exception) { failed = true }
             if (released && !failed) {
                 releaseReadBuffer()
-                cleanupFailed.store(false)
-                cleanupDone.store(true)
+                synchronized(cleanupLock) {
+                    cleanupFailed.store(false)
+                    cleanupDone.store(true)
+                    cleanupWake.notifyAll()
+                }
                 return
             }
             cleanupFailed.store(true)
