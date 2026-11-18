@@ -4796,3 +4796,13 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Complete Product and Core | E1672 and intermediate E1675 reached the original 900 s Native build deadline. E1681 identified one still-active request-custody owner in the saved Core, not 13; no payment was returned. | No new Product or Core pass. |
 
 [Source binding, diagnostic correction and ownership evidence](implementation/plan-execution-reliability.md#one-publication-for-an-initially-empty-installed-set). PR #49 remains Draft.
+
+### Last-owner retirement and Core recovery
+
+| Requirement | Evidence | Status |
+| --- | --- | --- |
+| A closing Product cannot refund a new Product's copied DATA | `3621283b9a`; E1689 scheduled an adoption by a second task. The old code admitted another allocation; the fix preserved the 16 MiB charge until the actual new owner closed. | Native handoff verified. No change to quotas or ACK policy. |
+| Full Core/recovery | E1690 rebuilt `3621283b9a` behavior. The unsplit contract exited one at Program inspection; the retained canonical child identified `read_view.output_capacity`. E1688/E1692 concern an older frozen bank only. | Failed; not GC-deferred. |
+| Production and Native Product | E1678 and E1686 passed the original nine production stages and static gates on `ba99286bb6`. E1679 timed out before a Product test. E1691 on `3621283b9a` rejected an unknown process identity; E1698 passed the independent watcher controls. | No complete Product or release credit. |
+
+[Source, artifact and Store bindings](implementation/plan-execution-reliability.md#last-product-handoff-and-the-original-core-inspection). PR #49 remains Draft. GC deferral earns no pass credit.
