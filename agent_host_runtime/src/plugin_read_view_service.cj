@@ -287,8 +287,15 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
         var timeout = hostPluginProcessTimeout(request)
         if (context.cancellation.deadlineMillis > 0) { timeout = min(timeout, context.cancellation.deadlineMillis - agentUtcMillis()) }
         if (timeout < 1) { return hostPluginResourceError("read_view.deadline", "read view deadline expired before launch") }
-        let payment = try { reserveNativeDocumentPayload(maximumOutput) } catch (_: Exception) {
-            return hostPluginResourceError("read_view.output_capacity", "shared logical JSON output capacity is exhausted") }
+        let payment = try { reserveNativeDocumentPayload(maximumOutput) }
+        catch (_: LogicalJsonPayloadError) {
+            // The frozen limit fits a Native document. The bank refused the
+            // reservation before openChannel; no worker could have run.
+            // executeActual still requires cleanup before publishing this result.
+            return Result.Ok(recoverableToolResult(prepared.call, AgentError(AgentErrorKind.BudgetExceeded,
+                "read_view.output_capacity", "shared logical JSON output capacity is exhausted",
+                retryable: false, fallbackAllowed: false)))
+        }
         var transferred = false
         try {
         let channel = match (processes.openChannel(ProcessRequest(executable, operationId: prepared.operationId,
