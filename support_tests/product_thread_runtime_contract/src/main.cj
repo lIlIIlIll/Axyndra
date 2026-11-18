@@ -852,6 +852,22 @@ func runMatchedProductWorkflowContract(
     programSource: String,
     binding: NativeProgramContractBinding
 ): Unit {
+    let owners = ArrayList<PlanRequestCustody204>(7)
+    runMatchedWorkflowCallerFrame(product, stateRoot, programSource, binding, owners)
+    // The complete comparison, including the snapshots and database readers,
+    // has returned. No request or result escapes it. Do not ACK on exception.
+    expect(owners.size == 7, "all seven Native-backed workflow requests have paid custody")
+    for (owner in owners) {
+        expect(!owner.isDataReturned204(), "matched request DATA survives until its real caller ACK")
+        owner.returnApplicationFrame204()
+        expect(owner.isDataReturned204(), "matched request DATA returns after caller and Core consumers")
+    }
+}
+
+private func runMatchedWorkflowCallerFrame(
+    product: ProductRuntime, stateRoot: String, programSource: String,
+    binding: NativeProgramContractBinding, owners: ArrayList<PlanRequestCustody204>
+): Unit {
     let prompt = "Find SymbolAnchor definitions, read both files, and summarize matching paths."
     let database = SqliteDatabase(stateRoot + "/state.db")
     try {
@@ -872,6 +888,7 @@ func runMatchedProductWorkflowContract(
                 sessionId: Some(ptcSession),
                 readOnly: true
             )
+            owners.add(ptcRequest.planRequestCustody204.getOrThrow())
             let ptcStarted = MonoTime.now()
             let ptcResult = matchedOwnedCoreStart204(product, ptcRequest)
             let ptcElapsed = (MonoTime.now() - ptcStarted).toMilliseconds()
@@ -1065,6 +1082,7 @@ func runMatchedProductWorkflowContract(
                 sessionId: Some(nativeSession),
                 readOnly: true
             )
+            owners.add(nativeRequest.planRequestCustody204.getOrThrow())
             let nativeStarted = MonoTime.now()
             let nativeResult = matchedOwnedCoreStart204(product, nativeRequest)
             let nativeElapsed = (MonoTime.now() - nativeStarted).toMilliseconds()
@@ -1192,6 +1210,7 @@ func runMatchedProductWorkflowContract(
             sessionId: Some(missingReadSession),
             readOnly: true
         )
+        owners.add(missingReadRequest.planRequestCustody204.getOrThrow())
         let missingReadResult = product.client.start(missingReadRequest, {_ => ()})
         let missingReadSnapshot = match (missingReadResult) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) => snapshot
