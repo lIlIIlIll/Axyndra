@@ -4755,3 +4755,13 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Application flows | E1635 passed ten real PTY cases. E1634 Coding passed workspace read, rebind and disable, but the broker crashed during re-enable. Its saved core places the fault in Runtime GC. | PTY checks passed; complete packaged CLI did not. |
 
 [Executable identities, timing boundary and private evidence](implementation/plan-execution-reliability.md#distribution-preflight-and-the-dispatch-boundary). PR #49 remains Draft.
+
+### Extension result return and Core capacity
+
+| Requirement | Evidence | Status |
+| --- | --- | --- |
+| Return a completed extension call without waiting for a polling tick | E1642–E1645: the delay was in the host's watchdog join, not worker processing. At `8f5ccfa99a`, steady IPC P95 was 0.241 ms over 240 calls. All 13 selected Native cancellation, cleanup and payload-lifetime cases passed. | Runtime fix verified. Neither a physical reap nor a watchdog join acknowledges DATA. |
+| Complete unsplit Core | E1639: the committed pre-watchdog source refused 16,777,216 bytes of output growth with 146,541,976 already charged against 150,994,944. All 55 inspected Prepared owners had an unknown consumer. | Failed; no extra slot or refund. |
+| Five-second first response and release | E1638's private scalar lookup still timed out with no HTTP request; the change was not promoted. E1646 built nine production stages on the watchdog fix. | No packaged response or full release credit from these checks. |
+
+[Core invoices, comparison arms and artifact identities](implementation/plan-execution-reliability.md#extension-watchdog-and-unsplit-core). PR #49 remains Draft; GC is deferred, not passed.

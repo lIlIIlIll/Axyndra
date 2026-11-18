@@ -10624,3 +10624,25 @@ E1625–E1635 used the implementation with LF checkout bytes (distribution sourc
 E1627 and E1633 both failed the original first local profile request before dispatch. E1633 recorded the subprocess launch and SIGKILL without replacing the fixture's timeout. Relative to launch, the canonical Run started at **3,193.306 ms**, its model attempt was created at **4,973.306 ms**, and the fixture sent SIGKILL at **5,000.261 ms**. The Run recorded failure at **5,141.306 ms**. Database times have millisecond resolution. The attempt stayed `prepared`, its dispatch timestamp was null, and neither listener received a request. Recording `runtime.run_stale` after SIGKILL establishes order, not causation. The second profile was not invoked. All observed owned processes were reaped or gone and the listener threads returned.
 
 Private evidence: `preflight1625/`, `release1626/`, `profiles1627/`, `import1628/`, `unit1629/gc-classification.json`, `static1630/`, `pty1631/`, `reject1632/`, `clocks1633/timeline.json`, `coding1634/enable-core/`, `pty1635/`. Full Core, Product, the five-second request and matched final release acceptance remain open.
+
+### Extension watchdog and unsplit Core
+
+E1636–E1638 replaced repeated record-list copies with a scalar namespace lookup in a private build. The Coding package passed assembly, clean launch, Skills wire and setup. With nine installed defaults and the original grants, the Run started 3,208 ms after launch. The first local request received SIGKILL at 5,000 ms with a completed context read but no model attempt or HTTP request. Both listeners returned. The lookup did not fix startup and is not in `8f5ccfa99a`.
+
+E1639 rebuilt the original unsplit Core contract from `7bc60d33f5`, without private import or namespace changes. ELF SHA-256: `8bf18ddb8fae1468eedd47ef4a5d2e09e376801189c69a3dd01b299201a964f0`. At the locked output reservation, a 131,072-byte raw limit required 16,777,216 bytes; the 150,994,944-byte bank already held 146,541,976. The shortfall was 12,324,248; no fifth slot was created. The child Receipt reported `read_view.output_capacity`; grep and the root Program failed. The original contract exited one. Both SQLite analysis copies passed `quick_check` (35 Runs/69 Operations and one Run/four Operations); all six original images retained their hashes.
+
+The frozen core contained one remaining plan-request owner with one Core frame and one consumer. All 55 Prepared owners had an unknown consumer. Of these, 48 had returned their producer and had no counted consumer, four had returned their producer but still had one counted consumer, and three had not returned their producer. These are not final DATA returns. The two inspected ledgers had high-water charges of 44,458,048 and 17,870,168 bytes and live invoice sums of 39,393,128 and 6,915,584. These ledgers do not identify the other 84,213,760 bytes in this capture. Compared with E1594, the first ledger high-water and total bank charge both fell by 419,512 bytes; the refusal remains.
+
+E1640 failed dependency resolution before measurement. E1641 used separate homes with the pinned dependency cache for each arm; the original seven absolute gates passed on both. E1642 traced the candidate worker's response and host's next request; E1643 separately timed the host join after the response. Its median was 9.715 ms versus 0.201 ms for the response phase. The following uninstrumented P95s compare the original workload; E1644 covers only the five runtime metrics, not the packaged application.
+
+| Metric | E1641 base | E1641 before fix | E1644 after fix | Samples per arm |
+| --- | ---: | ---: | ---: | ---: |
+| Cold activation | 63.978 ms | 44.894 ms | 44.272 ms | 12 |
+| First call | 2.238 ms | 9.775 ms | 0.639 ms | 12 |
+| Steady IPC | 11.115 ms | 10.067 ms | 0.241 ms | 240 |
+| Worker RSS | 29,298,688 B | 20,692,992 B | 20,803,584 B | 12 |
+| Cancellation including 100 ms trigger | 127.739 ms | 129.944 ms | 130.180 ms | 12 |
+
+`8f5ccfa99a` wakes the active watchdog when its invocation finishes. It still joins the actual future, uses the original cancellation and ACK deadlines, and leaves result ownership and physical cleanup unchanged. E1645's Native extension test ELF (`492e0e6314114b74b6ad545bf93b738bbb703636ed8a65ca72de782cdad0e5d4`) enumerated 100 cases: 13 selected cases passed, 87 were not run. E1646 built all nine production stages from this commit. App SHA-256 `d6e18c88e77ff3be94bcff7df70a33b60ce2aca52e1262fc598b2e020583e00b`; Minimal host `f20ee346579e74af283d89090915297ada84e27948dabd972b46a83b6058f1eb`.
+
+Private evidence: `scalar1636/`, `release1637/`, `profiles1638/`, `core1639/`, `matched1640/`, `matched1641/`, `wire1642/`, `phase1643/`, `wake1644/`, `ext1645/`, `prod1646/`. Full Core, Product, first profile response and release acceptance remain open.
