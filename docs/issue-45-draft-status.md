@@ -4733,3 +4733,14 @@ E1611: the complete Core/recovery contract still fails on `read_view.output_capa
 ### Program cancellation and Registry copy ownership
 
 E1615 passed the focused Program cancellation/recovery contract on the E1610 Native executable. A separate debug run of the unsplit contract aborted before the intended observation; it is unclassified, not GC-deferred. E1616 identified 248 live Registry copy payments in a *prior* capacity-refusal core. Neither result resolves the full Core gate. [Receipts and ownership counts](implementation/plan-execution-reliability.md#program-cancellation-and-registry-copy-ownership).
+
+### Fresh Skills discovery, Core replay and matched performance
+
+| Requirement | Evidence at `3997ee51ac` | Status |
+| --- | --- | --- |
+| Fresh Coding and Full Skills defaults; preserve operator settings | E1613–E1614/E1617/E1622: all three packages assembled. The shipped worker passed 46 protocol checks. The Coding CLI read the active workspace, rebound on workspace change, and read the managed directory only after explicit selection and authorization. | Workspace-default change accepted. Existing installs are not migrated. |
+| One-time approval on the original frontend | E1619: after recovery consumed the plan, replay on the original card produced no additional approval, Receipt, model attempt or file effect. The later read-view step still failed. | Replay regression passed; complete Core failed. |
+| Product and first local model request | E1620: six focused tests, six GC-stack failures, no passes. E1623: the first authorized local profile reached a completed context read but timed out before any model attempt or HTTP request. | GC deferred, not passed. Five-second gate still failed. |
+| Matched performance | E1624: both packages passed the seven original absolute checks. First-call and steady IPC P95 remained slower on the candidate. | Not performance parity or full release acceptance. |
+
+[Artifact IDs, measured results and remaining gates](implementation/plan-execution-reliability.md#workspace-only-skills-and-the-five-second-request). PR #49 remains Draft.

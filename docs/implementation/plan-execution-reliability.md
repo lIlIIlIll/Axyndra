@@ -10580,3 +10580,28 @@ E1615 ran `--program-cancellation-recovery-contract` with the E1610 executable a
 A separate debugger run of the unsplit contract aborted in libc on `schmon` with `double free or corruption (!prev)` before the export breakpoint. Its store contained 13 Runs and 15 Operations. No export observation or GC call chain was captured. This run neither supersedes E1611 nor establishes a cause. Evidence: `pressure1615/`.
 
 E1616 examined the existing E1594 refusal core, not a rerun. With one Product live, 248 Registry copy payments matched open leases in two ledgers of the refusing bank. Using the E1594 ledger IDs: 177 payments declared 1,786,304 bytes on ledger 1; 71 declared 713,664 bytes on ledger 2. None had an attached error list. The bank had 146,961,488 bytes charged and refused 16,777,216 bytes of growth against a 150,994,944-byte limit. The 2,499,968 bytes of *live* copy invoices are neither available for refund nor a measurement of their contribution to historical high water. Evidence: `registry1616-frozen/census.json`.
+
+### Workspace-only Skills and the five-second request
+
+`3997ee51ac` changes fresh Coding and Full recipes; it does not rewrite installed configuration. The version-4 host can select directory resources without inspecting installed components. The Skills worker can exclude its own packaged Skills without falling back to the process working directory. Queries that omit `include_packaged` keep their prior behavior. See [operator configuration and opt-in](../context-read-scopes.md).
+
+| Evidence | Observable result |
+| --- | --- |
+| E1613/E1614 | Nine production build stages passed. Fresh Minimal, Coding and Full packages contained 0, 9 and 17 plugins respectively. All passed the clean-environment probe. Coding and Full passed setup; Minimal passed its six offline/empty checks. Coding and Full host SHA-256: `433c2d5d73398c465b5af3b77a71e737805980fa040689b251253e4b6fe3cb31`; Minimal: `1715996fc257b13c8ab032a748db665152dd8a03c72af0a3d14a7a51719f7ce5`. |
+| E1614/E1617 | Each shipped Skills executable (`b19571768426c32fdd22e9701cbd43adb89cad27e9bd0a0f930d018d3b26e823`) passed 46 wire cases. The previous worker rejected the new field; the separately built current worker passed the opt-out and legacy default. The selected packaging suite passed 23 tests. |
+| E1621/E1622 | The packaged Coding CLI read two distinct real workspace Skill bodies without planning a read of either settings directory. Disabling Skills prevented another model attempt. After explicit managed-directory selection, a read-scope grant and re-enable, the staged request contained the managed body, with a completed `host.context.read` Receipt on that path. Both configuration files remained byte-identical to the operator's edits. |
+| E1612/E1618/E1620 | Two build attempts exhausted the existing 900 s limit. The exclusive incremental build finished in 355 s. Its Native Product ELF `c1877ddc4d4f568b862329cb3c704644cadca172ee89db0a4742529d149a4d99` enumerated 1,099 cases. All six focused cases aborted in the pinned runtime's GC reference visitor paths. None passed; the other 1,093 were not run in this check. |
+| E1619 | Core ELF `16416bdd8f8f4542d99f6f0e1dd710f0d6b372a112b1392db6b03223384c392f` passed the originating-card replay assertions in `64d5bbb481`. It subsequently failed the unsplit contract at `read_view.output_capacity`. Its two stores had 35 Runs/69 Operations and one Run/four Operations. All six preserved SQLite file hashes remained unchanged. Replay rejection is not a DATA return. |
+| E1623 | Against a short private settings path and writable workspace, the packaged CLI installed all nine defaults and the original grant setter succeeded. The first real-profile invocation exceeded the unchanged five-second deadline (5.003 s); the second was not reached. The non-fixture store had one cancelled Run, a completed context read and one safe cut, but zero model attempts. Both loopback listeners saw zero requests and their threads returned. The bootstrap fixture's separate successful attempt does not count. |
+
+E1624 compared base `4d88fa6072` (Coding SHA-256 `a85907b7df0bb579ceb9b68339eadbc1c43b165616571187921bd6debd3af498`) with E1614 Coding on the pinned SDK. The original runtime fixture, paths, per-arm fresh state, deadlines and seven absolute gates were unchanged. Both arms passed. Measured P95:
+
+| Metric | Base | Candidate | Samples per arm |
+| --- | ---: | ---: | ---: |
+| Extension cold start | 89.467 ms | 48.679 ms | 12 |
+| First call | 2.337 ms | 9.784 ms | 12 |
+| Steady IPC | 5.928 ms | 10.056 ms | 240 |
+| Extension host RSS | 29,343,744 B | 20,877,312 B | 12 |
+| Cancellation after 100 ms trigger | 127.378 ms | 130.147 ms | 12 |
+
+Lower worker RSS did not erase the first-call and steady-call regressions. Full Core, Product, application-flow and release acceptance remain open. Private evidence: `prod1613/`, `release1614/`, `skills1617/`, `core1619-originating-card/`, `unit1620/`, `cli1622/`, `profiles1623/`, `matched1624/`.
