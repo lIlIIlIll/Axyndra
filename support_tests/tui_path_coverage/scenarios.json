@@ -810,6 +810,19 @@
             "saved task persists after reopen",
             "Provider remains usable after editor close"
           ]
+        },
+        {
+          "id": "todo-editor-unprovided",
+          "execution": "todo-editor",
+          "status": "runnable",
+          "stimuli": [
+            "remove the private operator's Todo selection",
+            "paste /todo edit, observe the draft, then press Enter"
+          ],
+          "assertions": [
+            "the load error replaces the working indicator without another key or resize",
+            "the local rejection makes no Provider request"
+          ]
         }
       ]
     },

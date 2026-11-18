@@ -2005,6 +2005,19 @@ class AgentScreen <: TerminalFrameProvider {
                 if (todoChanged) {
                     result = invalidateTodoLayout(result)
                 }
+                // A timer or mailbox event in the same frame may already have
+                // supplied partial damage. Make the completion's own damage
+                // explicit before stopping the last timer.
+                if (viewportArea.width > 0 && viewportArea.height > 0) {
+                    if (result.dirtyRects.isNone()) {
+                        result = result.withDirty(viewportArea)
+                    } else if (workingArea.height > 0 && composerArea.height > 0) {
+                        // Includes the previous spinner and either header
+                        // (normal composer or agent hub), but not the transcript.
+                        result = result.withDirty(Rect(workingArea.x, workingArea.y,
+                            workingArea.width, composerArea.y + 1 - workingArea.y))
+                    }
+                }
                 let settled = if (runningSubagentIds.isEmpty()) {
                     stopAgentStream(result)
                 } else {

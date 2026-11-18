@@ -244,8 +244,8 @@ def matrix_errors(matrix: dict[str, Any]) -> list[str]:
     if not isinstance(input_bytes, dict) or input_bytes.get("enter") != "0d" or input_bytes.get("paste_start") != "1b5b3230307e":
         errors.append("input_bytes does not declare required PTY encodings")
     contract = matrix.get("contract")
-    if not isinstance(contract, dict) or contract.get("requires_real_tui") is not True or contract.get("requires_real_provider_or_mcp") is not True:
-        errors.append("contract must require real TUI and Provider/MCP")
+    if not isinstance(contract, dict) or contract.get("requires_real_tui") is not True or contract.get("requires_real_provider_or_local_command") is not True:
+        errors.append("contract must require a real TUI and a real Provider or local command")
     return errors
 
 
@@ -2232,7 +2232,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
             "kind": "text",
             "chunks": ["todo-provider-response"],
             "event_delay": 0.02,
-        }, ["todo-provider-check"]
+        }, [] if case["variant"]["id"] == "todo-editor-unprovided" else ["todo-provider-check"]
     if execution == "provider-errors":
         return "responses", {
             "case_id": case["case_id"],
@@ -5426,6 +5426,19 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
 def run_todo_editor(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.launch()
     case_run.wait_screen(("Enter send",), "first-frame")
+    if case_run.variant["id"] == "todo-editor-unprovided":
+        # Withdraw only the private fixture's operator selection. The real
+        # product must reject the edit and repaint without an unrelated key.
+        (case_run.home / "plugins" / "todo-tools.json").unlink(missing_ok=True)
+        case_run.send("todo-draft", bracketed_paste(b"/todo edit"))
+        case_run.wait_screen(("/todo edit",), "todo-draft-visible")
+        case_run.send("todo-submit", b"\r")
+        case_run.wait_screen(("todo load error:",), "todo-load-error")
+        case_run.wait_screen_absent(("Working…", "loading todo"), "todo-load-settled")
+        case_run.normal_exit()
+        case_run.assertions.check("rejection_no_provider_call", not read_jsonl(case_run.requests_path),
+                                  "an unprovided local Todo route must not invoke the model")
+        return
     case_run.send("todo-open", b"/todo edit\r")
     case_run.wait_screen(("Ctrl+S save",), "todo-editor-open")
     markdown = b"# Coverage phase\n- [ ] persisted todo task\n"
