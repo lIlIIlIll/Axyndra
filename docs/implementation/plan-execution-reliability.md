@@ -10321,3 +10321,60 @@ P95 was lower. The candidate returns its payload only after checking it.
 Process exit is not a DATA acknowledgement. These measurements do not time
 cancellation-to-reap or default Native package activation. Raw pairs and
 per-arm identities: `matched1587-output-reap/{baseline,candidate}/`.
+
+### Fresh packages, Core caller return and Todo save approval
+
+**E1588 — package acceptance.** `scripts/package_candidate.sh` produced fresh
+Minimal (zero plugins) and Full (17 plugins) packages from `e904dd5`, using
+717 host inputs matched to the E1499 production receipt. Both passed
+`package_candidate_clean_env`. Minimal passed all six cases in
+`minimal_empty_host_contract`; Full passed `setup_blackbox`. All six stage
+receipts record physical process return. Packaged ELF SHA-256:
+
+| Package | SHA-256 |
+| --- | --- |
+| Minimal | `d55eb1f3e1b3916fe600165962bd181da35f45ada18752d4be66c75df232dbd7` |
+| Full | `5678c1a0d611f1617068f40dd558b611839e50f7b64f415955c51ee2241c57a1` |
+
+Evidence: `release1588-minimal-full/summary.json` and per-stage logs. These
+checks do not prove model connectivity, complete Product or baseline parity.
+
+**E1589 — Core input ownership.** At `95104ca`, the matched Program fixture
+holds all seven paid requests through the three comparison pairs and the
+missing-read case. After the caller and SQL reader return, it checks that
+each owner's DATA is still held, sends the actual caller acknowledgement and
+checks that DATA has returned. An exception does not send an acknowledgement.
+
+The rebuilt executable (`21eb91259d79123fb6f33c4f4c0ed7a9a44ae40c636890404e9fe354a8482282`)
+ran the original complete Core fixture with the E1585 plugin identities. All
+seven ownership checks passed. The aggregate still exited 1. The main Store
+has 35 Runs and 69 Operations; the artifact-failure Store has one Run and
+four Operations. Both passed `quick_check` on analysis copies. The
+model-selected Program's root reported partial failure: `workspace.grep` and
+its derived `host.process.readview` failed at `read_view.output_capacity`.
+No Operation in this execution reported `input_attachment.capacity`. The
+Run's completed state does not override its failed receipts. The first
+output reservation precedes worker channel creation; the receipt alone
+does not identify its billed amount or justify a refund.
+Evidence: `public1589-matched-caller/{summary.json,complete.log,canonical-analysis/projection.json}`.
+
+**E1590 — historical Todo timeout.** Read-only analysis of the first two
+Runs in the original E1047/E1048 operator stores isolates the difference to
+the second Run's save approval. Both used Coding ELF
+`0fb47ce2d99fbb30501394c28653b8ee0c94018d7528afee14a7972914d880af`;
+both completed the preceding user-approved `host.context.read`.
+
+| Save observation | Original timeout | Passing control |
+| --- | ---: | ---: |
+| Entered `waiting_approval` after Run start | 726 ms | 508 ms |
+| Time in that approval wait | 33,028 ms | 4 ms |
+| Save execution handoffs | 0 | 1 |
+| Document operations | 0 | 1 |
+
+The failed save had a cancelled receipt and no approval decision. The
+control had user approval and a completed revision-1 document. The
+33,028 ms interval is a journal interval, not the outer 45 s TUI deadline.
+The stores cannot establish whether the UI sent or received the final key.
+Later runs on the same operator home were excluded. All six original
+DB/WAL/SHM hashes remained unchanged; both analysis copies passed
+`quick_check`. Evidence: `todo1590-historical-approval/journal-boundary.json`.

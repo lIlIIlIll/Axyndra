@@ -4673,3 +4673,14 @@ measurements on two actual JS extensions. Both payload sizes passed exact
 output and physical PID checks; candidate close-and-reap P95 was higher at
 both sizes. This supplements E1586, not the Native first-request gate.
 [Sample conditions and percentiles](implementation/plan-execution-reliability.md#concurrent-extension-calls-progress-and-physical-worker-return).
+
+### Core request ownership, release packages and the Todo timeout
+
+| Evidence | Result | Remaining gap |
+| --- | --- | --- |
+| E1588: Minimal and Full assembly | Fresh packages contained zero and 17 bundled plugins respectively. Both passed clean-environment startup. Minimal passed six empty/offline CLI cases; Full passed setup. | These entrypoints do not exercise the complete application or the first model request. |
+| E1589: model-selected read-only Program | After seven real caller acknowledgements, the aggregate Core test advances past `input_attachment.capacity`. A committed `workspace.grep` reaches `host.process.readview`, which fails `read_view.output_capacity`. | Complete Core still fails. The earlier input refusal's byte counts do not describe the output refusal. |
+| E1590: historical Todo save | The timed-out save waited 33,028 ms for approval before cancellation. The passing control waited 4 ms, recorded user approval and executed the document operation. | Neither trace records delivery of the approval key. The intermittency is localized, not fixed. |
+
+[Artifacts, scope and failure boundaries](implementation/plan-execution-reliability.md#fresh-packages-core-caller-return-and-todo-save-approval).
+GC remains deferred with zero pass credit. PR #49 remains Draft.
