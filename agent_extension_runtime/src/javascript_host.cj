@@ -451,6 +451,7 @@ public class JavaScriptExtensionHost {
     public let workerIncarnation: UInt64
     private let observer: ?JavaScriptHostObserver
     private let stateLock = Mutex()
+    private let watchdogWake: Condition
     private let payloadBudget = NativePayloadProcessBudget()
     // Only this host reads stdout. Carry bytes survive physical line boundaries
     // and stay charged until the actual reader/process cleanup acknowledgement.
@@ -503,6 +504,7 @@ public class JavaScriptExtensionHost {
         this.viewsValue = views
         this.hooksValue = hooks
         this.observer = observer
+        this.watchdogWake = synchronized(stateLock) { stateLock.condition() }
         let child = process
         // An allocation/scheduling failure after spawn must not lose native
         // ownership by throwing out of this constructor.
@@ -762,6 +764,7 @@ public class JavaScriptExtensionHost {
             } finally {
                 let _ = finishSource.cancel()
                 let _ = cancelAckSource.cancel()
+                synchronized(stateLock) { watchdogWake.notifyAll() }
                 match (inputTimer159h) {
                     case Some(value) => value.joinTimer159h()
                     case None => let _ = timerFuture.getOrThrow().get(); timerFuture = None<Future<Unit>>
@@ -852,6 +855,14 @@ public class JavaScriptExtensionHost {
         jsonObject(invokeEntries.toArray()).stringify()
     }
 
+    // The single active invocation still joins its real watchdog. Wake its
+    // normal poll when the response returns, including finish-before-wait.
+    private func waitWatchdogTick(finish: CancellationToken): Unit {
+        synchronized(stateLock) {
+            if (!finish.isCancelled()) { let _ = watchdogWake.wait(timeout: Duration.millisecond) }
+        }
+    }
+
     // Watchdog installation ends before any response I/O; callbacks retain
     // the same cancellation sources, frozen identity and paid timer owner.
     private func startInvocationWatchdog(inputTimer159h: ?JavaScriptHookTimer159h,
@@ -864,7 +875,7 @@ public class JavaScriptExtensionHost {
                 timerOwner159h.installTimer159h({ =>
             while (!finishSource.token.isCancelled() &&
                 !cancellation.isCancelled() && hostNowMillis() < deadline) {
-                sleep(Duration.millisecond)
+                waitWatchdogTick(finishSource.token)
             }
             if (!finishSource.token.isCancelled()) {
                 let userCause = cancellation.cause()
@@ -914,7 +925,7 @@ public class JavaScriptExtensionHost {
                 Some(spawn {
             while (!finishSource.token.isCancelled() &&
                 !cancellation.isCancelled() && hostNowMillis() < deadline) {
-                sleep(Duration.millisecond)
+                waitWatchdogTick(finishSource.token)
             }
             if (!finishSource.token.isCancelled()) {
                 let userCause = cancellation.cause()
