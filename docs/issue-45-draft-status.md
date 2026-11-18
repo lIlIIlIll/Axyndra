@@ -4787,3 +4787,12 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Product, Todo and baseline | E1663 exceeded its original Native build bound. E1671: packaged Todo timed out without a new Run or document; watcher cleanup was needed. E1662: seven absolute gates passed in both arms, but candidate startup remained slower. | Native Product, Todo and release parity remain open. |
 
 [Artifact identities, original deadlines and baseline measurements](implementation/plan-execution-reliability.md#released-package-controls-and-first-install-interruption). Deferred GC is not a pass. Keep PR #49 Draft.
+
+### Atomic first installation
+
+| Requirement | Evidence | Status |
+| --- | --- | --- |
+| Never expose a first-install lock containing only imports | `ba99286bb6`; E1677: 50/50 selected real Native Registry cases passed. The new cases verify rejected changed bytes, safe retry with mixed defaults, a competing writer's unchanged lock, and usable rollback history after restart. | Registry behavior verified; no claim yet for the final packaged application. Existing ambiguous disabled records are unchanged. |
+| Complete Product and Core | E1672 and intermediate E1675 reached the original 900 s Native build deadline. E1681 identified one still-active request-custody owner in the saved Core, not 13; no payment was returned. | No new Product or Core pass. |
+
+[Source binding, diagnostic correction and ownership evidence](implementation/plan-execution-reliability.md#one-publication-for-an-initially-empty-installed-set). PR #49 remains Draft.
