@@ -157,6 +157,9 @@ public class HostJavaScriptPluginInvocationObserver <: JavaScriptHostObserver {
     public func finishReadonly(): Result<Unit> {
         match (broker) { case Some(value) => value.finishReadonly(); case None => Result.Ok(()) }
     }
+    func finishSchedulerBudget(): Result<Unit> {
+        match (broker) { case Some(value) => value.finishSchedulerBudget(); case None => Result.Ok(()) }
+    }
     public func finishDocument(): Result<Unit> {
         match (broker) { case Some(value) => value.finishDocument(); case None => Result.Ok(()) }
     }
@@ -434,7 +437,7 @@ public class HostJavaScriptPluginServiceBroker {
     private let identity: ?HostPluginServiceIdentity
     private let channelBinding: ?String
     private let httpStreamBinding: ?String
-    private let executionControlError: ?AgentError
+    private var executionControlError: ?AgentError
     private let requestIds = ArrayList<String>()
     private var requestCount: Int64 = 0
     private var activeInvocationId = ""
@@ -477,6 +480,21 @@ public class HostJavaScriptPluginServiceBroker {
         Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "readonly_delegation.child_outcome_unknown",
             "readonly descendants have an unsettled or Unknown canonical outcome"))
     }
+    private func controlFailure(): ?AgentError {
+        readonlyCompletionLock.lock()
+        try { executionControlError } finally { readonlyCompletionLock.unlock() }
+    }
+
+    func finishSchedulerBudget(): Result<Unit> {
+        match (controlFailure()) {
+            case Some(error) => if (error.kind == AgentErrorKind.BudgetExceeded && error.code == "budget.tool_calls_exceeded") {
+                return Result.Err(error)
+            }
+            case None => ()
+        }
+        Result.Ok(())
+    }
+
     private var ownedAwait166: ?HostFrozenServiceAwait166 = None<HostFrozenServiceAwait166>
     private var awaitConfiguration166: ?HostPrimitiveConfiguration111 = None<HostPrimitiveConfiguration111>
     // This hook is called by the real published executor before invoking its
@@ -770,7 +788,7 @@ public class HostJavaScriptPluginServiceBroker {
     private func executeRequest(
         invocationId: String, requestId: String, service: String, argumentsJson: String
     ): JavaScriptHostResult<String> {
-        match (executionControlError) { case Some(error) => return hostPluginServiceAgentError(error); case None => () }
+        match (controlFailure()) { case Some(error) => return hostPluginServiceAgentError(error); case None => () }
         if (!hostValidPluginServiceIdentifier(invocationId) ||
             !hostValidPluginServiceIdentifier(requestId)) {
             return hostPluginServiceError(
@@ -839,7 +857,16 @@ public class HostJavaScriptPluginServiceBroker {
             ))
             Result.Ok(())
         })) {
-            case Result.Err(error) => hostPluginServiceAgentError(error)
+            case Result.Err(error) =>
+                // Preserve the scheduler's pre-action refusal, not an error
+                // code copied from a Native service response.
+                if (serviceResponses.isEmpty() && error.kind == AgentErrorKind.BudgetExceeded &&
+                    error.code == "budget.tool_calls_exceeded") {
+                    readonlyCompletionLock.lock()
+                    try { if (executionControlError.isNone()) { executionControlError = Some(error) } }
+                    finally { readonlyCompletionLock.unlock() }
+                }
+                hostPluginServiceAgentError(error)
             case Result.Ok(_) => if (serviceResponses.isEmpty()) {
                 hostPluginServiceError(
                     "extension.service_result_missing",

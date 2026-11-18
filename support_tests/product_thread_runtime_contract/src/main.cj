@@ -297,12 +297,15 @@ func requestWithBudget(
         base.prompt,
         system: base.system,
         thinking: base.thinking,
+        userRequestedThinking: base.requestedPolicy.userRequestedThinking,
+        thinkingSource: base.requestedPolicy.thinkingSource,
         modelCapabilitiesSnapshot: Some(base.modelCapabilitiesSnapshot),
         resolverVersion: base.resolverVersion,
         capabilities: base.capabilities,
         budget: budget,
         interactions: base.interactions,
         approvalModeOverride: base.approvalModeOverride,
+        callerCancellation180: base.callerCancellation180,
         autoRetry: base.autoRetry,
         serviceTier: base.serviceTier,
         pricing: base.pricing,
@@ -315,7 +318,13 @@ func requestWithBudget(
         contextSnapshot: base.contextSnapshot,
         contextWindow: base.contextWindow,
         providerSafetyMargin: base.providerSafetyMargin,
-        executionLaneId: base.executionLaneId
+        executionLaneId: base.executionLaneId,
+        initializeContext: base.initializeContext,
+        ownedEvents: base.ownedEvents,
+        queuedInitiator113: base.queuedInitiator113,
+        queuedInputPayment113: base.queuedInputPayment113,
+        planContextFacts: base.planContextFacts,
+        planRequestCustody204: base.planRequestCustody204
     )
 }
 
@@ -844,6 +853,114 @@ func fixtureWorkflowUsageLine(
         " turns=" + snapshot.turns.toString() +
         " operations=" + operations.toString() +
         " receipts=" + receipts.toString()
+}
+
+private func runProgramBudgetContracts(product: ProductRuntime, binding: NativeProgramContractBinding,
+    source: String, workspace: String, alphaSource: String, database: SqliteDatabase): Unit {
+    acknowledgeBudgetCaller(runOneSlotCallerFrame(product, binding, source))
+    acknowledgeBudgetCaller(runBoundedCallerFrame(product, binding, database, workspace, alphaSource))
+}
+
+private func acknowledgeBudgetCaller(owner: PlanRequestCustody204): Unit {
+    expect(!owner.isDataReturned204(), "caller still owns the original budgeted request DATA")
+    owner.returnApplicationFrame204()
+    expect(owner.isDataReturned204(), "budgeted request DATA returns only after both caller and Core")
+}
+
+private func runOneSlotCallerFrame(product: ProductRuntime, programBinding: NativeProgramContractBinding,
+    programSource: String): PlanRequestCustody204 {
+        let oneSlotBase = product.request(
+            "Find definitions with sequential Program reads",
+            sessionId: Some(SessionId("durable-product-program-one-slot"))
+        )
+        let oneSlotRequest = requestWithBudget(
+            oneSlotBase,
+            programBudget(oneSlotBase.budget, 8, 1)
+        )
+        product.fixtureProbe.getOrThrow().enqueueToolCallReply(
+            "fixture-program-one-slot-root-call",
+            programBinding.name,
+            objectValue([ValueField("code", textValue(programSource))])
+        )
+        let oneSlotBudgetEvents = ArrayList<ExecutionUsage>()
+        let oneSlotResult = product.client.start(oneSlotRequest, { event =>
+            match (event.payload) {
+                case AgentEventPayload.BudgetUpdated(usage) => oneSlotBudgetEvents.add(usage)
+                case _ => ()
+            }
+        })
+        var slotHandoffStage: Int64 = 0
+        var allChildCallsCharged = false
+        for (usage in oneSlotBudgetEvents) {
+            if (slotHandoffStage == 0 && usage.toolCalls == 1 && usage.activeTools == 1) {
+                slotHandoffStage = 1
+            } else if (slotHandoffStage == 1 && usage.toolCalls == 1 && usage.activeTools == 0) {
+                slotHandoffStage = 2
+            } else if (slotHandoffStage == 2 && usage.toolCalls == 2 && usage.activeTools == 1) {
+                slotHandoffStage = 3
+            }
+            if (usage.toolCalls == 7 && usage.activeTools == 1) {
+                allChildCallsCharged = true
+            }
+        }
+        expect(match (oneSlotResult) {
+            case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
+                snapshot.status == RunState.Completed
+            case _ => false
+        } && slotHandoffStage == 3 && allChildCallsCharged,
+            "sequential PTC children yield the parent slot, acquire one shared slot, and consume Run tool budget"
+        )
+        oneSlotRequest.planRequestCustody204.getOrThrow()
+}
+
+private func runBoundedCallerFrame(product: ProductRuntime, programBinding: NativeProgramContractBinding,
+    denialDatabase: SqliteDatabase, workspace: String, alphaSource: String): PlanRequestCustody204 {
+        let boundedBase = product.request(
+            "Read a file inside a one-call Run budget",
+            sessionId: Some(SessionId("durable-product-program-budget"))
+        )
+        let boundedRequest = requestWithBudget(
+            boundedBase,
+            programBudget(boundedBase.budget, 1, 1)
+        )
+        product.fixtureProbe.getOrThrow().enqueueToolCallReply(
+            "fixture-program-budget-root-call",
+            programBinding.name,
+            objectValue([ValueField(
+                "code",
+                textValue("return await tools.read({\"path\":\"src/alpha.cj\",\"offset\":1,\"limit\":1});")
+            )])
+        )
+        let boundedResult = product.client.start(boundedRequest, {_ => ()})
+        let boundedResultSummary = match (boundedResult) {
+            case Result.Err(error) => error.code
+            case Result.Ok(_) => "success"
+        }
+        expect(match (boundedResult) {
+            case Result.Err(error) => error.code == "budget.tool_calls_exceeded"
+            case _ => false
+        }, "parent maxToolCalls blocks the child scheduler reservation; actual=" +
+            boundedResultSummary)
+        let boundedFailedRootReceipts = denialDatabase.scalarInt(
+            "SELECT COUNT(*) FROM operation_receipts receipt " +
+                "JOIN operations root_operation " +
+                "ON root_operation.id=receipt.operation_id " +
+                "WHERE root_operation.run_id='" + boundedRequest.runId.value +
+                "' AND receipt.outcome='failed'"
+        )
+        expect(boundedFailedRootReceipts == 1,
+            "budget rejection leaves one failed root receipt")
+        let boundedChildAdmissions = denialDatabase.scalarInt(
+            "SELECT COUNT(*) FROM derived_operation_admissions " +
+                "WHERE parent_operation_id IN (SELECT id FROM operations " +
+                "WHERE run_id='" + boundedRequest.runId.value + "')"
+        )
+        expect(boundedChildAdmissions == 0,
+            "budget rejection occurs before durable child admission")
+        expect(String.fromUtf8(File.readFrom(
+            workspace + "/src/alpha.cj"
+        )) == alphaSource, "budget rejection leaves the workspace unchanged")
+        boundedRequest.planRequestCustody204.getOrThrow()
 }
 
 private func startCoreFixtureRun(product: ProductRuntime, prompt: String, session: SessionId, assertion: String,
@@ -2122,7 +2239,8 @@ func runBrokerOriginalCases96(
         }
 }
 
-func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSource:String):Int64{
+func runProductCoreAndRecoveryContract96(root: String, workspace: String, alphaSource: String,
+    onlyProgramBudget!: Bool = false): Int64 {
         let stateRoot = root + "/state"
         let product = openProduct(config: ProductConfig(
             settingsRoot: root + "/settings",
@@ -2135,6 +2253,21 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
             ))
         )).value().getOrThrow()
         let programBinding = NativeProgramContractBinding(product)
+        let programSource =
+            "const search = await tools.grep({\"pattern\":\"SymbolAnchor\",\"path\":\"src\",\"count\":true});\n" +
+            "const files = search.files;\n" +
+            "const alpha = await tools.read({\"path\":\"src/alpha.cj\",\"offset\":1,\"limit\":3});\n" +
+            "const beta = await tools.read({\"path\":\"src/beta.cj\",\"offset\":1,\"limit\":3});\n" +
+            "const selected = files.filter(x => x.count);\n" +
+            "const paths = selected.map(x => x.path);\n" +
+            "return paths;"
+        if (onlyProgramBudget) {
+            let database = SqliteDatabase(stateRoot + "/state.db")
+            try { runProgramBudgetContracts(product, programBinding, programSource, workspace, alphaSource, database) }
+            finally { database.close(); product.close().value().getOrThrow() }
+            println("Native Program budget, durable refusal and both request DATA returns passed")
+            return 0
+        }
         let bindingNameUsage96 = nativeControlMetadataUsage113()
         for(_ in 0..100){
             expect(programBinding.name=="plugin.axyndra:program.run" &&
@@ -2445,14 +2578,6 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
         storageLease.release()
 
         let programSessionId = SessionId("durable-product-program-thread")
-        let programSource =
-            "const search = await tools.grep({\"pattern\":\"SymbolAnchor\",\"path\":\"src\",\"count\":true});\n" +
-            "const files = search.files;\n" +
-            "const alpha = await tools.read({\"path\":\"src/alpha.cj\",\"offset\":1,\"limit\":3});\n" +
-            "const beta = await tools.read({\"path\":\"src/beta.cj\",\"offset\":1,\"limit\":3});\n" +
-            "const selected = files.filter(x => x.count);\n" +
-            "const paths = selected.map(x => x.path);\n" +
-            "return paths;"
         runMatchedProductWorkflowContract(product, stateRoot, programSource,programBinding)
         runProductFileApplicationPlanContracts(
             root, workspace, stateRoot, product, programBinding
@@ -2576,93 +2701,8 @@ func runProductCoreAndRecoveryContract96(root:String,workspace:String,alphaSourc
             !partialProgramRunId.startsWith("error:"),
             "partial Program execution has a durable root Run; actual=" + partialProgramRunId)
         let denialDatabase = SqliteDatabase(stateRoot + "/state.db")
-        let oneSlotBase = product.request(
-            "Find definitions with sequential Program reads",
-            sessionId: Some(SessionId("durable-product-program-one-slot"))
-        )
-        let oneSlotRequest = requestWithBudget(
-            oneSlotBase,
-            programBudget(oneSlotBase.budget, 8, 1)
-        )
-        product.fixtureProbe.getOrThrow().enqueueToolCallReply(
-            "fixture-program-one-slot-root-call",
-            programBinding.name,
-            objectValue([ValueField("code", textValue(programSource))])
-        )
-        let oneSlotBudgetEvents = ArrayList<ExecutionUsage>()
-        let oneSlotResult = product.client.start(oneSlotRequest, { event =>
-            match (event.payload) {
-                case AgentEventPayload.BudgetUpdated(usage) => oneSlotBudgetEvents.add(usage)
-                case _ => ()
-            }
-        })
-        var slotHandoffStage: Int64 = 0
-        var allChildCallsCharged = false
-        for (usage in oneSlotBudgetEvents) {
-            if (slotHandoffStage == 0 && usage.toolCalls == 1 && usage.activeTools == 1) {
-                slotHandoffStage = 1
-            } else if (slotHandoffStage == 1 && usage.toolCalls == 1 && usage.activeTools == 0) {
-                slotHandoffStage = 2
-            } else if (slotHandoffStage == 2 && usage.toolCalls == 2 && usage.activeTools == 1) {
-                slotHandoffStage = 3
-            }
-            if (usage.toolCalls == 7 && usage.activeTools == 1) {
-                allChildCallsCharged = true
-            }
-        }
-        expect(match (oneSlotResult) {
-            case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                snapshot.status == RunState.Completed
-            case _ => false
-        } && slotHandoffStage == 3 && allChildCallsCharged,
-            "sequential PTC children yield the parent slot, acquire one shared slot, and consume Run tool budget"
-        )
+        runProgramBudgetContracts(product, programBinding, programSource, workspace, alphaSource, denialDatabase)
 
-        let boundedBase = product.request(
-            "Read a file inside a one-call Run budget",
-            sessionId: Some(SessionId("durable-product-program-budget"))
-        )
-        let boundedRequest = requestWithBudget(
-            boundedBase,
-            programBudget(boundedBase.budget, 1, 1)
-        )
-        product.fixtureProbe.getOrThrow().enqueueToolCallReply(
-            "fixture-program-budget-root-call",
-            programBinding.name,
-            objectValue([ValueField(
-                "code",
-                textValue("return await tools.read({\"path\":\"src/alpha.cj\",\"offset\":1,\"limit\":1});")
-            )])
-        )
-        let boundedResult = product.client.start(boundedRequest, {_ => ()})
-        let boundedResultSummary = match (boundedResult) {
-            case Result.Err(error) => error.code
-            case Result.Ok(_) => "success"
-        }
-        expect(match (boundedResult) {
-            case Result.Err(error) => error.code == "budget.tool_calls_exceeded"
-            case _ => false
-        }, "parent maxToolCalls blocks the child scheduler reservation; actual=" +
-            boundedResultSummary)
-        let boundedFailedRootReceipts = denialDatabase.scalarInt(
-            "SELECT COUNT(*) FROM operation_receipts receipt " +
-                "JOIN operations root_operation " +
-                "ON root_operation.id=receipt.operation_id " +
-                "WHERE root_operation.run_id='" + boundedRequest.runId.value +
-                "' AND receipt.outcome='failed'"
-        )
-        expect(boundedFailedRootReceipts == 1,
-            "budget rejection leaves one failed root receipt")
-        let boundedChildAdmissions = denialDatabase.scalarInt(
-            "SELECT COUNT(*) FROM derived_operation_admissions " +
-                "WHERE parent_operation_id IN (SELECT id FROM operations " +
-                "WHERE run_id='" + boundedRequest.runId.value + "')"
-        )
-        expect(boundedChildAdmissions == 0,
-            "budget rejection occurs before durable child admission")
-        expect(String.fromUtf8(File.readFrom(
-            workspace + "/src/alpha.cj"
-        )) == alphaSource, "budget rejection leaves the workspace unchanged")
 
         for (scenario in [
             ProductProgramDenialCase(
@@ -3362,6 +3402,9 @@ main(): Int64 {
             runProgramCancellationRecoveryContract(root, workspace)
             println("independent Program cancellation/recovery contract passed")
             return 0
+        }
+        if (workerArguments.contains("--program-budget-contract")) {
+            return runProductCoreAndRecoveryContract96(root, workspace, alphaSource, onlyProgramBudget: true)
         }
         // The no-argument entry retains the original aggregate scenario for
         // diagnosing shared-bank pressure from legacy Raw metadata exports.

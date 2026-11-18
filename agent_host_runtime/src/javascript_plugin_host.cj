@@ -2957,6 +2957,8 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
                             context, prepared, plan, value.value, value.isError)) {
                             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                     }
+                    match (observer.finishSchedulerBudget()) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                     let owned=match(observer.retainOwnedAwaitResult166(call.callId,value.value,value.isError)){
                         case Result.Err(error)=>return Result.Err(error);case Result.Ok(item)=>item}
                     match(owned){case Some(copy)=>
@@ -3072,6 +3074,8 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
                             context, prepared, value.value, value.isError)) {
                             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                     }
+                    match (observer.finishSchedulerBudget()) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                     let owned=match(observer.retainOwnedAwaitResult166(prepared.call.callId,value.value,value.isError)){
                         case Result.Err(error)=>return Result.Err(error);case Result.Ok(item)=>item}
                     match(owned){case Some(copy)=>
