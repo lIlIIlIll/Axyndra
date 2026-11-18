@@ -15,6 +15,7 @@ import yjson_support.*
 // Distribution is an explicit host installation choice. It supplies package
 // defaults, never capabilities, credentials, an approval or a second registry.
 public func applyProductDistributionDefaults(product: ProductRuntime, directory: String): Result<Unit> {
+    let descriptors = ArrayList<OwnedPluginPackageDescriptor>()
     try {
         let root = canonicalize(Path(directory)).toString()
         if (FileInfo(Path(directory)).isSymbolicLink() || !FileInfo(Path(root)).isDirectory()) {
@@ -33,7 +34,7 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
         let entries = manifest.field("plugins").getOrThrow()
         if (entries.unifiedKind != ValueKind.List || entries.items.size > 32) {
             return distributionError("distribution.manifest_invalid") }
-        let names = HashSet<String>(); let descriptors = ArrayList<OwnedPluginPackageDescriptor>()
+        let names = HashSet<String>()
         // Validate the complete manifest and actual packages before importing
         // any entry. Malformed defaults cannot partially install a prefix.
         for (entry in entries.items) {
@@ -42,11 +43,17 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 return distributionError("distribution.manifest_invalid") }
             let descriptor = match (product.inspectPlugin(distributionMember(root, httpIntentText(entry, "path"), true))) {
                 case PluginRegistryResult.Ok(value) => value
-                case PluginRegistryResult.Err(_) => return distributionError("distribution.package_invalid") }
-            if (names.contains(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))) || productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) != httpIntentText(entry, "namespace") ||
-                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)) != httpIntentText(entry, "version") || productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) != httpIntentText(entry, "package_digest")) {
+                case PluginRegistryResult.Err(error) => error.close(); return distributionError("distribution.package_invalid") }
+            try {
+                productRegistryPrepayCells83(descriptor, entries.items.size * 4)
+                descriptors.add(descriptor)
+            } catch (error: Exception) { descriptor.close(); throw error }
+            let namespace = httpIntentText(entry, "namespace")
+            if (names.contains(namespace) || !descriptor.textEquals(PluginDescriptorText.Namespace, namespace) ||
+                !descriptor.textEquals(PluginDescriptorText.Version, httpIntentText(entry, "version")) ||
+                !descriptor.textEquals(PluginDescriptorText.ContentDigest, httpIntentText(entry, "package_digest"))) {
                 return distributionError("distribution.package_changed") }
-            productRegistryPrepayCells83(descriptor, entries.items.size * 4); names.add(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))); descriptors.add(descriptor)
+            names.add(namespace)
         }
         let workspaceDefault = manifest.field("workspace")
         match(workspaceDefault){
@@ -56,13 +63,14 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 var matched=false
                 for(index in 0..descriptors.size){
                     let descriptor=descriptors[index]
-                    if(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))==httpIntentText(value,"namespace") && productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest))==httpIntentText(value,"package_digest") &&
-                        descriptor.entryKind==PluginEntryKind.NativeExecutable && productRegistryCapabilities83(descriptor).size==1 &&
-                        productRegistryCapabilities83(descriptor)[0]=="process.readview" && entries.items[index].field("enabled").getOrThrow().asBool()){
-                        var count:Int64=0
-                        for(contribution in productRegistryContributions83(descriptor) where contribution.kind==PluginContributionKind.Tool &&
-                            ["read","grep","glob","edit","write"].contains(productRegistryCopyText83(contribution.copyText(PluginContributionText.Name)))){count++}
-                        matched=count==5 && productRegistryContributions83(descriptor).size==5
+                    if (descriptor.textEquals(PluginDescriptorText.Namespace, httpIntentText(value, "namespace")) &&
+                        descriptor.textEquals(PluginDescriptorText.ContentDigest, httpIntentText(value, "package_digest")) &&
+                        descriptor.entryKind == PluginEntryKind.NativeExecutable && descriptor.capabilityCount == 1 &&
+                        descriptor.capabilityEquals(0, "process.readview") && entries.items[index].field("enabled").getOrThrow().asBool()) {
+                        matched = descriptor.contributionCount == 5
+                        for (name in ["read", "grep", "glob", "edit", "write"]) {
+                            if (!descriptor.hasContribution(PluginContributionKind.Tool, name)) { matched = false; break }
+                        }
                     }
                 }
                 if(!matched){return distributionError("distribution.workspace_invalid")}
@@ -82,17 +90,14 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
             if (!names.contains(namespace) || name == "" || name.size > 128 || name.contains("\u{0000}")) {
                 return distributionError("distribution.policy_invalid") }
             var present = false
-            for (descriptor in descriptors where productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) == namespace) {
-                for (contribution in productRegistryContributions83(descriptor) where contribution.kind == PluginContributionKind.Provider && productRegistryCopyText83(contribution.copyText(PluginContributionText.Name)) == name) {
-                    present = true }
+            for (descriptor in descriptors where descriptor.textEquals(PluginDescriptorText.Namespace, namespace)) {
+                present = descriptor.hasContribution(PluginContributionKind.Provider, name)
             }
             if (!present) { return distributionError("distribution.policy_invalid") }
             if(workflowPlan){
                 var planPresent=false
-                for(descriptor in descriptors where productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))==namespace){
-                    for(contribution in productRegistryContributions83(descriptor) where contribution.kind==PluginContributionKind.Tool &&
-                        productRegistryCopyText83(contribution.copyText(PluginContributionText.Name))==httpIntentText(policy.value,"plan_tool") &&
-                        contribution.executionProfile==PluginToolExecutionProfile.DataOnly){planPresent=true}
+                for (descriptor in descriptors where descriptor.textEquals(PluginDescriptorText.Namespace, namespace)) {
+                    planPresent = descriptor.hasToolExecutionProfile205(httpIntentText(policy.value, "plan_tool"), PluginToolExecutionProfile.DataOnly)
                 }
                 if(!planPresent){return distributionError("distribution.policy_invalid")}
             }
@@ -124,7 +129,7 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 value.field("version").isNone() || value.field("version").getOrThrow().unifiedKind != ValueKind.Number ||
                 value.field("version").getOrThrow().asNumberText() != "4") {
                 return distributionError("distribution.context_invalid") }
-            for (descriptor in descriptors where productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) == selectedNamespace) {
+            for (descriptor in descriptors where descriptor.textEquals(PluginDescriptorText.Namespace, selectedNamespace)) {
                 value.put("namespace", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))); value.put("package_digest", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest))))
             }
             match (product.validateDistributionContext(stringifyUnifiedJson(value))) {
@@ -147,7 +152,7 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
             let descriptor = descriptors[index]; let entry = entries.items[index]
             // This decision needs only presence, not copied records or their
             // scope ranking. Keep the original snapshot timing around imports.
-            if (distributionHasInstalledNamespace(product, descriptor)) {
+            if (distributionHasInstalledNamespace(product, httpIntentText(entry, "namespace"))) {
                 // Never update, re-enable or shadow an operator's record.
                 // Startup and explicit management own its activation.
                 continue
@@ -242,6 +247,7 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
         } finally { if (exists(Path(temporary))) { remove(temporary) } }
         Result.Ok(())
     } catch (_: Exception) { distributionError("distribution.invalid") }
+    finally { for (descriptor in descriptors) { descriptor.close() } }
 }
 
 func distributionMember(root: String, relative: String, directory: Bool): String {
@@ -380,13 +386,11 @@ func seedDistributionWorkspace(product: ProductRuntime, value: AgentValue): Resu
 
 // Only a Bool leaves the owned snapshot. No complete record JSON, raw name,
 // or compatibility-copy debt is needed to decide whether to import a default.
-private func distributionHasInstalledNamespace(product: ProductRuntime,
-    descriptor: OwnedPluginPackageDescriptor): Bool {
+private func distributionHasInstalledNamespace(product: ProductRuntime, namespace: String): Bool {
     let records = product.pluginSnapshots()
     try {
         for (index in 0..records.size) {
-            if (records.at(index).descriptor.sameText(PluginDescriptorText.Namespace,
-                descriptor, PluginDescriptorText.Namespace)) { return true }
+            if (records.at(index).descriptor.textEquals(PluginDescriptorText.Namespace, namespace)) { return true }
         }
         false
     } finally { records.close() }
