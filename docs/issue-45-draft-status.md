@@ -4806,3 +4806,14 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Production and Native Product | E1678 and E1686 passed the original nine production stages and static gates on `ba99286bb6`. E1679 timed out before a Product test. E1691 on `3621283b9a` rejected an unknown process identity; E1698 passed the independent watcher controls. | No complete Product or release credit. |
 
 [Source, artifact and Store bindings](implementation/plan-execution-reliability.md#last-product-handoff-and-the-original-core-inspection). PR #49 remains Draft. GC deferral earns no pass credit.
+
+### Registry lookup ownership at `17de1ffda2`
+
+| Requirement | Evidence | Status |
+| --- | --- | --- |
+| Release the temporary import descriptor and enablement lookup | E1704/E1706 followed the same two real payments before and after the change. E1707 failed on the parent and passed on the fix with pinned Git and loopback npm. | Verified for the caller-owned views. |
+| Approved-plan Product workflows | All seven original process cases passed before and after the production change (E1703/E1705). E1710 passed 131 Python regressions, architecture and pins. | Selected contracts passed; complete Product remains open. |
+| Full Core/recovery | E1708 crashed in the collector with two pending Operations. The original Store had no Receipt for either. | Defer that crash only. E1690's `read_view.output_capacity` remains unresolved. |
+| Release and first model request | E1693 passed assembly and selected entrypoints for all three distributions on the earlier `3621283b9a` behavior. E1702 identified repeated manifest reads before the first request on an older package. | No final release, timing or matched-baseline pass. |
+
+[Source and Store evidence](implementation/plan-execution-reliability.md#temporary-registry-views-during-import-and-enablement). PR #49 remains Draft.
