@@ -4497,6 +4497,24 @@ func runProductFilePlanAuthorizationContracts(
         applicationResults[1].field("status").getOrThrow().text == "applied" &&
         applicationResults[2].field("status").getOrThrow().text == "applied",
         "one-time approval applies the exact ordered plan with per-item results")
+    // The original frontend still has its own approval card. A second
+    // decision on that card must not execute the already consumed plan.
+    let receiptsBeforeReplay = database.scalarInt("SELECT COUNT(*) FROM operation_receipts")
+    let approvalsBeforeReplay = database.scalarInt("SELECT COUNT(*) FROM approvals")
+    let attemptsBeforeReplay = database.scalarInt("SELECT COUNT(*) FROM model_attempts")
+    let replay = validSession.decide(pendingApproval.operationId.value, ApprovalDecision.Approve)
+    expect(replay.isError() && validSession.approval().isNone() && validSession.activeRunId() == "",
+        "the originating session rejects and discards its consumed one-time approval")
+    expect(database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == receiptsBeforeReplay &&
+        database.scalarInt("SELECT COUNT(*) FROM approvals") == approvalsBeforeReplay &&
+        database.scalarInt("SELECT COUNT(*) FROM model_attempts") == attemptsBeforeReplay,
+        "replaying the original card creates no second receipt, approval or model attempt")
+    let durableDecision = database.query("SELECT a.decision, a.source, r.outcome FROM approvals a " +
+        "JOIN operation_receipts r ON r.operation_id=a.operation_id WHERE a.operation_id=?",
+        [SqlParameter.Text(pendingApproval.operationId.value)])
+    expect(durableDecision.size == 1 && durableDecision[0].required(0) == "approved" &&
+        durableDecision[0].required(1) == "user" && durableDecision[0].required(2) == "completed",
+        "the original user decision and completed Receipt survive a stale approval replay")
     expect(String.fromUtf8(File.readFrom(Path(alphaPath))) == replacementContent &&
         String.fromUtf8(File.readFrom(Path(createdPath))) == createContent &&
         String.fromUtf8(File.readFrom(Path(largeCreatedPath))) == largeContent,
