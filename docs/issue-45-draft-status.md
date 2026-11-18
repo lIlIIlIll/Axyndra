@@ -16,8 +16,8 @@ Local checkpoints and updates to the existing Draft PR are authorized.
 Ready-for-review, merge and Issue closure are not authorized. Evidence paths below are relative to the retained `<evidence>`
 directory; local paths, credentials, and host identifiers are not publication inputs.
 
-Latest completed private ownership/Core evidence is summarized in
-[the Native stack and scalar-receiver checkpoint](#private-native-stack-and-scalar-receiver-checkpoint).
+Latest completed private ownership/Core diagnostics are summarized in
+[the frozen-refusal bank-identity checkpoint](#private-frozen-refusal-bank-identity).
 Historical artifact labels below do not replace that source-specific scope.
 
 App03 is `734dfbe5e8a57af08a593877186f1682c69570380125263b3d987b130a96c83c`.
@@ -4388,4 +4388,267 @@ failure evidence without rerunning deferred paths or adding current pass credit.
 Complete Core, remaining application acceptance, the original five-second gate,
 matched baseline and final-source release remain open.
 **Not complete; GC remains user-deferred with zero pass credit; PR #49 Draft.**
+
+
+### Same-run live-lease attribution
+
+E1539 joins all 509 live leases at the actual capacity refusal to their
+same-run creation paths. Its 21,513 birth captures match the complete scalar
+log, with zero capture errors; lease-header sums and the full charged bank
+reconcile exactly. It reuses the frozen E1536 diagnostic ELF and does not
+change behavior, quota, invoice, Source, SQL or ACK rules.
+
+In the main reservation group, 61 actual derived-input copies retain
+7,063,456 invoice bytes before lease headers. All originate in the real
+service-child preparation path. Their opaque-receiver contract currently
+keeps the complete copied argument graph paid. Identifying these births is
+not proof of DATA return and does not permit an automatic refund.
+The four file-plan error-path consumers identified in E1537 remain open.
+
+The original full Core still fails the completed-child Receipt prerequisite.
+Four Store captures and twelve unchanged raw images pass separate-copy
+canonical checks, and actual process/observer custody closes.
+[The implementation record](implementation/plan-execution-reliability.md#same-run-attribution-of-all-live-lease-births)
+binds the exact invoices, diagnostic artifact and retained evidence.
+Public `f0e63eb` behavior and all current pass counts are unchanged.
+**Not complete; GC remains user-deferred with zero pass credit; PR #49 Draft.**
+
+### Private derived-input return and remaining capacity failure
+
+E1540 implements actual copied-input retirement only after closed concrete
+preparation, an independent Core copy and return of the private loan frame.
+Still-live Source identity backings are prepaid on the same bank before the
+original graph is cleared and its full lease closed. Opaque callbacks, repeated
+loans, active frames, exceptions and refused prepayment remain conservative.
+No quota, full attachment invoice, high-water rule, Source check or output ACK
+is weakened.
+
+E1541 builds successfully but still fails the original complete Core at the
+completed-child Receipt prerequisite, with `read_view.output_capacity` and no
+stack-overflow trace. E1543 reuses that exact ELF and observes five real graph
+returns/lease closures; 59 other input loans correctly remain paid because
+their descriptors have opaque callbacks. Its actual locked capacity refusal
+still exceeds the unchanged bank by 6,261,188 bytes. Debugger success is not
+Core success. Both runs retain and check four Stores and twelve unchanged raw
+images with closed process/observer custody.
+
+E1542 fails unit compilation and executes no cases. E1544 corrects only two
+test callback flags; all other source inputs remain byte-identical.
+E1545 then passes all 95 naturally enumerated Tool cases and the same three
+Host invoice/ACK cases in isolated Native processes. This includes all nine
+new input-return positive and conservative-refusal cases. The test fixture
+does not admit Source or execute an operation; these are not complete Core,
+Host, Product, aggregate single-process suite or public-source passes.
+
+[The implementation record](implementation/plan-execution-reliability.md#closed-derived-input-return-is-real-but-complete-core-still-fails)
+binds exact source/ELF identities, invoices, refusal numbers, test correction
+and retained evidence. The four file-plan error-path consumers and opaque
+mounted canonicalizers remain unresolved. Complete Core, application flows,
+the original five-second gate, matched baseline and final-source release
+remain open. Public `f0e63eb` behavior and public pass counts are unchanged.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Private read-view policy and missing input copies
+
+E1546 moves the actual Host read-view primitive's three pure callbacks into a
+concrete policy, preserving ordered resource capabilities, denied network,
+empty-resource rejection and frozen descriptor identity. E1547 builds but
+still fails the original complete Core at the same completed-child Receipt
+prerequisite with `read_view.output_capacity`; no stack-overflow trace occurs.
+
+E1548 passes all 98 naturally enumerated Tool cases and the same three Host
+invoice/ACK cases, each in an isolated Native process. The three new cases
+exercise exact resource/identity parity and actual copied-input retirement.
+They do not establish aggregate single-process, complete module or public
+acceptance.
+
+E1549 observes the exact current ELF without mutating the inferior: 30 actual
+input graph returns and full-lease closures, 24 opaque paths still paid, and
+10 closed paths still paid because they lack independent Core metadata.
+The original bank still refuses an incremental request, exceeding capacity by
+2,583,084 bytes. Source inspection initially suggested Host precedence; it did
+not establish that these actual contexts had inherited a Core consumer.
+E1554 below rejects that hypothesis with actual branch observations.
+
+The actual diagnostic inferior fails. Both Core runs preserve four Stores and
+twelve unchanged raw images with separate-copy canonical checks and closed
+process/observer custody.
+[The implementation record](implementation/plan-execution-reliability.md#concrete-read-view-policy-and-remaining-host-custody)
+binds source and ELF identities, exact observations, disassembly limitations,
+commands and retained evidence.
+
+Public `f0e63eb` behavior and pass counts remain unchanged. Complete Core,
+application flows, the original five-second gate, matched baseline and
+final-source release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Private copy selector corrects the Host-precedence hypothesis
+
+E1550's extra Host/Core copy path is ineffective and is not carried forward.
+E1551 builds but again fails complete Core at the completed-child Receipt
+prerequisite, ending in `read_view.output_capacity`. E1553 observes the same
+frozen ELF: 30 actual graph returns, 24 opaque paid inputs and ten closed inputs
+without independent metadata. There is no new Core or public pass.
+
+E1554 directly observes the actual selector branches during the private input
+borrow. Host lookup returns None 421 times. The real paid execution-failure
+consumer is absent at four call sites, ten times each; 224 present-consumer
+checks satisfy the concrete subtype. The new Host-only branch is never entered.
+The actual stacks include the private Native read-view and Core nested-tool
+slot. This is missing actual child control, not evidence of Host-held custody.
+The diagnostic inferior still exits one, with a locked bank overshoot of
+2,584,452 bytes under the original limits.
+
+E1555 returns to E1546 and removes only the broker's Derived-Source restriction
+on frozen read-only read-view control inheritance. Existing actual parent
+identity, snapshot and capability validation remain; no payer, authorization,
+Source or ACK is fabricated. E1556 still fails original complete Core with
+`read_view.output_capacity`. E1559 below observes real input retirement on that
+frozen ELF. E1557 additionally routes concrete preview generator failures
+through the existing failed-result payload/ACK path while preserving Source,
+cancellation and revocation checks. E1558 completes Core validation but fails.
+[The implementation record](implementation/plan-execution-reliability.md#actual-copy-selector-rejects-the-host-precedence-hypothesis)
+binds exact source/ELF identities, branch counts, independent failure evidence
+and retained canonical Stores.
+
+Public `f0e63eb` behavior and pass counts remain unchanged. Complete Core,
+application flows, the original five-second gate, matched baseline and
+final-source release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Private actual retirement and inline transport gap
+
+E1559 directly observes 40 complete input graph clears and full-lease closes,
+24 opaque inputs retained, and no closed input still missing independent
+metadata. This repairs the actual missing-control path, not complete Core.
+
+E1558 builds E1557 but fails the unchanged complete Core at the same
+completed-child Receipt prerequisite with `read_view.output_capacity`.
+Its actual canonical records preserve all original typed fields, failed
+outcomes and error flags for the five concrete preview failures. E1560 then
+observes 11 exact file-plan payload ACKs and, separately, 110 actual metadata
+graph clears/payment closes. An observed unknown/raw owner remains paid.
+Neither callback return nor logical completion is treated as DATA retirement.
+
+E1561 finds 70 real raw exports through the legacy readonly path in the
+separate artifact-store-failure Product. Its actual canonical Program has
+inline input; the fixture explicitly uses `inputAttachment: false`. Actual
+workspace/process children complete, preview fails, and Run completes.
+The owned readonly lane excluded that transport. This proves a coverage gap,
+not that this separate Product owns the refusing bank; that identity was not
+correlated.
+
+E1562 extends the same actual Native/observer lifetime to inline input without
+changing the fixture, frozen authority, attachment invoices or actual ACK.
+E1563 fails compilation on a missing existing JSON extension import and runs
+no Core inferior. E1564 corrects only that import. E1565 builds, then the
+unchanged complete Core again fails at `read_view.output_capacity`.
+E1566 observes 41 actual input graph returns, 25 opaque inputs retained,
+111 metadata graph/payment closes and zero markers at the observed Raw-export
+instruction. Its new live-owner snapshot fails, so the diagnostic is incomplete.
+E1567 also obtains no owner snapshot: after a complete debugger stop, a registry
+reference read fails. These are diagnostic reader failures, not new GC crashes
+or proof of bank ownership. No new public or complete-Core pass is credited.
+E1558–E1561 and E1565–E1567 each retain four actual Stores and twelve unchanged
+raw images with separate-copy canonical checks and closed process/observer
+custody.
+
+[The implementation record](implementation/plan-execution-reliability.md#actual-input-retirement-preview-ack-and-inline-transport-gap)
+binds source/ELF identities, observed retirement boundaries, refusal invoices,
+the actual error representation, attribution limits and retained evidence.
+Public `f0e63eb` behavior and pass counts remain unchanged. Complete Core,
+opaque ownership, application flows, the original five-second gate, matched
+baseline and final-source release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Private frozen-refusal bank identity
+
+E1568 binds the exact installed runtime's reference ABI. E1569 saves a frozen
+core at the actual locked capacity refusal, then decodes it offline without
+calling or modifying the runtime. The first decoder rejects an unresolved
+forwarding reference. The completed decoder verifies the actual native
+dispatch, completed forwarding routes and saved bitmap counts.
+
+The same snapshot identifies 66 input owners, 3 metadata owners and 4 ledgers
+belonging to the actual refusing bank. Forty-one input graphs have returned;
+25 opaque graphs remain paid. The three metadata producers have not returned.
+This supplies the same-stop attribution missing from E1566–E1567, not a refund
+or complete owner inventory. E1570 subsequently decodes all 517 live lease
+entries and reconciles their invoices plus original headers with each SUM.
+E1571–E1573 match 284 distinct leases to actual holder registries and keep
+a foreign-bank Catalog consumer separate. E1574 finds the separate legacy
+copied-graph list empty; 17 escaped mounted-descriptor graphs remain.
+Fixed-buffer holders, 233 remaining holder-registry assignments and historical
+funding/high-water attribution are still open.
+
+All added checks read the same saved core, without a new fixture execution.
+Positive snapshot shares, retained configuration aliases and copied external
+Strings are not DATA-return acknowledgments.
+
+The original complete Core inferior still exits one. Source remains E1564,
+ELF remains E1565, and the fixed SDK, original limits, permissions and actual
+ACK requirements are unchanged. Four canonical Stores pass separate-copy
+checks; twelve raw images are unchanged and process/observer custody closes.
+
+[The implementation record](implementation/plan-execution-reliability.md#frozen-refusal-core-establishes-same-stop-bank-identity)
+records exact bank, ledger and requester amounts, source/artifact identities,
+the retained core and the remaining attribution limits.
+Public `f0e63eb` behavior and pass counts remain unchanged.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Private fixed-buffer attribution and incomplete growth capture
+
+E1575 verifies pinned Mutex identities in the exact consumer and installed
+runtime. E1576 binds four actual fixed-buffer holders to a new locked-refusal
+snapshot: one 64 KiB attachment-writer buffer and three 8 KiB protocol-reader
+buffers. Their 90,112 bytes plus the four ledgers' high-water charges exactly
+reconcile the refusing bank. Actual fixed-buffer bank releases are observed
+later; this is not a DATA-return acknowledgment.
+
+High-water history remains unproven: the observer omitted legitimate `derive`
+header growth, producing stale-cost assertions and subsequent missing-attempt
+errors. The failed capture remains intact. E1577 verifies the missing caller's
+exact machine-code layout before correcting the observer; product accounting
+and retirement rules are not changed.
+
+Complete Core still exits one. Four canonical Stores pass separate-copy
+checks and actual process/observer custody closes.
+[The implementation record](implementation/plan-execution-reliability.md#pinned-identities-resolve-the-actual-fixed-buffer-charges)
+contains the new snapshot amounts, exact core identity and evidence paths.
+Public `f0e63eb` behavior and pass counts remain unchanged. Full Core,
+ownership/funding attribution and the remaining application, baseline and
+release acceptance stay open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Complete private growth trace and fixture-lifetime candidate
+
+E1578 records all 5,296 growth attempts, 5,295 actual charge commits and one
+refusal without capture errors. The three growth caller layouts are bound
+to the unchanged E1565 ELF. Decoded live-ledger identities and actual fixed
+reservations exactly reconcile the refusing bank with observed history.
+
+The full Core flow now reaches Program cancellation recovery and fails before
+the first child's durable completed Receipt. The earlier Product has executed
+`close()`, but its actual retained holders remain paid. This is not a refund
+witness or a full Core pass.
+
+E1579 separately tests explicit disposal of the unused prior fixture request
+observation between independent prohibited-Program scenarios. It uses the
+existing guarded public disposal API without changing Product code, inputs,
+assertions, limits or opaque-consumer retention. The candidate is unaccepted;
+it is not a general Product-capacity fix.
+
+[The implementation record](implementation/plan-execution-reliability.md#complete-growth-capture-locates-the-remaining-cancellation-failure)
+records exact amounts, funding frames, source/core identity and retained Store
+evidence. Public `f0e63eb` behavior and pass counts remain unchanged.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+### Workspace failure propagation verified; Core capacity still fails
+
+E1580's fixture-only candidate still fails full Core and is not promoted.
+The cancellation Store distinguishes the underlying `read_view.output_capacity`
+Receipt from the misleading Workspace parser diagnostic. E1581 corrects the
+latter and passes six focused cases on the rebuilt, packaged Workspace
+executable. No Core, whole Product, or final-release pass is added.
+[Verification and artifact identities](implementation/plan-execution-reliability.md#workspace-preserves-a-failed-read-view-receipt-before-worker-launch).
 

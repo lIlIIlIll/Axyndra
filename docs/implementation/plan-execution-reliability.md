@@ -7,8 +7,8 @@
 > Current integration results are recorded separately below. Schema v29 preserves
 > the new base's v25-v28 migrations and adds plan state.
 >
-> Latest completed private Core/ownership results are recorded in
-> [the Native stack and scalar-receiver checkpoint](#private-native-stack-repair-and-scalar-receiver-evidence).
+> Latest completed private Core/ownership diagnostics are recorded in
+> [the frozen-refusal bank-identity checkpoint](#frozen-refusal-core-establishes-same-stop-bank-identity).
 > They do not replace the public `f0e63eb` behavior source or establish complete acceptance.
 
 This record tracks the approved seven-part reliability change. Operation receipts
@@ -9484,4 +9484,737 @@ Complete Core, the remaining application flows, original five-second request
 gate, matched-baseline comparison and final-source release acceptance remain
 open. **Not complete; GC remains user-deferred with zero pass credit;
 PR #49 stays Draft.**
+
+
+## Same-run attribution of all live lease births
+
+E1539 replays the unchanged E1536 diagnostic ELF
+`dc829c7144ae6f1ea1d1d45d5a56a7391ae202bc37f2ba103428d3587bb7e175`.
+The read-only debugger observes disassembly-bound reservation-creation
+boundaries after scalar IDs have been loaded. It does not dereference managed
+owners, invoke inferior functions, alter reservations or filter small growth.
+All 21,513 captured births match the actual scalar log; 3,597 bounded native
+call chains are retained, with zero capture errors.
+
+At the first actual refusal, all **509 live leases** join to creation paths
+from this same run. Every group's live invoices plus its 1,024-byte lease
+headers reconcile exactly to ledger SUM. The complete bank also reconciles:
+capacity 150,994,944, charged 145,127,092, incremental request 12,582,912 and
+overshoot 6,715,060 bytes, including 90,112 fixed-buffer bytes. These are
+logical charges, not a physical-memory measurement or evidence of a leak.
+Lease IDs are not matched across runs.
+
+The largest live invoice categories in reservation group 1 are:
+
+| Actual creation path | Live leases | Invoice bytes, excluding lease headers |
+| --- | ---: | ---: |
+| `copyPreparedDerivedInput204` | 61 | 7,063,456 |
+| `HostRegistryCatalogIdentity159.reserveTool159` | 30 | 5,825,088 |
+| `reserveSnapshotCatalogData159` from Product prompt building | 7 | 2,794,496 |
+| `produceLockedToolSetSnapshot159` from the Core model lane | 3 | 2,612,496 |
+| `copyPreparedExternalText204` from the private read-view input path | 81 | 2,188,736 |
+
+All 61 derived-input copies originate in the actual
+`HostJavaScriptPluginServiceBroker.executeServiceChildFrame159` path.
+Their owner currently retains the independent call and argument graph
+permanently, because arbitrary preparation callbacks may retain them.
+Birth attribution identifies that owner and its charge; it does **not** prove
+that its receivers returned their DATA. The actual full 64 MiB attachment
+invoice, SUM/high-water rules, 16 MiB floor and 144 MiB bank remain unchanged.
+The four file-plan error-path consumers from E1537 also remain unresolved.
+
+The debugger exits zero, but the inferior again exits one at the original
+completed-child Receipt prerequisite. Four actual Stores and twelve raw images
+are checked through separate canonical-analysis copies, with raw hashes
+unchanged and observer/process custody closed. This adds no Core pass,
+performance result or public-source acceptance.
+
+Evidence under `metadata1539-other-live-lease-origins/`:
+`live-lease-origin-joins.json`, `root-live-invoice-summary.json`,
+`exact-boundary-binding.json`, `numeric-analysis/bank-reconciliation.json`
+and `canonical-analysis/projection.json`.
+The next candidate may retire only an actually closed preparation input frame
+after independent Core copies, while keeping remaining Source identity paid
+on the same bank; opaque receivers and unproven returns must remain charged.
+**Not complete; GC remains user-deferred with zero pass credit; PR #49 Draft.**
+
+## Closed derived-input return is real, but complete Core still fails
+
+E1540 adds a private DATA-only return path for the copied service-child input.
+It does not use the nominal closed-resolver flag as evidence. Eligibility
+requires the actual concrete validator and capability policy, no opaque
+descriptor preparation or policy callbacks, safe denied-network evaluation,
+and an independently retained Core copy for the same Derived parent identity.
+Repeated loans, an active input frame and unexpected unwinding remain paid.
+
+After the actual private loan and preparation frame return, the owner prepays
+the remaining original call/tool/parent identity Strings on the same bank and
+reservation group. Only then does it clear the call/argument graph; after that
+clearing helper returns, it closes the original full input lease. It does not
+copy or discard the still-live identity backings. A refused prepayment leaves
+the original graph and invoice intact. Source authority, output ACK, the
+144 MiB bank, 16 MiB floor, full 64 MiB attachment invoice and high-water
+accounting are unchanged.
+
+### Original Core and actual return boundaries
+
+E1541 rebuilds the original complete Core fixture on the source manifest
+`e7ce990402994ef14c63314747c37cc89ff7352654fc884c508bc4bd2d7b5a25`.
+Build exits zero; the actual fixture exits one at the same completed-child
+Receipt prerequisite, with no stack-overflow trace. Canonical rows show a
+failed `plugin.program.run`, its failed `workspace.read` child, and a failed
+`host.process.readview` grandchild with `read_view.output_capacity`.
+The Core ELF is
+`139ca37550f12a0f85692bf6012c2772319659234f044d0f9f0da770b7555f08`.
+
+E1543 observes that exact frozen ELF with disassembly-bound, read-only debugger
+breakpoints. All 350 boundary events decode without capture errors:
+
+| Actual input state | Count | Observed result |
+| --- | ---: | --- |
+| Completed private input loans | 64 | All use the concrete validator and policy |
+| Descriptors with opaque callbacks | 59 | Input return refuses; full graph remains paid |
+| Callback-free, safe, independently copied inputs | 5 | Actual graph clears, original lease closes and return succeeds |
+
+The five returned full invoices total 521,744 bytes; their retained identity
+invoices total 64,400 bytes. These are observed lease invoices, not a measured
+bank refund, physical-memory saving or complete live-ledger reconciliation.
+The actual locked output refusal still has capacity 150,994,944, charged
+144,673,220 and incremental request 12,582,912 bytes: overshoot 6,261,188.
+Different runs' charges are not subtracted to claim a causal saving.
+
+The diagnostic driver exits zero, but its actual inferior exits one. Both
+E1541 and E1543 retain four actual Stores and twelve raw images, checked through
+separate analysis copies with unchanged raw hashes and closed process/observer
+custody. Neither run passes complete Core.
+
+### Native regression scope and test correction
+
+E1542 first fails unit compilation because two new callbacks capture mutable
+local Boolean variables; it executes no unit cases. E1544 moves those two flags
+onto the existing test fixture object without changing their assertions.
+Only that test file differs from E1540: all 2,661 other inputs are byte-identical.
+The corrected manifest is
+`4437d08227eb3d6a401448c817a98be676919dd066bf201e95f451d3ebba7b3a`.
+E1541 therefore remains applicable to its unchanged production source.
+
+E1545 passes all five original unit-build stages, all **95 naturally enumerated
+Tool cases**, and the same three Host invoice/ACK cases in isolated Native
+processes. The nine added input-return cases cover retained Source identity,
+opaque descriptor/validator/policy receivers, active-frame refusal, unexpected
+unwind, identity-prepayment refusal, missing independent Core data, and a later
+closed loan after an earlier opaque borrow. The DATA fixture does not admit
+Source or execute an operation. The Host cases retain their original invoice
+and actual ACK assertions; they are not a Native Program execution proof.
+
+- Tool ELF: `0e9541a815509d8396ad8a5bfeb42806cdcb0e111a1af0d2e41a844e339600b3`.
+- Host ELF: `33c58f03c6d30e1307bfd54a970f7519976def54f5b74c48acb55529a5b07b64`.
+
+Original build, enumeration, case and process-custody limits are retained.
+These passes do not establish aggregate single-process suite behavior,
+complete Host/Core/Product acceptance or public-source acceptance.
+
+Retained entry points:
+
+- `metadata1541-derived-input-core/summary.json`,
+  `failure-classification.json` and `canonical-analysis/projection.json`;
+- `metadata1543-derived-input-return-observation/observed-boundaries.json`,
+  `current-conclusion.json`, `exact-boundary-binding.json` and
+  `canonical-analysis/projection.json`;
+- `metadata1542-derived-input-units/summary.json` for the failed compile;
+- `metadata1545-derived-input-units/summary.json` for exact corrected source,
+  inventories, commands, artifacts and actual Native results.
+
+The four file-plan error-path consumers remain unresolved. Opaque mounted
+canonicalizers remain paid; callback or logical completion is not their DATA
+ACK. All changes above remain private. Public `f0e63eb` behavior and public
+pass counts are unchanged. **Not complete; GC user-deferred with zero pass
+credit; PR #49 Draft.**
+
+## Concrete read-view policy and remaining Host custody
+
+E1546 replaces the actual Host read-view primitive's three pure capability and
+network callbacks with the existing concrete policy mechanism. The new
+`ReadViewChild` case computes the ordered resource requirements once and retains
+the original primary/static/additional ordering, de-duplication, denied network,
+invalid empty-resource scope and frozen descriptor identity flags. Opaque
+mounted canonicalizers are unchanged and remain paid.
+
+The private source manifest is
+`1763f99f4bfbc76398f8a59ab1ec204bf7ce75c2a5ed0558926ba208679cdac6`.
+It changes four files from E1544: the concrete policy, descriptor capability
+assembly, actual Host registration and three DATA-only regression cases.
+No permission, Source, SQL, bank, floor, attachment invoice, high-water, output
+ACK or process-return requirement changes.
+
+### Complete Core still fails; isolated regression cases pass
+
+E1547 builds the original complete Core fixture in 410.769 seconds, then fails
+after 94.056 seconds at the completed-child Receipt prerequisite. There is no
+stack-overflow trace. The canonical chain remains failed `plugin.program.run`,
+failed `workspace.read`, and failed `host.process.readview` with
+`read_view.output_capacity`. Its ELF is
+`b8a0f5c00d92dd080b71b33fb125691efe9dfd45f782cb22c36e76523222c703`.
+
+E1548 passes all five original unit-build stages, all **98 naturally enumerated
+Tool cases**, and the same three Host invoice/ACK cases. The three added cases
+cover exact resource/frozen identity parity, the invalid scope for no resources,
+and real input-graph return without losing either resource requirement.
+Each case runs in its own Native process. These DATA fixtures do not admit
+Source or execute an operation; the Host cases do not execute a Native Program.
+They are not aggregate single-process, complete Host/Core/Product or public
+acceptance.
+
+- Tool ELF: `8ed80cc0dacece2bfbdd52ccbdbca9308c57d6a3ad1b63b9480a004989c19bcc`.
+- Host ELF: `c478846cc1ecb645e735ee8ae2080385cd6d52fc10334955471ce91bb857321d`.
+
+### Exact current return and refusal observations
+
+E1549 observes the frozen E1547 ELF with read-only debugger breakpoints and
+read-only source/SDK mounts. All 540 input-boundary events decode without input
+or bank capture errors. All 64 private loans use the concrete validator and
+capability policy:
+
+| Actual input state | Count | Observed result |
+| --- | ---: | --- |
+| Closed, independently copied metadata | 30 | Graph clears and original full input lease closes |
+| Opaque descriptor callbacks | 24 | Original graph and full invoice remain paid |
+| Closed preparation without independent Core metadata | 10 | Original graph and full invoice remain paid |
+
+The 30 original invoices total 4,655,664 bytes; their retained identity invoices
+total 404,096 bytes. This is not a measured bank refund or physical-memory
+saving. At the actual locked refusal, capacity is 150,994,944, charged occupancy
+140,995,116 and incremental request 12,582,912 bytes: overshoot **2,583,084**.
+No charge is subtracted across separate runs to claim a causal saving.
+
+All eleven observed input instructions and their preceding calls/stores are
+bound to the current disassembly. The three complete bank instruction streams
+match E1543 after link-address normalization. Generated closure/symbol
+annotations prevent whole-function equivalence claims for the five input
+functions; only the verified observation points are used. No inferior calls,
+state writes, DATA text or retained owner references are added.
+
+Initial source inspection suggested Host precedence: the inheritance routine
+copies the paid Core consumer, while Host selection bypasses Core copying.
+That inspection did not establish which live contexts had inherited control.
+E1554 below rejects the proposed explanation: the actual Host selector returns
+None and the child Context lacks the paid Core consumer. The earlier association
+with PTC samples was based on log ordering, not dynamic receiver evidence.
+
+The diagnostic driver succeeds but its actual inferior still exits one.
+Both E1547 and E1549 retain four actual Stores and twelve raw images. Separate
+analysis copies pass canonical checks, raw hashes remain unchanged and actual
+process/observer custody closes. Original execution and unit deadlines remain.
+
+Retained evidence:
+
+- `metadata1547-readview-child-core/summary.json`, `failure-classification.json`
+  and `canonical-analysis/projection.json`;
+- `metadata1548-readview-child-units/summary.json`;
+- `metadata1549-readview-child-observation/observed-boundaries.json`,
+  `current-conclusion.json`, `exact-boundary-binding.json`, current disassembly
+  and `canonical-analysis/projection.json`.
+
+All behavior changes remain private. Public `f0e63eb` behavior and pass counts
+are unchanged. The four file-plan error-path consumers, opaque canonicalizers,
+complete Core, application flows, original five-second gate, matched baseline
+and final-source release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Actual copy selector rejects the Host-precedence hypothesis
+
+E1550 privately tests an additional Core-owned metadata copy after eligible Host
+preparation, with original-bank identity checks and independent Core producer/
+consumer return. Its 2,662-input source proof hashes to
+`c07b401bd217ff27ec803a4bb5a75f45c0bd6b3029533f1536b2039def3cf4f1`.
+This candidate is **ineffective on the missing-copy path** and is not carried
+into the next candidate.
+
+### Complete Core and actual input returns remain unchanged
+
+E1551 builds in 381.732 seconds but the original complete Core fails in 88.398
+seconds at the same completed-child Receipt prerequisite. The canonical chain
+still ends in failed `host.process.readview` with `read_view.output_capacity`.
+No `StackOverflowError` appears. Its frozen ELF is
+`bb061fc4b57dc3b206c049c58b46537a0669e2d21f8235feba82bb40344f84f0`.
+The native library remains
+`36ca7f5f003c1136239f64cde95195b7371beaf4acafcafb355526a5363ee790`.
+
+E1552 passes all five original unit-build stages, all 101 naturally enumerated
+Tool cases and the same three selected Host cases (282 naturally enumerated).
+Each runs in its own Native process. The three new tests exercise independent
+Core producer/consumer retention and raw-export retention, not the real missing
+selector path. They do not rescue E1550 or transfer credit to E1555.
+
+- Tool ELF: `84736198376fe992d85d4f5ceafb3b1c70354a70efdc304b3aedb527851280b7`.
+- Host ELF: `7a2737a72b30799428aa7ea8e1ffe524b602369c1d90a0eab28fc190d20ac4f3`.
+
+E1553 observes that exact ELF read-only. Its 540 input events still show
+30 real input-graph returns, 24 opaque paths kept paid and ten closed paths
+without independent metadata. No input or bank capture errors occur. The
+returned original invoices total 4,656,112 bytes; retained identity invoices
+total 404,096 bytes. These are invoice observations, not measured bank refunds.
+At the actual locked refusal, capacity is 150,994,944 bytes, charged occupancy
+140,996,100 and the incremental request 12,582,912: overshoot **2,584,068**.
+The diagnostic succeeds; the actual inferior exits one.
+
+### Actual receiver selection, not source-order inference
+
+E1554 adds nine exact current-instruction observations to the same frozen ELF.
+Only events with the actual private derived-input caller in a bounded native
+frame chain are recorded. Reference results are tested for null; no DATA text,
+owner identity addresses, inferior calls or state writes are introduced.
+
+| Actual selection observation | Count |
+| --- | ---: |
+| Host selector returns no consumer | 421 |
+| Actual paid execution-failure consumer absent | 40 |
+| Corresponding Core-scope selection has no consumer | 40 |
+| Present consumer satisfies the actual PlanCopy subtype check | 224 |
+| New E1550 Host-only eligibility selector entered | 0 |
+| Catalog snapshot-payment absence branch entered | 0 |
+
+The forty absent-consumer observations form four distinct call sites with ten
+occurrences each: registration entry, snapshot selection, registration lookup
+and prepared retention. Their real stacks include the private Native read-view
+call and the actual Core nested-tool slot. There are no selector capture errors.
+This rejects Host precedence as the explanation; a source routine capable of
+copying control does not prove the actual child received that control.
+
+The actual E1554 inferior still fails. Its locked refusal records capacity
+150,994,944, occupancy 140,996,484 and growth 12,582,912 bytes: overshoot
+**2,584,452**. No cross-run subtraction is used to claim a saving.
+
+E1551, E1553 and E1554 each retain four actual Stores and twelve raw images.
+Separate-copy analysis passes canonical checks; raw hashes remain unchanged
+and process/observer custody closes. The E1551 recorder directory initially
+differed from the analysis helper's expected name; renaming only that private
+capture directory allowed analysis without rerunning Core or changing raw data.
+Original execution deadlines and fixed SDK remain unchanged.
+
+### Ordinary frozen read-view parent control inheritance
+
+The broker currently inherits controls for frozen Program delegation or
+**Derived** read-view parents. Its ordinary frozen read-only read-view parents
+are excluded by that Source-kind condition. E1555 removes only that condition
+and uses the same existing parent-control inheritance routine, including its
+Run, epoch, cancellation, budget, snapshot, environment, service and capability
+validation. It does not create a payer or change authorization or Source.
+
+E1555 starts from E1546, not E1550. Exactly one source file changes:
+`agent_host_runtime/src/javascript_plugin_service.cj`. Its 2,662-input source
+proof hashes to
+`3763037d474d4ba96df58a8d9f1248f4c664817bb22ddc87e21a13f3c46c2137`.
+E1556 builds in 403.813 seconds, then the original complete Core fails in
+92.053 seconds at the same completed-child Receipt prerequisite. The actual
+canonical chain still ends in `read_view.output_capacity`; no stack-overflow
+trace appears. ELF:
+`566360bf3affeb55169944c520fb86e665b543c66cef0147d2064705d8458ed6`.
+Its four Stores and twelve raw images pass the same separate-copy checks,
+with unchanged raw hashes and closed process/observer custody. This is not
+complete Core acceptance. E1559 below observes actual copied-input retirement
+on that frozen ELF rather than inferring it from the source change.
+
+Retained evidence:
+
+- `metadata1551-hosted-core-data-core/summary.json`, `failure-classification.json`
+  and `canonical-analysis/projection.json`;
+- `metadata1552-hosted-core-data-units/summary.json`;
+- `metadata1553-hosted-core-data-observation/current-conclusion.json`,
+  `observed-boundaries.json`, `exact-boundary-binding.json` and current disassembly;
+- `metadata1554-core-copy-selection/current-conclusion.json`,
+  `observed-selection.json`, `exact-boundary-binding.json`, current disassembly
+  and `canonical-analysis/projection.json`;
+- `metadata1556-readview-control-core/summary.json`, `failure-classification.json`
+  and `canonical-analysis/projection.json`.
+
+E1557 separately extends the existing failed-preview output path to all
+concrete generator validation/storage failures, not just artifact-store
+failure. It preserves typed error fields and routes them through the existing
+failed `ToolResult` payload lease, whose actual consumer ACK returns the
+metadata consumer. The generic `Result.Err` path remains paid; early Source
+and permission checks, post-generator cancellation/revocation checks and the
+separate authorized workspace-application root are unchanged.
+
+This changes only `agent_product/src/plugin_file_plan_service.cj` relative to
+E1555. Source proof:
+`e7bc3d91e93b666775079161afbc93b3855d6a5c658bab571ce159aec0a26701`.
+E1558 below completes that original Core verification and still fails.
+Neither a returned error nor callback completion is DATA acknowledgement.
+
+Public `f0e63eb` behavior and pass counts are unchanged. Complete Core,
+remaining ownership paths, application flows, the original five-second gate,
+matched baseline and final-source release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Actual input retirement, preview ACK and inline transport gap
+
+E1559 observes the exact E1556 ELF at current locked instructions. Its 560
+input events show **40 actual graph clears and full input-lease closures**,
+24 opaque descriptors kept paid, and no closed input missing independent
+metadata. Returned original invoices total 6,329,128 bytes; retained identity
+invoices total 530,624 bytes. Those are owner invoices, not a measured bank
+refund. The earlier missing-control path is repaired; complete Core still fails.
+
+### Concrete failed-preview output and actual retirement
+
+E1558 rebuilds E1557 in 287.170 seconds. Original complete Core then exits one
+in 90.585 seconds at the same completed-child Receipt prerequisite, ending in
+`read_view.output_capacity`; no stack-overflow trace occurs. Its frozen ELF is
+`4068e5cf93e8bbf8305134aab7eb6f009ba010211e196a81f0bd8226215f15d4`.
+The native library remains
+`36ca7f5f003c1136239f64cde95195b7371beaf4acafcafb355526a5363ee790`.
+
+Actual before/after canonical records preserve every original typed field for
+five failed previews: invalid path, path-byte limit, stale precondition,
+existing create target and unavailable artifact store. Every corresponding
+operation/outcome remains failed and each output has `is_error: true` with the
+original service error code. Four errors now use the existing flat failed
+`ToolResult` representation instead of the generic nested error wrapper. This
+is error-contract evidence, not proof of DATA return or complete Core success.
+
+E1560 observes that exact ELF. The reviewed exact file-plan payload callback
+performs **11 real metadata-consumer decrements** to zero; producer-return is
+still false at those ACKs. Separately, **110 observed metadata graph clears and
+successful payment closes** occur after the owner retirement guards pass.
+ACK and complete DATA retirement remain distinct. One observed collection has
+unknown/raw custody, zero consumers/headers and a retained invoice of 271,176
+bytes; it stays paid. This is not a complete live-owner inventory.
+
+The actual instruction observations have no capture errors. At the locked
+refusal, all three observations below retain capacity 150,994,944 bytes,
+incremental growth 12,582,912 bytes, four message groups and four fixed buffers:
+
+| Observation | Charged bytes | Overshoot bytes |
+| --- | ---: | ---: |
+| E1559, control inheritance | 139,672,780 | 1,260,748 |
+| E1560, concrete preview output | 139,014,068 | 602,036 |
+| E1561, raw-export origin | 139,014,628 | 602,596 |
+
+Each diagnostic driver succeeds but its actual Core inferior exits one.
+Cross-run subtraction is not a refund measurement. E1558–E1561 each preserve
+four actual Stores and twelve unchanged raw images; separate-copy canonical
+checks and actual process/observer custody checks pass.
+
+### The remaining observed raw path is an actual inline invocation
+
+E1561 records 70 raw exports with exact native caller chains and no capture
+errors. The actual chain enters `executeLegacyActualFrame204`, ordinary input,
+readonly delegation validation and the service broker's raw plan/call access.
+The separate artifact-store-failure Product has a canonical Program root with
+no `input_attachment`: its workspace read and process child complete, preview
+fails, and Run completes. The unchanged fixture explicitly sets
+`inputAttachment: false`. This is not the previously withdrawn schema-query
+experiment.
+
+The private owned readonly lane only admitted attachment-present plans.
+E1562 generalizes that same Native/observer lifetime to inline input; existing
+attachment acquisition, full working invoice, validation, file close and
+actual ACK still apply when an attachment exists. No dummy attachment, new
+payer, fixture change or callback-return refund is introduced. The helper and
+its callers cut over from attachment-specific to invocation names.
+
+This identifies an ownership coverage gap, **not its attribution to the
+refusing bank**. The observations do not correlate the separate Product's
+metadata owner with that bank; equal invoices are not object identities.
+
+E1563 stops during compilation because the helper lacks its existing `yjson`
+extension import. It runs no Core inferior. An earlier direct driver invocation
+also failed before compilation because the required isolated wrapper was
+omitted; both failures are retained. E1564 changes only that import relative
+to E1562. Its 2,662-input source proof is
+`ec42713a8cf063156fd2919fbe36e84bd8c49800ad1efa44ff003e58de34d0de`.
+E1565 builds in 297.262 seconds, then original complete Core exits one in
+90.389 seconds at the same completed-child Receipt prerequisite with
+`read_view.output_capacity` and no stack-overflow trace. Its frozen ELF is
+`aeab2ea54a8bdc8fc2362485c74811df27818437eba6be3388a0b5b1eca17bb1`.
+The original fixture, SDK, native library and all limits remain unchanged.
+
+E1566 observes 66 private input loans: 41 actual graph clears/full-lease closes
+and 25 opaque inputs retained. It records 111 actual metadata graph/payment
+closes, 11 exact file-plan payload ACKs and zero Raw-export markers at the
+installed current `holdUnknown204` instruction. This is not a universal Raw
+access or live-owner inventory claim. Its locked refusal still has capacity
+150,994,944, occupancy 139,091,828 and incremental growth 12,582,912 bytes:
+overshoot **679,796**. No cross-run subtraction is a refund measurement.
+
+The new same-stop live-owner snapshot fails an unlocalized assertion, so
+E1566's diagnostic as a whole is incomplete. E1567 explicitly stops every
+thread before snapshotting, then fails while reading a registry reference;
+its phase and traceback are retained. It provides no owner/bank attribution.
+This debugger reader failure is not an inferior GC crash. E1567's separately
+valid locked refusal records occupancy 139,091,484 and overshoot 679,452 bytes.
+The actual inferior still exits one. Exact fixed-SDK reference-barrier ABI is
+being inspected read-only; no runtime call, build or replacement is authorized.
+
+E1565–E1567 each preserve four actual Stores and twelve unchanged raw images.
+Separate-copy canonical checks and process/observer custody checks pass.
+No public or complete-Core pass is credited.
+
+Retained evidence:
+
+- `metadata1558-preview-failure-core/summary.json`,
+  `failure-classification.json` and `preview-error-comparison.json`;
+- `metadata1559-readview-control-observation/current-conclusion.json`;
+- `metadata1560-preview-actual-ack/current-conclusion.json`,
+  `file-plan-payload-callback-binding.json`, current disassembly and
+  `observed-boundaries.json`;
+- `metadata1561-last-raw-metadata-origin/current-conclusion.json`,
+  `observed-raw-origins.json` and `canonical-analysis/projection.json`;
+- `metadata1563-inline-readonly-core/summary.json`, `build.log` and
+  `preflight-correction.json`;
+- `metadata1565-inline-readonly-core/summary.json`, `failure-classification.json`
+  and `canonical-analysis/projection.json`;
+- `metadata1566-refusal-live-owner-ledgers/current-conclusion.json`,
+  `exact-boundary-binding.json` and current disassembly;
+- `metadata1567-all-stop-owner-ledgers/current-conclusion.json` and
+  `derived-input.gdb`.
+
+Public `f0e63eb` behavior and pass counts remain unchanged. Complete Core,
+remaining opaque ownership, application flows, the original five-second gate,
+matched baseline and final-source release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Frozen refusal core establishes same-stop bank identity
+
+E1568–E1569 resolve the debugger-reference limitation without changing product
+source or the fixed SDK. **Complete Core still fails; no public pass is added.**
+
+E1568 binds the installed runtime ELF, native virtual tables and read-barrier
+instructions. E1569 runs the unchanged E1565 Core ELF through the isolated
+`metadata1569_frozen_refusal_core.py` driver with the original 900-second bound.
+At the actual locked refusal, the debugger stops all threads and saves one
+868,587,336-byte core. This is a diagnostic snapshot, not a crash core.
+The inferior subsequently exits one at the existing completed-child Receipt
+prerequisite.
+
+The snapshot binds `IdleBarrier → CollectorProxy → WCollector`. The first
+offline decoder rejects a ghost-region reference instead of blindly clearing
+its tag. The completed decoder follows only already-completed forwarding
+routes. It checks cached live-prefix counts against the saved bitmaps.
+All 284 reference reads resolve: 6 untagged, 273 tagged non-ghost and 5 forwarded.
+No inferior function is called, and no heap or runtime state is written.
+
+The same snapshot contains 66 input owners and 3 Prepared metadata owners.
+Forty-one input graphs have actually returned; their identity payments remain.
+Twenty-five opaque input graphs remain paid. All three metadata producers
+have not returned, so none is claimed retired.
+
+The four decoded ledgers reference the actual refusing bank. E1570 resolves
+their live lease maps; E1573 matches payments to holder registries. IDs apply
+only within this frozen snapshot.
+
+| Ledger | Live invoice SUM, bytes | Charged high-water, bytes | Input owners | Metadata owners | Live leases | Leases matched to holder registries |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 13,270,592 | 16,777,216 | 2 | 3 | 164 | 42 |
+| 2 | 20,260,096 | 33,889,080 | 61 | 0 | 298 | 211 |
+| 3 | 5,384,736 | 16,877,244 | 3 | 0 | 51 | 31 |
+| 4 | 67,263,616 | 71,457,920 | 0 | 0 | 4 | 0 |
+
+The requesting frame holds ledger 4's mutex. Its lease 8 currently invoices
+zero and requests the original 16,777,216-byte message invoice. The wanted SUM
+is 84,040,832, so the actual bank growth is 12,582,912 bytes. At that decision,
+bank occupancy is 139,091,572 of 150,994,944 bytes: overshoot **679,540**.
+Four message slots and four fixed-buffer reservations are live.
+
+The observed ledger high-water total is 139,001,460 bytes. The remaining
+90,112 bank bytes are not attributed to particular holders merely by
+subtraction. Fixed-buffer holders and the original funding/high-water stacks
+still need correlation. The difference between live SUM and high-water is
+not refundable under the existing contract. Registry and owner locks were
+not acquired; this is not an allocator-wide owner inventory or a leak finding.
+
+The fixed runtime SHA-256 is
+`99b4841d0ce313a7ca9081af9daa30245d41bbeb6dd04574e37c8bbd7e136c9a`.
+The core SHA-256 is
+`f3428609d2e3ec362dabaeb8588855b26e81b3cce17e2c44f4f0192e695673aa`.
+Source remains E1564 and consumer ELF remains E1565. Four actual Stores pass
+separate-copy checks; twelve retained raw images keep their recorded hashes.
+Actual process custody closes, the observer thread returns, and all observer
+file descriptors close.
+
+Evidence is retained in `metadata1568-fixed-reference-abi/binding.json` and
+`metadata1569-frozen-refusal-core/`: `summary.json`, `snapshot.json`,
+`capacity-refusal.core`, `owner-ledger-routed.gdb`,
+`same-stop-owner-ledgers-routed.json`, `resolved-forwarding-fields.json`,
+`current-conclusion.json`, `raw-image-verification.json` and
+`canonical-analysis/projection.json`. The rejected first decoder and its error
+remain alongside the successful offline decode.
+
+E1570 reads the actual HashMap buckets and live entry chains using the pinned
+collection ELF's layout. All 517 live invoices, plus each entry's original
+1,024-byte header, reconcile exactly with their ledger SUM. All 69 original
+input/metadata payments match current map entries; requester lease 8 matches
+the locked refusal frame. Ledger 4's 67,108,864-byte lease is not assigned a
+holder merely from its amount.
+
+E1571–E1573 traverse concrete model, snapshot, Tool and Host holder fields
+from this consumer's type metadata. Class field offsets include the verified
+8-byte object header. They match **284 distinct same-bank leases**, including
+103 copied external-text owners, 17 escaped mounted-descriptor graphs and
+62 catalog declaration holders. The remaining 233 leases lack holder-registry
+attribution; the requester's frame identity is separately established above.
+One Catalog consumer belongs to another bank and is excluded from these totals.
+
+The observed model request is unexported but not retiring. Three older shared
+snapshots each retain a share. Mounted-descriptor graphs have escaped, and
+catalog identities retain configuration aliases. None of these observations
+proves DATA return. E1574 separately reads the legacy copied-graph ArrayList
+using the exact SDK accessors: it is empty at this stop, which does not remove
+the escaped graphs in the mounted-descriptor registry.
+
+These checks use the retained E1569 core only: no new fixture execution,
+inferior calls, SDK changes or refunds. Evidence includes `binding.json` and
+the decoder/output in `metadata1570-frozen-lease-map/`,
+`metadata1571-frozen-owner-roots/`, `metadata1572-frozen-host-tool-roots/`,
+`metadata1573-frozen-nested-registry-holders/` and
+`metadata1574-frozen-legacy-graph-list/`. The last directory also retains the
+exact collection accessor disassembly.
+
+Public `f0e63eb` behavior is unchanged. Complete Core, remaining ownership,
+application flows, the original five-second gate, matched baseline and
+final-source release remain open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Pinned identities resolve the actual fixed-buffer charges
+
+E1575 verifies that this consumer's bank, shared-ledger and fixed-token
+constructors allocate their immutable Mutex fields through the installed
+runtime's pinned-object entrypoint. Observed constructor epochs distinguish
+reuse; arbitrary moving object addresses are not lifetime identities.
+
+E1576 executes the unchanged E1564 source/E1565 ELF under a numeric-only
+observer and saves another core at the locked refusal. Offline reference
+decoding binds four live ledgers and four fixed reservations to that bank.
+
+| E1576 snapshot ledger | Observed birth epoch | High-water bytes | Live SUM bytes | Live leases |
+| --- | --- | --- | --- | --- |
+| 1 | 27 | 16,777,216 | 13,270,592 | 164 |
+| 2 | 1 | 33,889,208 | 20,260,208 | 298 |
+| 3 | 13 | 16,877,292 | 5,384,752 | 51 |
+| 4 | 28 | 71,457,920 | 67,263,616 | 4 |
+
+Their high-water total is 139,001,636 bytes. Actual fixed reservations add
+90,112 bytes, exactly matching the bank's 139,091,748-byte occupancy:
+a 65,536-byte `HostArtifactStore.openServiceArtifactWriter` buffer used by
+`HostToolInputAttachmentSession.stageFrame204`, and three 8,192-byte
+`JavaScriptExtensionHost.readLine` handshake buffers. Their observed births,
+pinned identities and sizes match the frozen inventory. All 174 fixed-buffer
+charges in this execution subsequently reach actual bank-release commits.
+This attributes charges, not DATA retirement or a leak.
+
+The high-water **history capture is incomplete**. The observer tracks shared
+`ensure` growth but omits `derive` header growth. Sequence 77 records an actual
+1,024-byte `derive` charge; sequence 79 then fails the stale expected-cost
+assertion. The original output retains 94 attempts, 94 commits and 10,404
+diagnostic errors, including secondary missing-attempt errors. This partial
+history cannot identify the final peak's original funding stacks.
+
+Complete Core still exits one. Four canonical Stores pass separate-copy
+checks; actual process custody closes, the observer thread returns and all
+observer descriptors close. The saved core is 865,660,528 bytes, SHA-256
+`745d13a021a4da4e364e83da6e3a7ab2e8ad1bfa69014b17cfa1e722b4347e9d`.
+It is a debugger-generated refusal snapshot, not a crash classification.
+
+Evidence: `metadata1575-fixed-mutex-identity-abi/binding.json` and
+`metadata1576-growth-history-core/`, including `current-conclusion.json`,
+`summary.json`, `growth-history.jsonl`, `growth-state-at-refusal.json`,
+`growth-symbols.json`, `decoded-owner-ledgers.json` and the retained core.
+The fixed SDK, original bank, floor, invoices, SUM/high-water rules, permissions
+and actual ACK requirements are unchanged. Public `f0e63eb` behavior and pass
+counts are unchanged. Complete Core and the remaining acceptance work stay open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+E1577 binds the omitted `derive` caller and the standalone reservation caller
+to this exact consumer's machine code. Corrected diagnostics must retain raw
+attempts, commits and refusals before cross-event assertions; deriving a header
+must not be mistaken for unexplained accounting growth. This is a diagnostic
+correction, not a product fix.
+
+## Complete growth capture locates the remaining cancellation failure
+
+E1578 corrects the observer without changing E1564 source or the E1565 ELF.
+It records 5,296 attempts, 5,295 actual bank-charge commits and one refusal,
+with zero capture errors or pending growth records. Caller attribution covers
+5,254 shared `ensure` calls, 37 `derive` header calls and five standalone
+reservation calls. Raw observations precede cross-event assertions.
+
+Offline decoding of this new core matches all four surviving ledgers to their
+observed pinned constructor epochs. Their historical charges total
+139,001,204 bytes; the four actual fixed buffers add 90,112 bytes.
+
+| E1578 bank capacity | Charged at refusal | Actual requested growth | Overshoot |
+| ---: | ---: | ---: | ---: |
+| 150,994,944 | 139,091,316 | 12,582,912 | 679,284 |
+
+The original Registry ledger's 33,888,848-byte peak ends at
+`FixtureRequestSnapshot159.beginObservation159`, after a 1,268,000-byte
+request copy. The surviving Store ledger peaks at
+`StoredValuePaymentMeter.operationPlanHeader240`; the current invocation
+ledger peaks at the original package-inspection working invoice. These are
+actual funding stacks, not assignments inferred from equal floor amounts.
+
+This execution reaches `runProgramCancellationRecoveryContract`, after the
+earlier Product's explicit `close()` and the native-read cancellation helper.
+It fails **“cancellation starts only after child one has a completed durable
+Receipt”**. The current independent Product is observed at ledger birth epoch
+27. The old Registry ledger still has 298 live leases, including three
+single-share snapshots. Neither Product closure nor those share counts
+acknowledge opaque Contexts or public exports.
+
+Complete Core still exits one. Four canonical Stores pass separate-copy
+checks; all twelve retained original-inode images match their recorded size
+and hash. Actual process custody, the observer thread and all observer file
+descriptors close. The 867,290,736-byte core has SHA-256
+`295be2f118d3b511ff20001938561cc822c88eb07cd368a895bafb1804d68d88`.
+
+Evidence is in `metadata1578-complete-growth-core/`: `current-conclusion.json`,
+`growth-history.jsonl`, `surviving-ledger-funding.json`,
+`decoded-owner-ledgers.json`, `raw-image-verification.json`,
+`canonical-analysis/projection.json`, `debugger.log` and the retained core.
+The incomplete E1576 capture remains intact.
+
+E1579 is a separate **unaccepted fixture-only candidate**: before each of the
+six independent prohibited-Program scenarios, it calls the existing
+`FixtureModelPort.retireLastRequest159()` for the prior observation copy.
+No request probe crosses that boundary. The existing API clears only eligible
+private cached data; exported or active observations remain paid. Product
+source, scenario inputs and every assertion are unchanged. This does not
+change ordinary model-cache replacement semantics, retire opaque Contexts or
+establish a general Product-capacity fix.
+
+Public `f0e63eb` behavior and pass counts remain unchanged. Full Core,
+remaining application flows, the original five-second gate, matched baseline
+and final-source release acceptance stay open.
+**Not complete; GC user-deferred with zero pass credit; PR #49 Draft.**
+
+## Workspace preserves a failed read-view Receipt before worker launch
+
+E1580 rejects the E1579 fixture-only change. The rebuilt Core consumer
+(`9c550669a58a52111f1e2c3c9be778102c709bf939de72af0cae59ce5a1f9f21`)
+still exits one at the first durable child Receipt prerequisite. Four separate
+Stores pass `quick_check`; all twelve original DB/WAL/SHM images retain their
+hashes. In the cancellation Store, `host.process.readview` has a **failed**
+Receipt with `read_view.output_capacity`. Its Workspace parent instead reports
+`workspace.protocol` because it tried to parse worker stdout; the host had no
+worker output to return. The Program records `tool_program.subcall_failed`.
+The unmodified assertions correctly reject that sequence. The fixture change
+is not promoted.
+
+E1581 fixes the diagnostic in `plugins/workspace/src/protocol.cj`. After
+checking the service, request and Receipt identity and the negotiated size
+bound, Workspace returns the host error code and bounded message when a
+failed receipt supplies no worker stdout. A worker transcript still goes
+through the original parser. Neither result can turn a failed Receipt into
+success or authorize a retry.
+
+The fixed-SDK package build used the locked local search engine. Six real
+packaged protocol cases passed: host denial without stdout, successful worker
+read, edit with two Receipts, missing Receipt, truncated worker, and transport
+failure. Packaged Workspace ELF:
+`8410089e8c0a189ffa4a7a8f665977bcbc6b0c8ce1258ddf772491fbd9e47f90`.
+Both build and test process-custody checks passed. Evidence:
+`workspace1581-failed-readview-receipt/{summary.json,wire.log}` and
+`metadata1580-fixture-observation-core/canonical-analysis/projection.json`.
+This is a Workspace protocol fix, not a Core capacity or distribution pass.
 
