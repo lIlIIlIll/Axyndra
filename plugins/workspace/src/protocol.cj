@@ -97,6 +97,12 @@ func workspaceCompleteWorker(invocation: JsonNode, response: JsonNode): ?JsonNod
         if (stringifyUnifiedJson(result).size > profile.maxServiceResponseBytes) {
             throw WorkspaceFailure("workspace.output_limit", "Service result exceeds its frozen ordinary profile") }
         case None => () }
+    // A failed host Receipt can precede worker launch. Only worker
+    // transcripts have stdout; nonzero worker exits still use the parser below.
+    if (wsBool(result, "is_error") && output.field("stdout").isNone()) {
+        let code = wsText(output, "error")
+        if (code != "") { throw WorkspaceFailure(code, wsText(output, "message")) }
+    }
     let source = wsText(output, "stdout")
     if (source.size > workspaceResultLimit(wsText(invocation, "tool")) + 1) { throw WorkspaceFailure("workspace.output_limit", "Workspace worker output exceeds its limit") }
     match (workspaceInvocationPayment) { case Some(payment) =>

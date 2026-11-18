@@ -348,6 +348,16 @@ class WorkspacePackageTests(unittest.TestCase):
             wire.hello(); frame = wire.invoke(); wire.receive()
             value = response(frame); value['ok'] = False; value['error'] = {'code': 'extension.cancelled', 'message': 'cancelled'}
             wire.send(value); self.assertFalse(wire.receive()['ok'])
+    def test_failed_readview_receipt_preserves_host_error_without_worker_stdout(self):
+        with Protocol(self.root) as wire:
+            wire.hello(); frame = wire.invoke(); wire.receive()
+            error = {'error': 'read_view.output_capacity', 'message': 'shared logical JSON output capacity is exhausted'}
+            reply = response(frame, {**error, 'error_kind': 'permission_denied', 'retryable': False})
+            reply['result']['is_error'] = True
+            wire.send(reply)
+            final = wire.receive()
+            self.assertFalse(final['ok'])
+            self.assertEqual(final['result'], error)
     def test_truncated_worker_never_mints_partial_plan(self):
         with Protocol(self.root) as wire:
             wire.hello(); frame = wire.invoke('write', {'path': 'new.txt', 'content': 'x'}); wire.receive()
