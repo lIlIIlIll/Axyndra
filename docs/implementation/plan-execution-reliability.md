@@ -10218,3 +10218,106 @@ Both build and test process-custody checks passed. Evidence:
 `metadata1580-fixture-observation-core/canonical-analysis/projection.json`.
 This is a Workspace protocol fix, not a Core capacity or distribution pass.
 
+## Program cancellation, CLI startup and the current Coding package
+
+E1582 reduced the private fixture's Registry reads to the three descriptor
+fields it uses. The original complete Core executable still exited one:
+the cancellation Store recorded `read_view.output_capacity` before the first
+child could complete. Four Stores passed `quick_check` on separate copies.
+All twelve original images kept their sizes and hashes. The fixture change
+is not promoted. Evidence: `metadata1582-projected-binding-core/`, ELF
+`0a527300bb53c5a42cf45af1b164055efe23502b011bd196d92e709307ed9e8b`.
+
+E1583 ran the unchanged `scripts/cold_start_gate.py` on the packaged
+baseline (`4d88fa60`) and candidate App. Each arm started 100 fresh
+processes under the same environment and checked the exit code and exact
+version string. The baseline ran first. The OS page cache was not reset.
+
+| `--version` wall time (ms) | P50 | P95 (nearest rank) |
+| --- | ---: | ---: |
+| Baseline | 79.469 | 97.612 |
+| Candidate | 63.363 | 72.718 |
+
+This command exits before Product configuration, plugin activation or a
+model request. `matched1583-package-cold-start/` retains all 200 samples and
+both process-custody records.
+
+E1584 ran `scripts/package_candidate.sh` from archived public source
+`31ca034b1f` with the fixed SDK. The production App and all 717 inputs in
+its build record matched. The producer rebuilt all nine Coding plugins.
+The relocated clean-environment and setup checks passed, as did all 44
+Workspace package tests on the **shipped** plugin. The packaged App has
+the same hash as the E1583 candidate:
+`5678c1a0d611f1617068f40dd558b611839e50f7b64f415955c51ee2241c57a1`.
+The shipped Workspace ELF is
+`1aba218c859db0fcc2b5114db88be8344710face5b5ead0ae7154c54a1595e4a`.
+See `release1584-current-coding/{summary.json,workspace-all.json,workspace-all.log}`.
+These results do not close the five-second model request or the full release.
+
+E1585 fixes the cancellation fixture's Workspace collision in `4fac5a49e1`.
+The preceding Product installs plugins at Workspace scope. The cancellation
+Product now copies its two real read inputs into a separate Workspace
+instead of trying to install over the first Product's records.
+`--program-cancellation-recovery-contract` exercises this boundary after
+a real prior Workspace installation. It passes with the original timeouts,
+SQL assertions, worker-directory cleanup and process census. The cancelled
+Run retains a completed `workspace.read` child and its completed
+`host.process.readview` receipt. The second read is rejected with `run.cancelled`.
+
+The same public-source ELF
+(`a54666c37588037970e1fa763130f28137b56f5f53c789515aafa38b9560f293`)
+**fails** `--core-and-recovery-contract` earlier. The model-selected read-only
+Program has a failed `input_attachment.capacity` Receipt. No layer between
+the model and the worker was skipped. The four distinct Stores from these
+two runs passed `quick_check` on analysis copies, and all twelve original
+images match their recorded sizes and hashes. See
+`public1585-cancellation-core/{summary.json,canonical-analysis/projection.json}`.
+
+E1586 ran the original `plugin_performance_baseline/check.py` on both sides
+under an exclusive measurement lock. The two arms used the same SDK, package
+and fixture path roles, and fresh operator state. The baseline's annotated
+dependency tag resolves to the same source commit used by its normalized
+lock. Both arms passed the original investigation ceilings. Times below are
+milliseconds, and RSS values are bytes. P50 and P95 use nearest rank.
+
+| Metric | Samples per arm | Baseline P50 / P95 | Candidate P50 / P95 |
+| --- | ---: | ---: | ---: |
+| JS extension cold activation | 12 | 56.809 / 110.807 | 56.123 / 66.876 |
+| First call | 12 | 2.127 / 3.219 | 9.394 / 10.204 |
+| Steady IPC | 240 | 2.353 / 10.007 | 10.010 / 10.071 |
+| Extension worker RSS | 12 | 18,268,160 / 29,376,512 | 15,278,080 / 20,828,160 |
+| Cancellation including 100 ms trigger | 12 | 125.310 / 132.193 | 124.166 / 138.010 |
+| Fixture `/help` | 20 | 162.251 / 193.909 | 449.084 / 472.143 |
+| Fixture `/help` peak RSS | 20 | 90,288,128 / 90,988,544 | 51,048,448 / 51,613,696 |
+| Declarative plugin inspect | 20 | 152.027 / 204.434 | 468.504 / 496.808 |
+| Declarative plugin inspect peak RSS | 20 | 90,304,512 / 90,927,104 | 51,154,944 / 51,621,888 |
+
+First-call P95 and both Product startup P95 values were higher in this
+candidate sample despite passing the ceilings. These single-host results
+do not measure default Native Coding activation or establish a cause.
+`matched1586-plugin-performance/{baseline,candidate}/summary.json` binds the
+runtime executables, packaged Apps, original results and process-custody
+checks to their respective arms.
+
+### Concurrent extension calls, progress and physical worker return
+
+E1587 measures two real JS extension workers using the same echo fixture.
+Each arm runs 12 overlapping call pairs at each payload size. Each worker
+must return its own exact bytes and one progress event. The close timer
+starts with the worker PID present and ends after close with that PID absent.
+Measurements are nearest-rank P50 / P95 in microseconds.
+
+| Bytes per worker each way | Metric | Samples per arm | Baseline | Candidate |
+| ---: | --- | ---: | ---: | ---: |
+| 256 | Pair completion | 12 | 3,936 / 10,200 | 10,055 / 10,138 |
+| 256 | First progress | 24 | 1,504 / 1,909 | 557 / 1,345 |
+| 256 | Normal close and reap | 24 | 6,020 / 11,629 | 19,994 / 27,698 |
+| 32,768 | Pair completion | 12 | 90,153 / 119,378 | 5,464 / 10,128 |
+| 32,768 | First progress | 24 | 2,275 / 3,332 | 1,488 / 2,247 |
+| 32,768 | Normal close and reap | 24 | 6,714 / 14,880 | 17,496 / 27,978 |
+
+Candidate close-and-reap P95 was higher at both sizes; 32 KiB pair completion
+P95 was lower. The candidate returns its payload only after checking it.
+Process exit is not a DATA acknowledgement. These measurements do not time
+cancellation-to-reap or default Native package activation. Raw pairs and
+per-arm identities: `matched1587-output-reap/{baseline,candidate}/`.

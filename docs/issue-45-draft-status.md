@@ -4652,3 +4652,24 @@ latter and passes six focused cases on the rebuilt, packaged Workspace
 executable. No Core, whole Product, or final-release pass is added.
 [Verification and artifact identities](implementation/plan-execution-reliability.md#workspace-preserves-a-failed-read-view-receipt-before-worker-launch).
 
+### Coding assembly and matched executable startup
+
+E1582 still fails the first durable child Receipt in the private Core
+candidate. E1583 passes the matched 100-process `--version` check on both
+arms. E1584 passes fresh Coding9 assembly, relocation, setup and all 44
+shipped Workspace tests on public source `31ca034b1f`. The five-second
+model request and full release remain open. GC is deferred, not passed.
+[Artifact identities, timings and Core evidence](implementation/plan-execution-reliability.md#program-cancellation-cli-startup-and-the-current-coding-package).
+
+E1585 passes the public Program cancellation scenario after a preceding
+Workspace installation. The same executable still fails the aggregate Core
+contract at `input_attachment.capacity`. E1586 passes both original
+seven-record plugin performance gates. The comparison records higher
+first-call and Product startup latency despite those passes. Neither result
+changes the Draft status.
+
+E1587 adds matched concurrent output, progress and normal worker-reap
+measurements on two actual JS extensions. Both payload sizes passed exact
+output and physical PID checks; candidate close-and-reap P95 was higher at
+both sizes. This supplements E1586, not the Native first-request gate.
+[Sample conditions and percentiles](implementation/plan-execution-reliability.md#concurrent-extension-calls-progress-and-physical-worker-return).
