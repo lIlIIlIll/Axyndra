@@ -51,18 +51,15 @@ class ProductRegistryEscapedCopyDebt83 {
     // after the last Product closed keeps its charge.
     func endProduct(): Unit {
         lock.lock()
-        var retire = false
-        try {
-            if (products > 0) {
-                products -= 1
-                if (products == 0 && head.isSome()) { retire = true }
-            }
+        var node = try {
+            if (products == 0) { return }
+            products -= 1
+            if (products != 0) { return }
+            // Detach this generation before beginProduct or adopt can publish another.
+            let first = head
+            head = None<ProductRegistryEscapedCopyNode83>
+            first
         } finally { lock.unlock() }
-        if (!retire) { return }
-        lock.lock()
-        let first = try { let value = head; head = None<ProductRegistryEscapedCopyNode83>; value }
-            finally { lock.unlock() }
-        var node = first
         while (true) {
             match (node) {
                 case Some(actual) => let next = actual.previousNode(); actual.retirePayment(); node = next

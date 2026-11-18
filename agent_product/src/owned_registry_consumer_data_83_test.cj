@@ -17,6 +17,28 @@ func productOwnedRegistryFixture83(id: String): ProductPluginRuntime {
 @Test
 class ProductOwnedRegistryConsumerData83Tests {
     @TestCase
+    func copiedDataStaysChargedUntilTheLastProductCloses(): Unit {
+        let floor: Int64 = 16777216
+        let bank = LogicalJsonOwnerBudget(maximumCharged: floor)
+        let debt = ProductRegistryEscapedCopyDebt83()
+        debt.beginProduct()
+        debt.adopt(bank.acquire(1))
+        debt.beginProduct()
+        debt.endProduct()
+        @Expect(bank.usage()[1], floor)
+        debt.endProduct()
+        @Expect(bank.usage()[1], 0)
+
+        // An unmatched close cannot retire a copy adopted after the last owner.
+        debt.adopt(bank.acquire(1))
+        debt.endProduct()
+        @Expect(bank.usage()[1], floor)
+        debt.beginProduct()
+        debt.endProduct()
+        @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func fullCopiedMaintenanceErrorSurvivesActualRegistryBackingRetirement(): Unit {
         let runtime = productOwnedRegistryFixture83("full-error")
         let expected = "leading\u{0000} Unicode 汉字 \n trailing " + String.fromUtf8(Array<UInt8>(32768, { _ => 120u8 }))
