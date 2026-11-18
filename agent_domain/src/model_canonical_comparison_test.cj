@@ -36,6 +36,16 @@ class ModelCanonicalComparisonTests {
         @Expect(canonicalAgentValueMatches(changed, witness), false)
     }
     @TestCase
+    func malformedLengthsCannotBorrowBytesFromAdjacentFrames(): Unit {
+        let value = listValue([textValue(""), textValue("a")])
+        @Expect(canonicalAgentValueMatches(value, "[3:s0:4:s1:a]"), true)
+        for (witness in ["[2:s0:5:s1:a]", "[4:s0:3:s1:a]", "[03:s0:4:s1:a]",
+            "[3:s00:4:s1:a]", "[:s0:4:s1:a]", "[+3:s0:4:s1:a]",
+            "[3:s0:4:s1a]", "[9223372036854775808:s0:4:s1:a]"]) {
+            @Expect(canonicalAgentValueMatches(value, witness), false)
+        }
+    }
+    @TestCase
     func fullNeutralModelHistoryAndLateToolArgumentsRemainCompared(): Unit {
         let prior = ModelMessage(ModelRole.User, [ModelBlock(ModelBlockKind.Text, text: "完整前序历史雪🙂")])
         let original = modelRequestSnapshotValue(ModelRequest("model", [prior,

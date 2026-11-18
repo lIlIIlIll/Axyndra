@@ -138,9 +138,37 @@ private class ModelCanonicalComparisonWriter {
         }
         offset += actual.size
     }
-    private func prefix(bytes: Int64): Unit { text(bytes.toString()); text(":") }
-    private func frame(value: String): Unit { prefix(value.size); text(value) }
-    private func child(value: AgentValue): Unit { prefix(modelCanonicalExtent(value)); node(value) }
+    // The witness already contains the frame length. Check it against the
+    // bytes actually compared instead of measuring the whole subtree again.
+    private func frameEnd(): Int64 {
+        let first = offset
+        var bytes: Int64 = 0
+        while (offset < canonical.size) {
+            let ch = canonical[offset]
+            if (ch == b':') { break }
+            if (ch < b'0' || ch > b'9' || (offset != first && bytes == 0)) { return -1 }
+            let digit = Int64(ch - b'0')
+            if (bytes > (Int64.Max - digit) / 10) { return -1 }
+            bytes = bytes * 10 + digit
+            offset++
+        }
+        if (offset == first || offset == canonical.size) { return -1 }
+        offset++
+        if (bytes > canonical.size - offset) { return -1 }
+        offset + bytes
+    }
+    private func frame(value: String): Unit {
+        if (!matches) { return }
+        let end = frameEnd()
+        if (end < 0 || end - offset != value.size) { matches = false; return }
+        text(value)
+    }
+    private func child(value: AgentValue): Unit {
+        let end = frameEnd()
+        if (end < 0) { matches = false; return }
+        node(value)
+        if (offset != end) { matches = false }
+    }
     func node(value: AgentValue): Unit {
         if (!matches) { return }
         match (value.kind()) {
