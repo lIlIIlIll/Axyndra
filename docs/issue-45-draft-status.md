@@ -4704,3 +4704,22 @@ GC remains deferred with zero pass credit. PR #49 remains Draft.
 | E1602: Coding first request | Default Skills preparation required approval. With workspace-only Skills the context read completed, but the first model attempt was never claimed for dispatch. Neither local server received a request. | Neither arm passed the original five-second two-profile gate. Five descendants in the workspace-only arm required watcher cleanup. |
 
 [Artifacts and exact failure boundaries](implementation/plan-execution-reliability.md#production-packages-terminal-flows-and-the-two-first-request-failures).
+
+### Memory seed, first-request deadline and Todo first save
+
+| Evidence | Verified behavior | Still open |
+| --- | --- | --- |
+| E1600/E1603: 63 MiB Memory fixture | At `46b15c25` the Native test verified the complete escaped text and the complete 63 MiB body in both SQLite tables. Six staged builds passed; the Product executable enumerated 1,099 tests. | Only the seed test ran here. The full application flow remains GC-deferred. |
+| E1604: Coding first request | With workspace-only Skills, Run creation occurred 3.867 s into the original five-second deadline. Context read completed before the deadline; the CLI was killed before any model attempt or HTTP request. | The two-profile gate did not pass. This sample does not establish why E1602 recorded `runtime.run_stale`. |
+| E1605: packaged headless flows | Cards, ask, initial prompt and Todo first save passed. The save recorded revision 1, two completed Runs, six completed Receipts and four user approvals. | Existing installed operator; no fresh-install or historical intermittent-timeout pass. |
+
+[Measurements and test scope](implementation/plan-execution-reliability.md#memory-seed-first-request-deadline-and-todo-first-save).
+
+### Current Product cases and matched Coding performance
+
+| Evidence | Result | Limit |
+| --- | --- | --- |
+| E1603/E1606/E1608: Product | Of 1,099 identities, 489 passed on the same ELF: the Memory seed, 485 selected cases, and three real child-recovery cases with the correct recursive test target. Twelve other current samples faulted at a fixed-SDK GC helper. | The twelve receive no pass credit; 598 previously excluded identities were not run on this ELF. |
+| E1607: baseline versus final Coding | Both arms passed all seven original performance records. First-call P95 was 2.277 ms on baseline versus 9.788 ms on candidate; steady IPC P95 was 3.387 versus 10.075 ms. Worker P95 RSS decreased. | Passing absolute ceilings does not establish latency parity or complete release acceptance. |
+
+[Selection, process evidence and matched measurements](implementation/plan-execution-reliability.md#current-product-cases-and-matched-coding-performance).

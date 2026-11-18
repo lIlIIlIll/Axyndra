@@ -10478,3 +10478,84 @@ timeout. Both database analysis copies passed `quick_check`. Evidence:
 `profiles1602-final-coding/`, including `durable-timepoints.json` and the
 workspace arm's `pre-dispatch-diagnostic.json`. This is not a Provider
 connection failure or a successful alternative default.
+
+### Memory seed, first-request deadline and Todo first save
+
+The original Memory seed failed inside `JsonDirectWriter.finishString`,
+before application startup: it requested 66,060,790 bytes when the largest
+contiguous block in the fixed heap was 65,097,728 bytes. `46b15c25` changes
+the test fixture, not application storage. The writer streams into one byte
+buffer, SQLite binds it as TEXT, and the same transaction copies the event
+at the exact revision to the current-state table. The test checks storage
+class, exact escaped Unicode and the entire 66,060,288-byte body in both
+tables; equality of two truncated copies would not pass.
+
+The first single-stage build hit its original 900 s limit and earns no
+credit. E1603 built all six stages separately under their existing limits.
+Product ELF `3c35fa81547156fbfdd8a6dfc8dbed9da91cefd2508228ea03c7bf709cf9c6c6`
+enumerated 1,099 cases; the seed test passed in 4.87 s, with 1,098 skipped.
+Evidence: `memory1600-oracle-seed/` and `memory1603-staged-seed/`. The
+GC-deferred application workflow was not rerun.
+
+E1604 correlated passive syscall timestamps from the original five-second
+`invoke` with the workspace-only operator's durable rows. Relative to entry
+into `invoke`, Run creation occurred at +3,867 ms, context handoff at
++4,235 ms and the completed context-read Receipt at +4,559 ms. The first
+SIGKILL was sent at +5,001 ms; the Run recorded cancellation at +5,047 ms.
+There was no context safe cut, model attempt, dispatch or HTTP request in
+this sample. All observed descendants exited. Evidence:
+`profiles1604-time-boundary/workspace/correlated-events.json`.
+
+E1605 ran the E1599 Coding package with the original headless golden gate.
+Cards and ask passed on a fresh home. Initial prompt passed on an installed
+operator copy with one completed Run, context read and model attempt. A
+copy already containing Todo revision 1 was rejected by preflight, before
+launch. A different installed operator had six historical Runs and no
+document; the first save on its copy took 7.30 s, added two completed Runs
+and six completed Receipts, recorded four approvals, and created revision
+1 without a model attempt. The source operator was unchanged. Evidence:
+`golden1605-final-coding/`. These results do not replace E1601's PTY checks
+or explain the earlier 33 s pending approval.
+
+### Current Product cases and matched Coding performance
+
+E1606 selected the 500 previously passing Product identities on the E1603
+ELF and 17 actual Native packages. The first run passed 485 cases. Twelve
+others faulted at offset `0x637f21` in `MapleRuntime::CheckAndPush`. Three
+traces also name a GC phase. For the other nine, the fixed Runtime hash
+matches E1509's four GC-phase call sites; this is static attribution of
+the leaf, not a recovered stack or a diagnosis of the corrupt reference.
+Evidence: `unit1606-final-nongc/{summary,current-crash-binding}.json`.
+
+The remaining three failures were missing physical-child checkpoints.
+The private target contained plugin fixtures but no Product executable for
+the recursive `cjpm test --skip-build`. E1608 mounted the actual E1603
+unit target. All three original tests passed: committed context boundary,
+pending approval and prepared model recovery after real child death.
+Each has its own qualified case output and closed parent/worker process
+receipt in `unit1608-recursive-target/`. The first parser rejected CJPM's
+additional summary; its worker-only receipt was not used to certify parent
+return. No product recovery assertion, time limit or database was changed.
+Including the separate E1603 Memory test gives 489 passes on this ELF,
+12 GC-deferred current failures and 598 not run, out of 1,099.
+
+E1607 used the same baseline and fixed SDK as E1586, the E1599 Coding
+executable, unchanged fixture bytes, a fresh home per arm and an exclusive
+measurement lock. Both arms passed the original gate and returned their
+processes. Comparisons below are P95; times are milliseconds.
+
+| Metric | Samples per arm | Baseline | Candidate |
+| --- | ---: | ---: | ---: |
+| Extension cold activation | 12 | 46.633 | 48.365 |
+| First call | 12 | 2.277 | 9.788 |
+| Steady IPC | 240 | 3.387 | 10.075 |
+| Worker RSS (bytes) | 12 | 29,413,376 | 20,938,752 |
+| Cancellation including the 100 ms trigger | 12 | 127.439 | 130.052 |
+| Fixture `/help` | 20 | 139.866 | 422.809 |
+| Fixture `/help` peak RSS (bytes) | 20 | 94,150,656 | 50,552,832 |
+| Declarative plugin inspection | 20 | 129.774 | 444.538 |
+| Inspection peak RSS (bytes) | 20 | 94,220,288 | 50,663,424 |
+
+The two `matched1607-final-performance/` arm summaries contain the P50s,
+P95s, executable hashes and process receipts. Lower RSS and passing
+absolute ceilings do not offset the observed latency regressions.
