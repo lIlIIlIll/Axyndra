@@ -293,3 +293,92 @@ class RegistryEnableBatch1227Tests {
         } finally { owners.close() }
     }
 }
+
+private func firstInstallDescriptor(registry: PluginRegistry, path: String): OwnedPluginPackageDescriptor {
+    match (registry.inspect(path)) {
+        case PluginRegistryResult.Ok(value) => value
+        case PluginRegistryResult.Err(error) => throw registryTestOwnedFailure78(error)
+    }
+}
+
+@Test
+class DistributionFirstInstallTests {
+    @TestCase
+    func changedSecondPackagePublishesNeitherRecordAndRetryPreservesMixedDefaults(): Unit {
+        let owners = RegistryTestOwners()
+        let root = Directory.createTemp("/tmp").toString()
+        try {
+            let first = registryFixturePackage(root, "1.0.0")
+            let second = registryFixturePackage(root, "2.0.0")
+            let manifest = second + "/package.json"
+            File.writeTo(manifest, String.fromUtf8(File.readFrom(manifest))
+                .replace("minimal-fixture", "another-fixture").toArray())
+            let registry = owners.openRegistry(root + "/settings", root)
+            let one = firstInstallDescriptor(registry, first)
+            let two = firstInstallDescriptor(registry, second)
+            try {
+                let entries = [DistributionPluginInstall(first, one, true), DistributionPluginInstall(second, two, false)]
+                let script = second + "/extensions/index.js"
+                let original = File.readFrom(script)
+                File.writeTo(script, "changed after preflight".toArray())
+                @Expect(writerError(registry.installFirstDistribution(entries)), "distribution.package_changed")
+                @Expect(registry.get("pi:minimal-fixture").isNone())
+                let reopened = owners.openRegistry(root + "/settings", root)
+                @Expect(reopened.get("pi:minimal-fixture").isNone())
+                @Expect(reopened.get("pi:another-fixture").isNone())
+                File.writeTo(script, original)
+                @Expect(reopened.installFirstDistribution(entries).isOk())
+                let installed = owners.openRegistry(root + "/settings", root)
+                @Expect(installed.get("pi:minimal-fixture").getOrThrow().enabled)
+                let disabled = installed.get("pi:another-fixture").getOrThrow()
+                @Expect(!disabled.enabled && !disabled.explicitlyDisabled)
+            } finally { two.close(); one.close() }
+        } finally { owners.close(); remove(root, recursive: true) }
+    }
+
+    @TestCase
+    func staleEmptyRegistryCannotEnableAnOperatorImport(): Unit {
+        let owners = RegistryTestOwners()
+        let root = Directory.createTemp("/tmp").toString()
+        try {
+            let source = registryFixturePackage(root, "1.0.0")
+            let stale = owners.openRegistry(root + "/settings", root)
+            let expected = firstInstallDescriptor(stale, source)
+            try {
+                let manager = owners.openRegistry(root + "/settings", root)
+                registryFixtureRecord(manager.importLocal(source))
+                let lock = root + "/settings/plugins/lock.jsonl"
+                let before = String.fromUtf8(File.readFrom(lock))
+                @Expect(writerError(stale.installFirstDistribution([DistributionPluginInstall(source, expected, true)])),
+                    "plugin.distribution_assembly_not_first")
+                @Expect(String.fromUtf8(File.readFrom(lock)), before)
+                let observed = owners.openRegistry(root + "/settings", root).get("pi:minimal-fixture").getOrThrow()
+                @Expect(!observed.enabled && !observed.explicitlyDisabled)
+            } finally { expected.close() }
+        } finally { owners.close(); remove(root, recursive: true) }
+    }
+
+    @TestCase
+    func emptyCurrentSetKeepsExistingRollbackHistory(): Unit {
+        let owners = RegistryTestOwners()
+        let root = Directory.createTemp("/tmp").toString()
+        try {
+            let registry = owners.openRegistry(root + "/settings", root)
+            let id = "pi:minimal-fixture"
+            registryFixtureRecord(registry.importLocal(registryFixturePackage(root, "1.0.0"))).close()
+            @Expect(registry.uninstall(id).isOk())
+            let next = registryFixturePackage(root, "2.0.0")
+            let expected = firstInstallDescriptor(registry, next)
+            try {
+                @Expect(registry.installFirstDistribution([DistributionPluginInstall(next, expected, true)]).isOk())
+            } finally { expected.close() }
+            let reopened = owners.openRegistry(root + "/settings", root)
+            let installed = reopened.get(id).getOrThrow()
+            try { @Expect(installed.enabled && installed.descriptor.textEquals(PluginDescriptorText.Version, "2.0.0")) }
+            finally { installed.close() }
+            let prior = registryFixtureRecord(reopened.rollback(id))
+            try { @Expect(!prior.enabled && prior.descriptor.textEquals(PluginDescriptorText.Version, "1.0.0")) }
+            finally { prior.close() }
+        } finally { owners.close(); remove(root, recursive: true) }
+    }
+}

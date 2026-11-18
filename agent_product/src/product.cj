@@ -1284,25 +1284,6 @@ public class ProductRuntime {
         )
     }
 
-    /// First-install distribution assembly only. Publishing each import with
-    /// its own writer fence rewrites the whole lock N times; this registers
-    /// every default under ONE fence while keeping the same materialisation
-    /// and content checks per package. Any failure rolls the batch back.
-    public func importDistributionPluginsInFirstAssembly(
-        roots: Array<String>,
-        emptyRegistryBeforeImport: Bool
-    ): PluginRegistryResult<Unit> {
-        if (!emptyRegistryBeforeImport) {
-            return productRegistryFailure83(pluginRuntime, "plugin.distribution_assembly_not_first",
-                "distribution assembly requires an empty registry")
-        }
-        match (pluginRuntime.importLocalBatch(roots, PluginInstallScope.User)) {
-            case PluginRegistryResult.Err(error) => PluginRegistryResult.Err(error)
-            case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(())
-        }
-    }
-
-
     public func importPluginSource(
         sessionId: SessionId,
         source: ProductPluginSourceRequest,
@@ -1463,32 +1444,15 @@ public class ProductRuntime {
         }
     }
 
-    // First-install distribution assembly only. Enabling each default one at a
-    // time re-mounts every previously enabled plugin and repeats its handshake,
-    // so N defaults cost O(N^2) resident generations. Publish every enable to
-    // the Registry first, then mount each plugin exactly once through the same
-    // activation path.
-    public func enableDistributionPluginsInFirstAssembly(
-        namespaces: Array<String>,
-        emptyRegistryBeforeImport: Bool
-    ): PluginRegistryResult<Unit> {
-        // The caller observes emptiness BEFORE its own imports; re-checking
-        // here would always see the just-registered defaults.
-        if (!emptyRegistryBeforeImport) {
-            return productRegistryFailure83(pluginRuntime, "plugin.distribution_assembly_not_first",
-                "distribution assembly requires an empty registry")
-        }
-        // One writer fence for the whole batch: each plugin still verifies its
-        // own dependencies and content against its own lock, but the fence
-        // acquisition and full lock rewrite happen once instead of N times.
-        match (pluginRuntime.setEnabledBatch(namespaces, true, PluginInstallScope.User)) {
+    // Registry publishes final enablement before the first process starts.
+    // An interruption before publication leaves the registry empty; after
+    // publication the ordinary startup path sees the requested records.
+    func installFirstDistribution(entries: Array<DistributionPluginInstall>): PluginRegistryResult<Unit> {
+        match (pluginRuntime.installFirstDistribution(entries)) {
             case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(_) => ()
         }
-        // No concurrent reader exists here: the Product is not published yet
-        // and the broker answers only `ping` until `frontend180` waits on this
-        // assembly. Mounting independent packages can therefore overlap; any
-        // failure still aborts the whole assembly and rolls the batch back.
+        // Keep all process starts outside the Registry mutex and writer fence.
         let records = pluginRuntime.startupEffectiveRecords()
         try {
             let size = records.size

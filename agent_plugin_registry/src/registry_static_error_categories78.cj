@@ -1364,6 +1364,7 @@ func pluginRegistryStaticCode78(code: String): String {
         case "plugin.dependencies_object_required" => "plugin.dependencies_object_required"
         case "plugin.dependency_invalid" => "plugin.dependency_invalid"
         case "plugin.dependency_lock_invalid" => "plugin.dependency_lock_invalid"
+        case "plugin.distribution_assembly_not_first" => "plugin.distribution_assembly_not_first"
         case "plugin.document_backend_invalid" => "plugin.document_backend_invalid"
         case "plugin.document_binding_invalid" => "plugin.document_binding_invalid"
         case "plugin.document_cancelled" => "plugin.document_cancelled"

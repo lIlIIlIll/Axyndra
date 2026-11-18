@@ -145,9 +145,7 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
         let registryEmpty = existingRecords.size == 0
         existingRecords.close()
         let enabledNamespaces = ArrayList<String>()
-        let firstAssemblyRoots = ArrayList<String>()
-        let firstAssemblyDescriptors = ArrayList<OwnedPluginPackageDescriptor>()
-        let firstAssemblyEnabled = ArrayList<Bool>()
+        let firstAssembly = ArrayList<DistributionPluginInstall>()
         for (index in 0..descriptors.size) {
             let descriptor = descriptors[index]; let entry = entries.items[index]
             // This decision needs only presence, not copied records or their
@@ -158,11 +156,9 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 continue
             }
             if (registryEmpty) {
-                // Deferred: the whole tail is imported by one batch
-                // once every missing root is known.
-                firstAssemblyRoots.add(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)))
-                firstAssemblyDescriptors.add(descriptor)
-                firstAssemblyEnabled.add(entry.field("enabled").getOrThrow().asBool())
+                firstAssembly.add(DistributionPluginInstall(
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)),
+                    descriptor, entry.field("enabled").getOrThrow().asBool()))
             } else {
                 let installed = match (product.importLocalPlugin(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)), PluginInstallScope.User)) {
                     case PluginRegistryResult.Ok(value) => value
@@ -174,37 +170,16 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 }
             }
         }
-        if (!firstAssemblyRoots.isEmpty()) {
-            match (product.importDistributionPluginsInFirstAssembly(firstAssemblyRoots.toArray(), registryEmpty)) {
-                case PluginRegistryResult.Err(error) => return distributionError(error.code)
-                case PluginRegistryResult.Ok(_) => () }
-            let installedRecords = productRegistryRecords83(product.pluginSnapshots())
-            for (index in 0..firstAssemblyDescriptors.size) {
-                let descriptor = firstAssemblyDescriptors[index]
-                var installedMatches = false
-                for (record in installedRecords where productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))) {
-                    if (productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) ||
-                        productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version))) {
-                        return distributionError("distribution.package_changed") }
-                    installedMatches = true
-                    if (firstAssemblyEnabled[index]) {
-                        enabledNamespaces.add(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))
-                    }
-                }
-                if (!installedMatches) { return distributionError("distribution.package_invalid") }
+        if (!firstAssembly.isEmpty()) {
+            match (product.installFirstDistribution(firstAssembly.toArray())) {
+                case PluginRegistryResult.Err(error) => try { return distributionError(error.code) } finally { error.close() }
+                case PluginRegistryResult.Ok(_) => ()
             }
         }
-        if (!enabledNamespaces.isEmpty()) {
-            if (registryEmpty) {
-                match (product.enableDistributionPluginsInFirstAssembly(enabledNamespaces.toArray(), registryEmpty)) {
-                    case PluginRegistryResult.Err(error) => return distributionError(error.code)
-                    case PluginRegistryResult.Ok(_) => () }
-            } else {
-                for (namespace in enabledNamespaces) {
-                    match (product.setPluginEnabled(namespace, true, PluginInstallScope.User)) {
-                        case PluginRegistryResult.Err(error) => return distributionError(error.code)
-                        case PluginRegistryResult.Ok(_) => () }
-                }
+        for (namespace in enabledNamespaces) {
+            match (product.setPluginEnabled(namespace, true, PluginInstallScope.User)) {
+                case PluginRegistryResult.Err(error) => return distributionError(error.code)
+                case PluginRegistryResult.Ok(_) => ()
             }
         }
         match(workspaceDefault){case Some(value)=>

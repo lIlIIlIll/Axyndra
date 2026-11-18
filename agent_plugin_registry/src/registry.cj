@@ -147,6 +147,20 @@ func pluginScopeRank(record: RawProductPluginRecord): Int64 {
     0
 }
 
+// The caller keeps its preflight descriptor open through publication. It is
+// an expected identity, not evidence about the newly materialized package.
+public struct DistributionPluginInstall {
+    let root: String
+    let expected: OwnedPluginPackageDescriptor
+    let enabled: Bool
+
+    public init(root: String, expected: OwnedPluginPackageDescriptor, enabled: Bool) {
+        this.root = root
+        this.expected = expected
+        this.enabled = enabled
+    }
+}
+
 private class PluginRegistryWriterOwnedPhase101 {
     var pendingMemory: ?PluginRegistryStateMemory = None<PluginRegistryStateMemory>
 }
@@ -718,6 +732,70 @@ public open class PluginRegistry {
                 }
             }, { result: PluginImportResult<Unit> => ownValueResult78(result) })
         } finally { registryLock.unlock() }
+    }
+
+    public func installFirstDistribution(entries: Array<DistributionPluginInstall>): PluginRegistryResult<Unit> {
+        registryLock.lock()
+        try {
+            requireOpenLocked()
+            withWriterFence<Unit, Unit>({ => installFirstDistributionLocked(entries) },
+                { result: PluginImportResult<Unit> => ownValueResult78(result) })
+        } finally { registryLock.unlock() }
+    }
+
+    private func installFirstDistributionLocked(entries: Array<DistributionPluginInstall>): PluginImportResult<Unit> {
+        // The writer fence has reloaded both scopes. A concurrent operator
+        // import must win even if the caller previously observed no records.
+        // Uninstall leaves rollback history, not a current record. The
+        // transaction never edits those revisions; writeLock preserves them.
+        if (!records.isEmpty()) {
+            return pluginImportError("plugin.distribution_assembly_not_first", "distribution assembly requires an empty registry")
+        }
+        if (entries.isEmpty()) { return PluginImportResult.Ok(()) }
+        let scope = PluginInstallScope.User
+        var published = false
+        deferLockWrite = true
+        try {
+            for (entry in entries) {
+                let installed = match (importLocalLocked(entry.root, scope)) {
+                    case PluginImportResult.Ok(record) => record.descriptor
+                    case PluginImportResult.Err(error) => return PluginImportResult.Err(error)
+                }
+                if (!entry.expected.textEquals(PluginDescriptorText.Root, entry.root) ||
+                    !entry.expected.textEquals(PluginDescriptorText.Namespace, installed.namespace) ||
+                    !entry.expected.textEquals(PluginDescriptorText.Version, installed.version) ||
+                    !entry.expected.textEquals(PluginDescriptorText.ContentDigest, installed.contentDigest)) {
+                    return pluginImportError("distribution.package_changed", "materialized distribution package differs from preflight")
+                }
+            }
+            // All dependencies are registered before the first enable. Check
+            // disabled package bytes too; unlike an explicit user disable,
+            // a distribution default of false leaves explicitlyDisabled false.
+            for (index in 0..entries.size) {
+                let record = records[index]
+                if (entries[index].enabled) {
+                    match (setEnabledInScope(record.descriptor.namespace, true, Some(scope))) {
+                        case PluginImportResult.Err(error) => return PluginImportResult.Err(error)
+                        case PluginImportResult.Ok(_) => ()
+                    }
+                } else {
+                    match (inspectLocked(record.descriptor.root)) {
+                        case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
+                        case PluginPackageResult.Ok(actual) =>
+                            if (record.contentLock == "" || actual.contentDigest != record.contentLock) {
+                                return pluginImportError("plugin.integrity_mismatch", "plugin snapshot content differs from its lock")
+                            }
+                    }
+                }
+            }
+            deferLockWrite = false
+            let result = writeLock(scope)
+            match (result) { case PluginImportResult.Ok(_) => published = true; case _ => () }
+            result
+        } finally {
+            deferLockWrite = false
+            if (!published) { records.clear() }
+        }
     }
 
     public func cachedSource(
