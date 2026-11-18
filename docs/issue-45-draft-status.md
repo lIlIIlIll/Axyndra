@@ -4817,3 +4817,11 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Release and first model request | E1693 passed assembly and selected entrypoints for all three distributions on the earlier `3621283b9a` behavior. E1702 identified repeated manifest reads before the first request on an older package. | No final release, timing or matched-baseline pass. |
 
 [Source and Store evidence](implementation/plan-execution-reliability.md#temporary-registry-views-during-import-and-enablement). PR #49 remains Draft.
+
+E1709 subsequently passed the nine production stages on `17de1ffda2`. E1680 on the earlier Coding package retained the 45-second Todo timeout and an empty Run and document delta; it does not qualify a successful save. E1673's experimental encoder never reached its timed profile and is not part of this build.
+
+E1718 passed the independent Program budget and cancellation/recovery contracts on the same Native ELF as E1708. The retained Stores confirm successful nested read-view Receipts in the isolated path; the aggregate failure remains open. E1715 built no final Product test executable within 900 seconds. E1720 bound the earlier concurrent-output and physical-reap comparison to unchanged final runtime sources; this does not cover packaged startup.
+
+E1721 found no additional Run in the Todo operator's other Store. In E1722 the terminal displayed the exact `/todo edit` draft, then `loading todo` through the 12-second observation after Enter. No editor or first save was observed; this was a diagnostic on the earlier E1659 package, not a final-package pass.
+
+At `d51eaef287`, E1727–E1731 separate the read-only workspace's real Registry fence failure (`-EROFS`) from the TUI's stale `loading todo` status. The parent required a resize to show the error; the rebuilt App showed it without another key, left both Stores unchanged and exited normally. E1733 also passed the missing-selection public PTY case without a model call. These results verify error presentation, not successful first save, complete Product or final release acceptance.
