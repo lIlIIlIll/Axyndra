@@ -4744,3 +4744,14 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Matched performance | E1624: both packages passed the seven original absolute checks. First-call and steady IPC P95 remained slower on the candidate. | Not performance parity or full release acceptance. |
 
 [Artifact IDs, measured results and remaining gates](implementation/plan-execution-reliability.md#workspace-only-skills-and-the-five-second-request). PR #49 remains Draft.
+
+### Distribution preflight and application checks
+
+| Requirement | Evidence | Status |
+| --- | --- | --- |
+| Validate all distribution defaults before import | `ca37b52342` closes inspected descriptors on every return and checks workspace tool names without exporting their metadata. E1625–E1626 built nine stages and assembled all three distributions. E1632 rejected four invalid manifests without publishing records or starting work. | Preflight verified; not full release acceptance. |
+| First local model response in five seconds | E1627 and E1633 reached a prepared model attempt but neither dispatched it nor sent an HTTP request. In E1633 the Run started 3.193 s after process launch. | Failed. GC is not an established cause of this timeout. |
+| Core and Product | E1628's private import change did not resolve `read_view.output_capacity`. E1629: 483 of 1,099 Product cases passed, six faulted in the fixed Runtime's GC path, 610 were not run. | Core failed; GC cases deferred, not passed. |
+| Application flows | E1635 passed ten real PTY cases. E1634 Coding passed workspace read, rebind and disable, but the broker crashed during re-enable. Its saved core places the fault in Runtime GC. | PTY checks passed; complete packaged CLI did not. |
+
+[Executable identities, timing boundary and private evidence](implementation/plan-execution-reliability.md#distribution-preflight-and-the-dispatch-boundary). PR #49 remains Draft.
