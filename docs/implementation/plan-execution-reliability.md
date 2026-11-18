@@ -10572,3 +10572,11 @@ At `69635e1a40`, the host preserves the scheduler's typed refusal separately fro
 | One call, one slot | 1 | 1 | 0 | Run failed; root Receipt records `budget.tool_calls_exceeded`, limit 1, observed 2. No retry or fallback. |
 
 E1611 ran the original unsplit `--core-and-recovery-contract` on the same ELF (`33648ea2feb62e235e039a9692b00ddf1b0f0c814af587fdb29fdebe5b097a59`). It failed earlier: `host.process.readview` reported `read_view.output_capacity`, and the grep and Program ancestors both recorded failure. The two stores contained 35 Runs and 69 Operations, and one Run and four Operations, respectively. Both analysis copies passed `quick_check`; all six captured source images retained their hashes. No change to the bank or DATA return rules. Evidence: `core1609-budgeted-caller/`, `core1610-scheduler-budget/`, `core1611-complete-scheduler/`.
+
+### Program cancellation and Registry copy ownership
+
+E1615 ran `--program-cancellation-recovery-contract` with the E1610 executable and the original installed Workspace fixture. The cancelled Run retained four terminal Operations: the first workspace read and its read-view child completed; the second workspace read was rejected; the Program root failed. The command returned successfully in 6.989 s. Nine original SQLite files across three stores retained their hashes; `quick_check` passed on the analysis copies.
+
+A separate debugger run of the unsplit contract aborted in libc on `schmon` with `double free or corruption (!prev)` before the export breakpoint. Its store contained 13 Runs and 15 Operations. No export observation or GC call chain was captured. This run neither supersedes E1611 nor establishes a cause. Evidence: `pressure1615/`.
+
+E1616 examined the existing E1594 refusal core, not a rerun. With one Product live, 248 Registry copy payments matched open leases in two ledgers of the refusing bank. Using the E1594 ledger IDs: 177 payments declared 1,786,304 bytes on ledger 1; 71 declared 713,664 bytes on ledger 2. None had an attached error list. The bank had 146,961,488 bytes charged and refused 16,777,216 bytes of growth against a 150,994,944-byte limit. The 2,499,968 bytes of *live* copy invoices are neither available for refund nor a measurement of their contribution to historical high water. Evidence: `registry1616-frozen/census.json`.

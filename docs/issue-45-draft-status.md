@@ -4729,3 +4729,7 @@ GC remains deferred with zero pass credit. PR #49 remains Draft.
 E1609–E1610: `69635e1a40` fixes a one-call Run that completed after its own scheduler refused a nested read. The focused Native contract passed: one failed root Receipt, zero child admissions, one model attempt, and both original request DATA acknowledgements. The seven-call control completed on one slot.
 
 E1611: the complete Core/recovery contract still fails on `read_view.output_capacity` before reaching that test. [Canonical receipts and exact ELF](implementation/plan-execution-reliability.md#native-program-scheduler-refusal). PR #49 remains Draft.
+
+### Program cancellation and Registry copy ownership
+
+E1615 passed the focused Program cancellation/recovery contract on the E1610 Native executable. A separate debug run of the unsplit contract aborted before the intended observation; it is unclassified, not GC-deferred. E1616 identified 248 live Registry copy payments in a *prior* capacity-refusal core. Neither result resolves the full Core gate. [Receipts and ownership counts](implementation/plan-execution-reliability.md#program-cancellation-and-registry-copy-ownership).
