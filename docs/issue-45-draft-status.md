@@ -4836,3 +4836,14 @@ At `d51eaef287`, E1727–E1731 separate the read-only workspace's real Registry 
 E1735 assembled Coding, Minimal and Full for `d51eaef287`. All eleven assembly and selected entrypoint checks passed: clean environment on all three, Skills and setup on Coding/Full, and the empty offline host on Minimal. This qualifies packaging, not the full release or the five-second model request. [Package and Todo evidence](implementation/plan-execution-reliability.md#packaged-entrypoints-and-the-todo-save-approval).
 
 E1728 did not reproduce the successful E1726 first save on the subsequent E1711 package, even with a writable workspace Registry directory. The load Run completed. The save Run received a user approval for its context read, but no decision for the Workflow Todo operation; it was cancelled before execution. No document was written. This differs from failure to acquire the read-only fence.
+
+### Todo save approval, Product inventory and timed profile
+
+| Requirement | Result | Evidence and limit |
+| --- | --- | --- |
+| First Todo save | Fixed the fullscreen editor covering the pending save approval. The parent reached the editor, accepted the text and then hid the card; resizing did not expose it. The corrected host showed both save cards, accepted four distinct user decisions across load and save, and wrote `todo` revision 1. | E1745/E1751 → E1752/E1753. Permanent public PTY case `T016/todo-editor-save-approvals` failed on the parent and passed on the corrected unbundled App (E1755). No model attempt; not a complete release pass. |
+| Product contracts | The rebuilt test executable enumerated 1,100 cases. Of 477 executed, 474 passed and three crashed. Direct Runtime GC evidence exists for those three samples. | E1742/E1748; 623 were not run. GC remains deferred, never passed. |
+| First local model profile | Original five-second gate failed. In the separately timed run, all nine plugins were installed, but Run admission took about 4.15 s. One context read completed; no model attempt or HTTP request occurred. | E1736/E1740 on `d51eaef287`. Second profile not reached. |
+| Matched performance | The candidate passed both independent absolute gates but was slower to start `/help` and `/plugins inspect` than the fixed base. | E1738/E1749 on `d51eaef287`; [measurements and sample counts](implementation/plan-execution-reliability.md#matched-package-and-worker-measurements). |
+
+Unsplit Core, the five-second model response, full application flows and final release remain unaccepted. PR stays Draft.

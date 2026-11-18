@@ -812,6 +812,19 @@
           ]
         },
         {
+          "id": "todo-editor-save-approvals",
+          "execution": "todo-editor",
+          "status": "runnable",
+          "stimuli": [
+            "install the actual Workflow package and select its Todo contribution",
+            "open, edit, and save using the four visible Allow once prompts"
+          ],
+          "assertions": [
+            "the Todo editor does not cover the pending approval choices",
+            "four user decisions produce the first durable Todo revision without a model request"
+          ]
+        },
+        {
           "id": "todo-editor-unprovided",
           "execution": "todo-editor",
           "status": "runnable",

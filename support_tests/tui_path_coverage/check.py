@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import closing
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -2232,7 +2233,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
             "kind": "text",
             "chunks": ["todo-provider-response"],
             "event_delay": 0.02,
-        }, [] if case["variant"]["id"] == "todo-editor-unprovided" else ["todo-provider-check"]
+        }, ["todo-provider-check"] if case["variant"]["id"] == "todo-editor" else []
     if execution == "provider-errors":
         return "responses", {
             "case_id": case["case_id"],
@@ -5423,7 +5424,58 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
 
 
 
+def run_todo_save_approvals(case_run: CaseRun) -> None:
+    sys.path.insert(0, str(ROOT / "support_tests"))
+    from tui_workflow_operator import prepare_todo
+
+    supplied = os.environ.get("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE")
+    if not supplied:
+        raise EnvironmentBlock("the Todo approval case requires the built Workflow package")
+    prepare_todo(case_run.candidate, case_run.home, case_run.workspace, Path(supplied).resolve(strict=True))
+    case_run.launch(extra_args=["--approval-mode", "manual"])
+    case_run.wait_screen(("Enter send",), "ready")
+    case_run.send("edit-draft", bracketed_paste(b"/todo edit"))
+    case_run.wait_screen(("/todo edit",), "edit-draft-visible")
+    case_run.send("submit-edit", b"\r")
+
+    def approve(phase: str, title: str) -> None:
+        frame = strip_ansi(case_run.wait_screen(
+            (f"Approval · {title} · Awaiting your decision", "Allow once", "Deny"), phase))
+        if "Ctrl+S save" in frame:
+            raise CaseFailure(f"Todo editor covers the pending {phase} approval")
+        case_run.send(f"{phase}-allow-once", b"\r")
+
+    approve("load-read", "Host.context.read")
+    approve("load-command", "Plugin.axyndra:workflow.todo")
+    case_run.wait_screen(("Todo Markdown", "Ctrl+S save"), "editable")
+    case_run.send("edit-task", bracketed_paste(b"- [ ] review saved task\n"))
+    case_run.wait_screen(("Todo Markdown", "review saved task"), "draft-visible")
+    case_run.send("save-task", b"\x13")
+    approve("save-read", "Host.context.read")
+    approve("save-command", "Plugin.axyndra:workflow.todo")
+    case_run.wait_screen(("Saved ", "phase(s)", "task(s)"), "saved")
+    case_run.normal_exit()
+    database = case_run.home / "sessions" / "state.db"
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        documents = connection.execute(
+            "SELECT revision, payload FROM plugin_documents WHERE document_key='todo'").fetchall()
+        decisions = connection.execute(
+            "SELECT a.decision, a.source, e.tool_id FROM approvals a "
+            "JOIN operation_effect_records e ON e.operation_id=a.operation_id ORDER BY a.rowid").fetchall()
+        attempts = connection.execute("SELECT count(*) FROM model_attempts").fetchone()[0]
+    case_run.assertions.check("first_save", len(documents) == 1 and documents[0][0] == 1
+                              and "review saved task" in documents[0][1], "first approved save writes the draft at revision one")
+    case_run.assertions.check("actual_user_approvals", decisions == [
+        ("approved", "user", tool) for tool in ("host.context.read", "plugin.axyndra:workflow.todo") * 2],
+        "both reads and both Workflow commands received an actual user decision")
+    case_run.assertions.check("local_only", attempts == 0 and not read_jsonl(case_run.requests_path),
+                              "editing and saving do not invoke a model")
+
+
 def run_todo_editor(case_run: CaseRun, _: dict[str, Any]) -> None:
+    if case_run.variant["id"] == "todo-editor-save-approvals":
+        run_todo_save_approvals(case_run)
+        return
     case_run.launch()
     case_run.wait_screen(("Enter send",), "first-frame")
     if case_run.variant["id"] == "todo-editor-unprovided":

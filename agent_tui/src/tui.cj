@@ -7009,7 +7009,6 @@ class AgentScreen <: TerminalFrameProvider {
                     frame.setCursor(composer.cursorPosition(inputArea))
                 }
         }
-        todos.renderEditor(frame, theme)
         if (ask.editorActive()) {
             ask.renderEditor(
                 frame,

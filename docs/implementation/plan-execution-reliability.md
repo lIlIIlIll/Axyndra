@@ -10769,3 +10769,35 @@ E1735 used the E1709 production builds and the E1730 rebuild of TUI and App for 
 E1711–E1714 tested the **earlier** `17de1ffda2` package. All four invalid-distribution cases returned the expected diagnostic without partial publication. The original first local profile invocation timed out at five seconds; the second did not run. Both arms passed the original performance gate, but the candidate was slower to launch `/help` (P95 469.714 ms versus 163.534 ms on base) and `/plugins inspect` (477.572 ms versus 153.462 ms). Do not substitute these measurements for the final package.
 
 On that earlier Coding package E1728 timed out at the original 45 s Todo golden deadline with the workspace Registry writable. E1744 compared its captured Store with the E1726 passing control. Both load Runs completed. In the failing save Run, `host.context.read` had a user approval and completed Receipt; `plugin.axyndra:workflow.todo` had **no approval decision** and its Receipt recorded cancellation before execution. No `host.plugin.document` child or Todo revision was created. The frontend's last recorded state had both the editor and an approval present. This locates the wait; it does not establish whether a key was offered or consumed. Nine surviving owned processes required cleanup and none remained afterwards. Both analysis copies passed `quick_check`. Evidence: `todo1728/todo-first-save/` and `todo1744-bound/`.
+
+### The fullscreen Todo editor hid real approval controls
+
+E1739 completed the original Todo golden flow on the unmodified `d51eaef287` Coding package in 6.627 s. The actual terminal exposed a different result: in E1745, load succeeded and the pasted task was visible, but after Ctrl-S the editor covered the save approval. In E1751 a resize still showed the editor; the Store had a `waiting_approval` context read, two earlier user decisions and no document. Neither test submitted an unseen decision.
+
+The main render branch already paints the fullscreen editor and returns when editing is allowed. When an approval is pending, that branch must leave the screen to the approval card. A second, unconditional editor render painted over the card. Removing only that duplicate leaves the draft, keyboard routing, authorization and operation lifecycle unchanged.
+
+E1752 rebuilt the Native TUI and App using the pinned SDK; App SHA-256 `3cf54157011c0328a73b6c92786063c4f237b122b77d74e4d321e1c5031b6a8d`. E1753 applied the production ELF packaging transformation and used that host in the otherwise unchanged Coding distribution. The actual PTY showed all four distinct pending approval cards. Each Enter was bound to the visible card and a unique pending canonical Operation. Two Runs completed; each had completed `host.context.read`, `plugin.axyndra:workflow.todo` and `host.plugin.document` Receipts. Four user approvals produced the edited text at `todo` revision 1. No model was called; the terminal exited normally and process custody closed. This is not evidence of a new release assembly.
+
+E1755 ran the permanent `T016/todo-editor-save-approvals` matrix case with the same Workflow package in two fresh operator homes. It matched the title and pending state on **the same card**, not the name on an earlier decided transcript card. On the parent it stopped at the covered save-read approval; on the corrected App it saw both save approvals, the saved status, four durable user decisions and the actual document. Both arms closed process custody. E1754's earlier test oracle matched a stale title and is not credited.
+
+### Matched package and worker measurements
+
+E1738 compared base `4d88fa6072` and `d51eaef287` with the original fixture, pinned SDK, identical sample counts and separate package/operator roots. Both passed their absolute thresholds. Units below are microseconds unless marked bytes; pairs are P50 / P95. E1749 binds the measurements to the corresponding inputs and package hashes.
+
+| Metric | Samples per arm | Base | Candidate |
+| --- | ---: | ---: | ---: |
+| `/help` startup | 20 | 136,507 / 163,534 | 413,128 / 420,107 |
+| `/plugins inspect` startup | 20 | 137,741 / 153,462 | 433,604 / 444,136 |
+| `/help` peak RSS (bytes) | 20 | 91,455,488 / 92,012,544 | 55,173,120 / 55,767,040 |
+| `/plugins inspect` peak RSS (bytes) | 20 | 91,574,272 / 92,000,256 | 55,406,592 / 56,098,816 |
+| Extension cold activation | 12 | 51,241 / 121,579 | 43,204 / 60,416 |
+| Extension first call | 12 | 2,057 / 2,796 | 433 / 688 |
+| Extension steady IPC | 240 | 2,059 / 5,981 | 185 / 260 |
+| Extension host RSS (bytes) | 12 | 18,284,544 / 29,368,320 | 15,179,776 / 20,725,760 |
+| Cancellation after 100 ms trigger | 12 | 125,473 / 129,979 | 119,851 / 126,218 |
+
+E1741/E1749 also bound the separately measured overlapping two-worker path. At 256 and 32,768 output bytes, respectively, span P95 (12 pairs) changed from 10,081 to 689 µs and from 95,113 to 2,856 µs. Progress-delivery P95 (24 events) changed from 1,377 to 513 µs and from 2,155 to 1,200 µs. Physical reap P95 (24 workers) changed from 10,755 to 10,427 µs and from 11,077 to **20,066 µs**. An improved span is not a faster large-output reap or evidence of DATA return.
+
+E1736 still failed the first local-model profile's original five-second deadline. E1740 preserved that deadline and the original operator installation without an extra bootstrap. The Run started about 4,150 ms after process launch; the fixture sent SIGKILL at 5,001 ms. A context read completed, but the Store had no model attempt and neither loopback listener received a request. The second profile did not start. E1737 separately passed all four invalid-package/policy controls with no partial registry or execution-state publication.
+
+E1742 rebuilt Product without the old test ELF. It enumerated 1,100 cases and ran 477: 474 passed, three crashed, and 623 were not run. The passing subset includes the genuine 63 MiB seed, not the complete Memory workflow. Two crash logs directly showed Runtime GC root traversal. For `PluginRuntimeContractTests.piExtensionApiHostRestartsAfterPluginCrash`, E1748 bound the original worker's system core to Product ELF `22fa6ced9a832d3f724023cd76e329474c93e1e9f757273bd9741599ff4c6c39`; its faulting stack includes `GCTib::ForEachBitmapWord`, `Mutator::GcPhaseEnum` and `TracingCollector::VisitStackRoots`. All three samples are deferred GC failures, not passes. Private evidence: `unit1742/`, `product1748-core/`, `matched1749-bound/`, `profilephase1740/`, `todopty1753/` and `matrix1755/`.
