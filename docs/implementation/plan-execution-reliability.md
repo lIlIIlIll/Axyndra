@@ -10801,3 +10801,45 @@ E1741/E1749 also bound the separately measured overlapping two-worker path. At 2
 E1736 still failed the first local-model profile's original five-second deadline. E1740 preserved that deadline and the original operator installation without an extra bootstrap. The Run started about 4,150 ms after process launch; the fixture sent SIGKILL at 5,001 ms. A context read completed, but the Store had no model attempt and neither loopback listener received a request. The second profile did not start. E1737 separately passed all four invalid-package/policy controls with no partial registry or execution-state publication.
 
 E1742 rebuilt Product without the old test ELF. It enumerated 1,100 cases and ran 477: 474 passed, three crashed, and 623 were not run. The passing subset includes the genuine 63 MiB seed, not the complete Memory workflow. Two crash logs directly showed Runtime GC root traversal. For `PluginRuntimeContractTests.piExtensionApiHostRestartsAfterPluginCrash`, E1748 bound the original worker's system core to Product ELF `22fa6ced9a832d3f724023cd76e329474c93e1e9f757273bd9741599ff4c6c39`; its faulting stack includes `GCTib::ForEachBitmapWord`, `Mutator::GcPhaseEnum` and `TracingCollector::VisitStackRoots`. All three samples are deferred GC failures, not passes. Private evidence: `unit1742/`, `product1748-core/`, `matched1749-bound/`, `profilephase1740/`, `todopty1753/` and `matrix1755/`.
+
+### Published Todo host and scoped Core export evidence
+
+E1756 assembled `c4cdd224f7` using the fixed SDK. Coding and Full have packaged host SHA-256 `7af6c6d0f5ea892192bb8c214d2439c15610bd9b7cdec6dc22ddc26664e4661b` (identical to E1753), with nine and seventeen bundled plugins respectively. Minimal has zero plugins and host SHA-256 `57b3c5ac8ee5b3073447d80067405acc4aa791dc4c22149630571c23536ea24f`. All three assembly and clean-environment checks, both Skills and setup checks, and the Minimal empty-offline check exited zero with closed process custody. Evidence: `release1756/summary.json`.
+
+E1765 used a private diagnostic build of the same source, instrumenting only the two transitions that can first mark a Prepared metadata owner as having an unknown consumer. It ran `--program-budget-contract`, not unsplit Core. The original success and exhausted-budget assertions passed. All eight first-export stacks joined to distinct canonical Operation IDs:
+
+| First export | Operations | Receipts |
+| --- | --- | --- |
+| Legacy executor reads the frozen plan | Two Program roots | One completed; the exhausted-budget root failed |
+| Broker checks a readonly delegation child | One Workspace grep and two reads | Three completed |
+| Broker checks the host service child | Three read-view children | Three completed |
+
+No first transition came from the authorization-move exception path in this run. The original database, WAL and SHM retained their hashes; a separate copy passed `quick_check`. The capture thread and file descriptors closed. This identifies where the references were first handed out, not the last consumer, the size of a safe refund, or the cause of the unsplit run's rejection. Neither the observer nor a change to accounting was shipped. Evidence: `export1765/correlation.json`.
+
+E1766 ran the actual E1756 Coding package without substituting its host. The private operator preserved all 249 regular files from the retained fixture. Four visible pending approval cards, each bound to a different canonical Operation, accepted real terminal input. Both Runs completed with one completed Receipt each for `host.context.read`, `plugin.axyndra:workflow.todo` and `host.plugin.document`. The first durable `todo` revision contained the pasted task; no model attempt occurred. The terminal exited normally with closed process custody. E1757 separately passed ten real Provider/MCP PTY cases on the unbundled App, including cancellation and reuse, Ctrl-C, timeout, malformed UTF-8 and incomplete EOF. Evidence: `todopty1766/` and `pty1757/`.
+
+E1758 failed at the original five-second `profile-one/shared-model` invocation; profile two did not run. One owned process survived the test and required cleanup; none remained or needed reaping afterwards. E1759 passed all four original negative distribution controls on this Coding package. E1760 did not measure performance: benchmark compilation lacked the locked offline `yjson` checkout.
+
+E1761 privately replaced full Registry list publication with a mutex-protected predicate for existence and emptiness. The experiment built Registry, Product and App, and E1763 assembled Coding and passed its Skills, clean-environment and setup checks. E1764 still timed out at the first profile's original five seconds. The fixture also encountered a nonempty plugin directory during timeout cleanup. E1769 read a separate copy of the three surviving SQLite files: one cancelled Run, one completed context read and no model attempts; the original files retained their hashes. This experiment is withdrawn, not a fix for startup. Evidence: `presence1761/`, `coding1763/`, `profiles1764/`, `profile1769-stored/`.
+
+### Final Coding package measurements
+
+E1768 reran the original performance gate on the E1756 Coding host (`7af6c6d0f5ea`), using the locked offline dependency. The fixture, benchmark source, SDK, workspace layout, clean operator state and time limits match the measured fixed base `4d88fa6072`. Both candidate stages exited normally with no surviving process. The base was not sampled again. Values are P50 / P95; times are milliseconds and memory is bytes.
+
+| Measurement | Samples per arm | Fixed base | `c4cdd224f7` |
+| --- | ---: | ---: | ---: |
+| Extension cold start | 12 | 51.241 / 121.579 | 40.512 / 100.369 |
+| First extension call | 12 | 2.057 / 2.796 | 0.418 / 0.556 |
+| Steady extension IPC | 240 | 2.059 / 5.981 | 0.179 / 0.249 |
+| Extension host RSS | 12 | 18,284,544 / 29,368,320 | 15,298,560 / 20,795,392 |
+| Cancellation, including 100 ms trigger | 12 | 125.473 / 129.979 | 125.628 / 126.753 |
+| `/help` cold start | 20 | 136.507 / 163.534 | 406.190 / 490.516 |
+| `/help` peak RSS | same 20 | 91,455,488 / 92,012,544 | 52,084,736 / 52,518,912 |
+| `/plugins inspect` cold start | 20 | 137.741 / 153.462 | 438.551 / 459.655 |
+| `/plugins inspect` peak RSS | same 20 | 91,574,272 / 92,000,256 | 51,863,552 / 52,277,248 |
+
+The lower CLI memory peaks did not translate to faster startup. E1772 matched all 238 tracked inputs for the earlier two-worker comparison; its slower large-output close-to-reap P95 (20.066 ms versus 11.077 ms) still applies. For E1742 Product, 1,495 tracked inputs in 26 dependency packages were unchanged. The five changed tracked files are outside that suite and the worker closure: one TUI source, two PTY harness files and two ledgers. The existing 474 Product passes, three directly attributed GC crashes and 623 unrun cases keep their original status. E1762 built the withdrawn Registry experiment only; the build hit its 900 s limit and no test ran. Evidence: `matched1768/`, `closure1772/`, `unit1762/`.
+
+E1771 retained the actual failed profile's Store and watched the shipped and installed package directories during the original invocation. Run admission was 4.352 s after launch; the original timeout sent its signal at 5.000 s. Before admission the observer recorded 1,143 installed and 239 shipped file-open notifications. All nine shipped manifests were opened twice; the shipped notifications spanned 3.665–4.240 s. Installed opens continued after admission. Events can coalesce and are timestamped on collection: these are not hash counts, CPU samples or a causal allocation of the delay. The Store contained one cancelled Run, a rejected `host.context.read` Receipt and zero attempts; the local server received no HTTP request. One sleeping descendant required cleanup, after which none remained. Evidence: `phase1771/`.
+
+E1767 passed architecture and dependency pins but omitted the import path needed by the selected Python tests. E1770 supplied the original selector's import path; all 131 tests passed on `c4cdd224f7`. None of these gates establishes full Core, Product or release acceptance.

@@ -4847,3 +4847,13 @@ E1728 did not reproduce the successful E1726 first save on the subsequent E1711 
 | Matched performance | The candidate passed both independent absolute gates but was slower to start `/help` and `/plugins inspect` than the fixed base. | E1738/E1749 on `d51eaef287`; [measurements and sample counts](implementation/plan-execution-reliability.md#matched-package-and-worker-measurements). |
 
 Unsplit Core, the five-second model response, full application flows and final release remain unaccepted. PR stays Draft.
+
+At `c4cdd224f7`, E1756 assembled Coding (9 plugins), Minimal (0) and Full (17). All eleven assembly and selected entrypoint checks passed, including clean-environment startup for each distribution. Coding and Full contain the exact host ELF exercised in E1753. This qualifies the package builds, not every packaged flow.
+
+E1765 localized the first Prepared metadata exports for all eight Operations in the independent Program budget case. Seven had completed Receipts; the exhausted-budget Program had a failed Receipt. Neither outcome proves the exported references returned. Unsplit Core capacity remains unresolved.
+
+E1766 passed first save on the **unmodified E1756 Coding package** in a real PTY: four visible user approvals, two completed Runs, six completed Receipts, `todo` revision 1 with the pasted text, no model attempt, and normal exit with closed process custody. E1757 independently passed all ten local Provider/MCP terminal cases on the unbundled App. E1758 still failed the original five-second first profile; one process required cleanup. The E1761 scalar Registry experiment also timed out and was not adopted.
+
+E1768 completed the seven matched performance cases on the published Coding host. Both absolute gates passed; `/help` and `/plugins inspect` still took about three times the fixed base's P95 despite lower peak RSS. E1772 confirmed the earlier two-worker and Product measurements apply to unchanged dependency sources; it adds no new test pass. E1767/E1770 passed architecture, dependency pins and 131 selected Python regressions.
+
+In E1771 the final package admitted the first local profile's Run 4.35 s after launch. The five-second deadline expired before any model attempt or HTTP request. All nine shipped package manifests were opened before admission, as were all nine installed manifests; this identifies work in the timed window, not its CPU cost. [Measurements, custody and remaining limits](implementation/plan-execution-reliability.md#final-coding-package-measurements). Full Core, the first model response and full release acceptance remain open.
