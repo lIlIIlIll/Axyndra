@@ -96,6 +96,8 @@ class RpcPhysicalProcessTests(unittest.TestCase):
             self.assertTrue(actual['physical_leader_returned'])
             self.assertTrue(actual['surviving_owned_processes'])
             self.assertFalse(actual['remaining_after_cleanup'])
+            self.assertTrue(process_watch.process_tree_reaped(actual))
+            self.assertFalse(process_watch.process_custody_closed(actual))
             time.sleep(.6)
             self.assertFalse(marker.exists())
 
@@ -310,6 +312,7 @@ class RpcParentCleanupWitnessTests(unittest.TestCase):
         value=self.worker()
         value['parent_cleanup']['unknown']=[dict(pid=22,reason='unobservable_actual_parent_child')]
         self.assertFalse(process_watch._actual_clean_worker_receipt(value,100.0,2))
+        self.assertFalse(process_watch.process_tree_reaped(value))
         self.assertEqual(value['unknown_process_observations'],[])
         self.assertEqual(value['parent_cleanup']['unknown'][0]['pid'],22)
 

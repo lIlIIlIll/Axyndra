@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get("AXYNDRA_BINARY", ROOT / "target/release/bin/agent_app"))
 sys.path.insert(0, str(ROOT / "support_tests"))
+sys.path.insert(0, str(ROOT / "scripts"))
 from provider_operator import install_provider, write_provider_grants
+from rpc_case_process_watch import process_custody_closed, process_tree_reaped, run_host_case
 
 
 def handler_for(expected_key: str, reply: str):
@@ -164,35 +167,47 @@ def invoke(home: Path, model: str) -> str:
     return process.stdout
 
 
-def main() -> None:
+def run_profiles(home: Path) -> None:
     first = start_server("first-secret", "profile-one-ok")
     second = start_server("second-secret", "profile-two-ok")
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="axyndra-provider-profiles-"
-        ) as directory:
-            home = Path(directory)
-            write_configuration(
-                home,
-                first.server_port,
-                second.server_port,
-            )
-            install_profile_grants(home, first.server_port, second.server_port)
-            assert "profile-one-ok" in invoke(
-                home,
-                "profile-one/shared-model",
-            )
-            assert "profile-two-ok" in invoke(
-                home,
-                "profile-two/shared-model",
-            )
+        write_configuration(home, first.server_port, second.server_port)
+        install_profile_grants(home, first.server_port, second.server_port)
+        assert "profile-one-ok" in invoke(home, "profile-one/shared-model")
+        assert "profile-two-ok" in invoke(home, "profile-two/shared-model")
     finally:
         first.shutdown()
         second.shutdown()
         first.server_close()
         second.server_close()
+
+
+def main() -> None:
+    # The fixture parent, not the timed-out CLI, owns the temporary operator.
+    # A broker in a separate session may still be writing there after CLI exit.
+    with tempfile.TemporaryDirectory(prefix="axyndra-profile-watch-") as diagnostics:
+        home = Path(tempfile.mkdtemp(prefix="axyndra-provider-profiles-"))
+        log = Path(diagnostics) / "profiles.log"
+        result = run_host_case([sys.executable, str(Path(__file__).resolve()),
+                                "--profiles-worker", str(home)], log, 180)
+        failed = result["exit_code"] != 0 or not process_custody_closed(result)
+        if failed and log.exists():
+            with log.open("rb") as stream:
+                shutil.copyfileobj(stream, sys.stderr.buffer)
+        if not process_tree_reaped(result):
+            raise RuntimeError(f"profile process cleanup unconfirmed; retained operator: {home}")
+        shutil.rmtree(home)
+        if failed:
+            print(f"profile fixture failed; surviving children at worker exit: "
+                  f"{len(result['surviving_owned_processes'])}; none remain after cleanup", file=sys.stderr)
+            raise SystemExit(result["exit_code"] or 1)
     print("provider profiles blackbox passed")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 3 and sys.argv[1] == "--profiles-worker":
+        run_profiles(Path(sys.argv[2]))
+    elif len(sys.argv) == 1:
+        main()
+    else:
+        raise SystemExit("unexpected provider profile arguments")

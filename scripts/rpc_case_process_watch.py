@@ -363,15 +363,21 @@ def parent_cleanup_closed(value):
             not value['unknown'])
 
 
-def process_custody_closed(value):
-    """Require both actual owners; an absent or pending call is not a return."""
+def process_tree_reaped(value):
+    """Safe to remove the fixture tree, even if a surviving child needed cleanup."""
     true_fields=('physical_leader_returned','physical_watcher_returned','subreaper_restored')
-    empty_fields=('surviving_owned_processes','remaining_after_cleanup',
-                  'unreaped_owned_processes','unknown_process_observations')
+    empty_fields=('remaining_after_cleanup','unreaped_owned_processes','unknown_process_observations')
     return (type(value) is dict and all(value.get(key) is True for key in true_fields)
         and value.get('watcher_timed_out') is False
+        and value.get('watcher_fault') is None
+        and type(value.get('surviving_owned_processes')) is list
         and all(type(value.get(key)) is list and value[key] == [] for key in empty_fields)
         and parent_cleanup_closed(value.get('parent_cleanup')))
+
+
+def process_custody_closed(value):
+    """A reaped tree that required forced cleanup is not a clean case return."""
+    return process_tree_reaped(value) and not value['surviving_owned_processes']
 
 
 def _actual_clean_worker_receipt(result, execution_deadline, seconds):
