@@ -4765,3 +4765,14 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Five-second first response and release | E1638's private scalar lookup still timed out with no HTTP request; the change was not promoted. E1646 built nine production stages on the watchdog fix. | No packaged response or full release credit from these checks. |
 
 [Core invoices, comparison arms and artifact identities](implementation/plan-execution-reliability.md#extension-watchdog-and-unsplit-core). PR #49 remains Draft; GC is deferred, not passed.
+
+### Physical cleanup and packaged response
+
+| Requirement | Evidence | Status |
+| --- | --- | --- |
+| Physical worker return | E1647, E1655–E1657: `107a75f2e9` wakes the cleanup waiter only after the real cleanup path. With 32 KiB outputs, close/reap P95 fell from 28.975 to 20.066 ms; base was 11.077 ms. The 13 selected Native regressions passed. | Wait fixed; large-output base parity not reached. No DATA refund. |
+| First authorized model response | E1648 packaged all three distributions. E1649 Coding admitted the Run but sent no loopback HTTP request before the five-second deadline. E1654 instead crashed during traced broker setup with a GC stack. | Deadline failed; the setup crash does not explain it. |
+| Core capacity and recovery | E1652 reconciled all 146,541,976 charged bytes in the E1639 refusal, including the live attachment and invoking checkpoint. All 55 unknown Prepared consumers mapped to distinct SQL Operations. | No unsupported refund; unsplit gate still failed. |
+| Native Product and release parity | E1650: both packaged arms passed seven absolute gates, but candidate product startup was slower. E1653: 476 passed, seven GC failures and 616 not run out of 1,099. | Pre-cleanup evidence only. Deferred GC is not a pass. |
+
+[Source identities, original deadlines and comparison arms](implementation/plan-execution-reliability.md#physical-cleanup-retained-core-invoices-and-packaged-response). Full acceptance remains open; keep PR #49 Draft.
