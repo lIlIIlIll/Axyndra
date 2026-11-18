@@ -10378,3 +10378,58 @@ The stores cannot establish whether the UI sent or received the final key.
 Later runs on the same operator home were excluded. All six original
 DB/WAL/SHM hashes remained unchanged; both analysis copies passed
 `quick_check`. Evidence: `todo1590-historical-approval/journal-boundary.json`.
+
+### Read-view budget refusal and first-request approval
+
+E1592 (`80e47d24`) returns four more direct fixture requests after their
+callers finish. The reopened store uses only the Run ID. The eleven caller
+acknowledgements pass; the complete aggregate still fails inside
+`workspace.grep`. Evidence: `public1592-four-callers/`.
+
+E1594 captured the E1592 executable at the first refused output reservation.
+Under the bank lock, `LogicalJsonOwnerBudget.acquire` requested 16,777,216
+bytes for a 131,072-byte raw output limit. The bank had charged 146,961,488
+of 150,994,944 bytes across four slots. The request exceeded capacity by
+12,743,760 bytes. No fifth slot was created.
+
+Two request owners remained at that stop. Their Run IDs matched the
+`durable-product-program-thread` and `e5-03-authorize-valid` store rows.
+The first still had a Core frame and a consumer. The second had neither,
+but lacked an application acknowledgement. The fixture submits on one
+application session and approves on another. The resumed session cannot
+acknowledge the original session's DATA. All 55 inspected Prepared metadata
+owners recorded an unknown consumer. None of these observations authorizes
+a refund. Evidence: `public1594-readview-refusal/`.
+
+E1595 returned an executor error for the known refusal. That prototype
+incorrectly produced an unknown child outcome and was discarded.
+E1596 (`d0e8e2ae`) reports a failed tool result before `openChannel` and
+requires cleanup before publishing it. The canonical child Receipt now
+records `read_view.output_capacity`, `budget_exceeded`, `retryable=false`
+and `fallback_allowed=false`. Both ancestors record failure. The main store
+contains 35 Runs and 69 Operations; the artifact-failure store contains one
+Run and four Operations. Both analysis copies passed `quick_check`, and all
+six original images kept their hashes. The complete aggregate exited one.
+Evidence: `public1595-readview-category/` and `public1596-readview-prelaunch/`;
+final Core ELF `eb20e2cd3883d6f064c2bfccb8dded7d29e58b0b0d9944626d770c53d931c33a`.
+
+E1593 measured 12 cancellations per build with identical extension bytes,
+a 100 ms cancellation trigger and a 4 s invocation deadline. Each call
+reported progress with a live worker, returned `process.cancelled`, and had
+no worker PID at return. The post-close check observes absence; it does
+not timestamp the worker's exit. Evidence: `matched1593-cancellation-reap/`.
+
+| Time from cancellation trigger (µs) | Baseline P50 | Baseline P95 | Candidate P50 | Candidate P95 |
+| --- | ---: | ---: | ---: | ---: |
+| Typed return | 17,672 | 27,519 | 20,042 | 40,081 |
+| First PID check after close | 17,683 | 27,533 | 20,056 | 40,101 |
+
+E1597 used the E1584 Coding package and a copy of the E1486 operator's
+245 durable files. The installed package lock and service grants remained
+unchanged. With loopback-only networking, the original five-second
+`invoke` returned after 4.52 s with `approval required`. The canonical
+Operation requested `host.context.read` for the Skills provider. Its Receipt
+was cancelled with no approval decision. There were no model attempts or
+HTTP requests, and the second profile did not run. Evidence:
+`profile1597-existing-operator/`. This is a separate failure from the E1486
+timeout and the E1500 fresh-setup GC crash.

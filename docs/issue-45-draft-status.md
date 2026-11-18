@@ -4684,3 +4684,13 @@ both sizes. This supplements E1586, not the Native first-request gate.
 
 [Artifacts, scope and failure boundaries](implementation/plan-execution-reliability.md#fresh-packages-core-caller-return-and-todo-save-approval).
 GC remains deferred with zero pass credit. PR #49 remains Draft.
+
+### Read-view budget refusal and first-request approval
+
+| Evidence | Result | Remaining gap |
+| --- | --- | --- |
+| E1592, E1594, E1596: complete Core | Eleven direct caller returns pass. The canonical `host.process.readview` Receipt now records `budget_exceeded`, with retry and fallback disabled. The refusal precedes worker launch. | The read-only Program still fails. At the E1594 refusal the bank lacked 12,743,760 bytes for the new output reservation. |
+| E1593: physical cancellation | In both matched builds, all 12 cancellations returned `process.cancelled` and the worker PID was absent at return. | Candidate trigger-to-result P95 was 40,081 µs versus 27,519 µs on baseline. No latency pass. |
+| E1597: existing Coding operator | The first `--print` command exited at 4.52 s for lack of approval to run `host.context.read`. The store recorded zero model attempts and the two local servers received no requests. | The profile did not reach the model. This does not clear the earlier timeout or the fresh-install GC failure. |
+
+[Source versions, receipts and measurements](implementation/plan-execution-reliability.md#read-view-budget-refusal-and-first-request-approval).
