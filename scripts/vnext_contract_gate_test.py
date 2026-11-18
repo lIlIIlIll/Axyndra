@@ -16,7 +16,8 @@ class ProductCaseExecutionTests(unittest.TestCase):
             gate.run_product_contracts(Path("/fixture/wrapper"), Path("/fixture/product"), Path("/fixture"), {})
         self.assertEqual([command[-1] for command in commands[:-1]], [
             "--registry-worker-refusal-contract", "--plugin-acquisition-contract",
-            "--ast-plugin-contract", "--ast-edit-plugin-contract", "--core-and-recovery-contract",
+            "--ast-plugin-contract", "--ast-edit-plugin-contract",
+            "--program-budget-contract", "--core-and-recovery-contract",
         ])
         self.assertEqual(commands[-1][1], "/fixture/scripts/readonly_bridge_lifecycle_gate.py")
         self.assertIn("/fixture/target/release/bin/main", commands[-1])

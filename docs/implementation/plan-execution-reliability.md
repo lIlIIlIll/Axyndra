@@ -10559,3 +10559,16 @@ processes. Comparisons below are P95; times are milliseconds.
 The two `matched1607-final-performance/` arm summaries contain the P50s,
 P95s, executable hashes and process receipts. Lower RSS and passing
 absolute ceilings do not offset the observed latency regressions.
+
+### Native Program scheduler refusal
+
+E1609 exposed a false success in the original one-call Program budget scenario. The scheduler refused the nested read before admitting a child. The root tool wrote a failed Receipt, but the Run made a second model attempt and completed. The seven-call, one-slot control succeeded.
+
+At `69635e1a40`, the host preserves the scheduler's typed refusal separately from worker output. A worker-supplied error string cannot set it. Both real request callers retain the original request custody when substituting the test budget. Each caller acknowledges its DATA only after its frame returns; the check requires both the application and Core returns.
+
+| E1610 focused Run | Model attempts | Operations | Derived admissions | Outcome |
+| --- | ---: | ---: | ---: | --- |
+| Seven calls, one slot | 2 | 7 | 6 | Run completed; all seven Receipts completed. |
+| One call, one slot | 1 | 1 | 0 | Run failed; root Receipt records `budget.tool_calls_exceeded`, limit 1, observed 2. No retry or fallback. |
+
+E1611 ran the original unsplit `--core-and-recovery-contract` on the same ELF (`33648ea2feb62e235e039a9692b00ddf1b0f0c814af587fdb29fdebe5b097a59`). It failed earlier: `host.process.readview` reported `read_view.output_capacity`, and the grep and Program ancestors both recorded failure. The two stores contained 35 Runs and 69 Operations, and one Run and four Operations, respectively. Both analysis copies passed `quick_check`; all six captured source images retained their hashes. No change to the bank or DATA return rules. Evidence: `core1609-budgeted-caller/`, `core1610-scheduler-budget/`, `core1611-complete-scheduler/`.

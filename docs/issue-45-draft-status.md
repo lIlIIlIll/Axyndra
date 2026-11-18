@@ -4723,3 +4723,9 @@ GC remains deferred with zero pass credit. PR #49 remains Draft.
 | E1607: baseline versus final Coding | Both arms passed all seven original performance records. First-call P95 was 2.277 ms on baseline versus 9.788 ms on candidate; steady IPC P95 was 3.387 versus 10.075 ms. Worker P95 RSS decreased. | Passing absolute ceilings does not establish latency parity or complete release acceptance. |
 
 [Selection, process evidence and matched measurements](implementation/plan-execution-reliability.md#current-product-cases-and-matched-coding-performance).
+
+### Native Program scheduler refusal
+
+E1609–E1610: `69635e1a40` fixes a one-call Run that completed after its own scheduler refused a nested read. The focused Native contract passed: one failed root Receipt, zero child admissions, one model attempt, and both original request DATA acknowledgements. The seven-call control completed on one slot.
+
+E1611: the complete Core/recovery contract still fails on `read_view.output_capacity` before reaching that test. [Canonical receipts and exact ELF](implementation/plan-execution-reliability.md#native-program-scheduler-refusal). PR #49 remains Draft.

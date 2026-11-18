@@ -113,6 +113,7 @@ def run_product_contracts(wrapper: Path, package: Path, repo: Path, env: dict[st
         "--plugin-acquisition-contract",
         "--ast-plugin-contract",
         "--ast-edit-plugin-contract",
+        "--program-budget-contract",
         "--core-and-recovery-contract",
     ):
         run([str(wrapper), "target/release/bin/main", flag], cwd=package, env=env)
