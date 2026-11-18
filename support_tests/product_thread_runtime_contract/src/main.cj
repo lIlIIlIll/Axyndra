@@ -122,7 +122,14 @@ class ProgramCancellationReadExecutor <: ToolExecutor {
     }
 }
 
-func runProgramCancellationRecoveryContract(root: String, workspace: String): Unit {
+func runProgramCancellationRecoveryContract(root: String, parentWorkspace: String): Unit {
+    // Workspace-scope installs survive a Product close. This independent
+    // Product needs the same read inputs, not the preceding Product's registry.
+    let workspace = root + "/program-cancel-recovery-workspace"
+    Directory.create(workspace + "/src", recursive: true)
+    for (name in ["alpha.cj", "beta.cj"]) {
+        File.writeTo(workspace + "/src/" + name, File.readFrom(Path(parentWorkspace + "/src/" + name)))
+    }
     let sessionId = SessionId("product-program-cancel-recovery")
     let stateRoot = root + "/program-cancel-recovery-state"
     let gate = NativeProgramAdmissionCancellationGate(sessionId.value)
@@ -3319,6 +3326,21 @@ main(): Int64 {
         let alphaSource = "fn alpha() {}\n// SymbolAnchor: alpha\n"
         File.writeTo(workspace + "/src/alpha.cj", alphaSource.toArray())
         File.writeTo(workspace + "/src/beta.cj", "fn beta() {}\n\n// SymbolAnchor: beta\n".toArray())
+        if (workerArguments.contains("--program-cancellation-recovery-contract")) {
+            let previous = openProduct(config: ProductConfig(settingsRoot: root + "/prior-settings",
+                stateRoot: root + "/prior-state", workspaceRoot: workspace, fixture: true,
+                asyncEnabled: false)).value().getOrThrow()
+            try {
+                match (previous.importLocalPlugin(getVariable("AXYNDRA_WORKSPACE_PLUGIN_PACKAGE").getOrThrow(),
+                    PluginInstallScope.Workspace)) {
+                    case PluginRegistryResult.Ok(record) => record.close()
+                    case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))
+                }
+            } finally { previous.close().value().getOrThrow() }
+            runProgramCancellationRecoveryContract(root, workspace)
+            println("independent Program cancellation/recovery contract passed")
+            return 0
+        }
         // The no-argument entry retains the original aggregate scenario for
         // diagnosing shared-bank pressure from legacy Raw metadata exports.
         // The focused gate also runs every independent case in a fresh process.
