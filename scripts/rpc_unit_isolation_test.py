@@ -68,6 +68,7 @@ class QualifiedRpcResultTests(unittest.TestCase):
 
 
 import sys
+import signal
 import os
 import tempfile
 import time
@@ -86,6 +87,25 @@ class RpcPhysicalProcessTests(unittest.TestCase):
             self.assertFalse(actual['surviving_owned_processes'])
             self.assertFalse(actual['remaining_after_cleanup'])
 
+    def test_adopted_exit_is_attributed_to_child_not_successful_leader(self):
+        parent = """import os
+from pathlib import Path
+pid = os.fork()
+if pid == 0:
+    os._exit(1)
+os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+start = Path(f'/proc/{pid}/stat').read_bytes().rsplit(b')', 1)[1].split()[19]
+print(pid, int(start))
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / 'raw.log'
+            actual = run_case([sys.executable, '-c', parent], log, 2)
+            pid, start = log.read_text().split()
+            self.assertEqual(actual['adopted_wait_statuses'],
+                             [dict(pid=int(pid), start=start, exit_code=1, core_dumped=False)])
+            self.assertEqual(actual['exit_code'], 0)
+            self.assertTrue(process_watch.process_custody_closed(actual))
+
     def test_actual_setsid_child_cannot_escape_returned_parent(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); marker = root / 'survived'
@@ -99,6 +119,9 @@ class RpcPhysicalProcessTests(unittest.TestCase):
             self.assertTrue(process_watch.process_tree_reaped(actual))
             self.assertFalse(process_watch.process_custody_closed(actual))
             time.sleep(.6)
+            child, = actual['surviving_owned_processes']
+            self.assertEqual(actual['adopted_wait_statuses'], [
+                dict(pid=child['pid'], start=child['start'], exit_code=-signal.SIGKILL, core_dumped=False)])
             self.assertFalse(marker.exists())
 
     def test_actual_timeout_returns_leader_and_detached_child(self):

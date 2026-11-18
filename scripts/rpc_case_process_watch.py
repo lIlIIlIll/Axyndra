@@ -180,9 +180,10 @@ def reap_adopted(owned, exclude=None):
         if now['state'] not in ('Z', 'X', 'x'):
             continue
         try:
-            actual, _ = os.waitpid(pid, os.WNOHANG)
+            actual, status = os.waitpid(pid, os.WNOHANG)
             if actual:
-                reaped.append(actual)
+                reaped.append(dict(pid=actual, start=now['start'], exit_code=os.waitstatus_to_exitcode(status),
+                                   core_dumped=os.WIFSIGNALED(status) and os.WCOREDUMP(status)))
         except ChildProcessError:
             # This identity already returned to another real wait owner.
             pass
@@ -244,7 +245,8 @@ def _cleanup(process, owned, root_pid=None, root_start=None):
         time.sleep(.005)
     final = discover(owned, root_pid, root_start)
     unknown.extend(final['unknown'])
-    return dict(cleanup_exact_pids=sorted(set(cleanup)), reaped_adopted_pids=sorted(set(reaped)),
+    return dict(cleanup_exact_pids=sorted(set(cleanup)), reaped_adopted_pids=sorted({row['pid'] for row in reaped}),
+        adopted_wait_statuses=reaped,
         remaining_after_cleanup=final['live'], unreaped_owned_processes=final['returned'], unknown=unknown)
 
 
@@ -267,7 +269,8 @@ def _run_worker(command, log, seconds, execution_deadline, cwd=None, purpose='ca
     owned, process, survivors, unknown = {}, None, [], []
     naturally_reaped = []
     code, timed_out, fault = 1, False, None
-    cleanup = dict(cleanup_exact_pids=[], reaped_adopted_pids=[], remaining_after_cleanup=[], unreaped_owned_processes=[], unknown=[])
+    cleanup = dict(cleanup_exact_pids=[], reaped_adopted_pids=[], adopted_wait_statuses=[],
+                   remaining_after_cleanup=[], unreaped_owned_processes=[], unknown=[])
     changed = False; restored = False
     started = time.monotonic()
     deadline = min(execution_deadline, started + seconds)
@@ -340,11 +343,12 @@ def _run_worker(command, log, seconds, execution_deadline, cwd=None, purpose='ca
         code = 124
     elif fault or unknown or survivors or cleanup['remaining_after_cleanup'] or cleanup['unreaped_owned_processes'] or not returned or not restored:
         code = code or 1
+    waits = naturally_reaped + cleanup['adopted_wait_statuses']
     return dict(exit_code=code, timed_out=timed_out, observed_processes=len(owned),
         surviving_owned_processes=survivors, remaining_after_cleanup=cleanup['remaining_after_cleanup'],
         unreaped_owned_processes=cleanup['unreaped_owned_processes'],
         cleanup_exact_pids=cleanup['cleanup_exact_pids'],
-        reaped_adopted_pids=sorted(set(naturally_reaped + cleanup['reaped_adopted_pids'])),
+        reaped_adopted_pids=sorted({row['pid'] for row in waits}), adopted_wait_statuses=waits,
         unknown_process_observations=unknown, watcher_fault=fault, subreaper_restored=restored,
         physical_leader_returned=returned, case_process_seconds=seconds, wall_seconds=time.monotonic()-started,
         execution_deadline_monotonic=execution_deadline, effective_execution_deadline_monotonic=deadline,
