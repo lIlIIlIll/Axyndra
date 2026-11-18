@@ -10671,3 +10671,29 @@ E1652 attributed the full E1639 refusal without executing Core again. The same R
 E1651 failed to rebuild Native Product at the original 900 s limit after two setup errors; its old ELF earned no credit. E1653 completed a separate incremental build in 284 s with the real C fixture. ELF `e92603668203363104b73b6b3fdb24bc1648a0d7bc01d81700e94a11a93d6910` enumerated 1,099 cases. Of 483 previously eligible cases, 476 passed and seven failed in Runtime GC; 616 were not run. Three `CheckAndPush` leaves have pinned Runtime caller evidence, two reports reached `GCTib` from that leaf, and one stopped in `GCTib`. For the installed-model case, the saved core on the faulting LWP shows `BaseObject::GetSize → WCollector::ForwardObjectExclusive → Mutator::GCPhasePreForward`. No failed case counts as passed. This Product result applies before `107a75f2e9`.
 
 Private evidence: `pair1647/`, `cancel1647/`, `release1648/`, `profiles1649/`, `matched1650/`, `unit1651/`, `frozen1652/`, `unit1653/`, `trace1654/`, `teardown1655/`, `close1656/`, `ext1657/`. Unsplit Core, the five-second model response, complete Product/application flows and final release acceptance remain open.
+
+### Released-package controls and first-install interruption
+
+E1658 rebuilt the nine production stages at `107a75f2e9`. E1659 assembled Coding, Minimal and Full (9, 0 and 17 plugins). All three clean-environment checks, both 46-Skill checks, both setup checks and the six Minimal empty/offline cases passed. Coding and Full packaged ELF: `e1bfcf97ef08efb40eed696075907fedd2082f912bfb1c0a7b4f513c8f0697e9`; Minimal: `cafd2c320c45cb78e149d0679d8f77a14a9b448315e5a1e37f2af3d19283bb8d`.
+
+E1662 compared the E1659 Coding package with base `4d88fa6072` under the pinned SDK and the same fixture. Both passed the seven original absolute gates. Durations below are P95, in milliseconds; cancellation includes the 100 ms trigger.
+
+| Measurement | Base | E1659 Coding |
+| --- | ---: | ---: |
+| Cold extension activation | 44.109 | 60.213 |
+| First worker call | 2.151 | 0.638 |
+| Steady worker IPC | 10.780 | 0.239 |
+| Worker RSS (bytes) | 29,220,864 | 20,766,720 |
+| Cancellation | 128.312 | 126.156 |
+| Product `/help` | 136.488 | 423.232 |
+| Product inspection | 125.991 | 441.727 |
+
+E1660 traced a separate E1648 Coding invocation after successful setup: 1,051 opens of installed package files, including 68 manifest opens, from +420 to +4,900 ms. There was no Run, model attempt or HTTP request before the five-second deadline. Verification under the Registry writer fence is distinct from the constructor's earlier observation. E1661 on E1659 failed **before** the timer: the broker disconnected during fresh `plugin list`; the faulting thread reached `GCTib::ForEachBitmapWord` through `Mutator::GcPhaseEnum` and root tracing. The surviving User lock had all nine manifest defaults imported but none enabled or explicitly disabled. No policy, context, workspace or service grant was published. This isolates a durable import/enable gap, not the cause of E1649's timed failure. Existing imports without enablement are valid operator choices and cannot be retroactively distinguished from this interruption.
+
+E1665 joined the E1639 captured static debt lists to 65 distinct reservations, totaling 14,098,896 bytes of declared custody **already included** in E1652. Thirteen catalog owners still had a live share, including one without the original configuration alias. The three tool snapshots had eight, one and one shares. No construction frame, outstanding construction work or failed backing in those lists established a return. E1668 rebuilt and ran unsplit Core on `107a75f2e9`, ELF `c9138eeadaee494ef6042542b799fbdc59a9fef8cfcdc428f1b583631d59cca8`. The complete contract failed at the Program inspection assertion. Six retained Store files exposed 69 and four Operations in the two Stores; the failing `workspace.grep` and nested `host.process.readview` both report `read_view.output_capacity`. These rows do not measure the incremental invoice at this refusal.
+
+E1663's Native Product build exceeded the original 900 s deadline; its pre-existing ELF earned no credit. E1666 passed 131 Python tests, the architecture gate and dependency pins. E1667 passed ten real PTY scenarios, including all three provider wire formats, cancellations followed by reuse, timeout, malformed streams and MCP; mouse and resize were not exercised. E1671 separately failed the packaged Todo golden at the original 45 s deadline. No frame or new Run, approval, Operation or document reached its oracle. The frontend returned only after timeout, and the outer watcher had to reap a surviving process. There is no captured GC stack for this failure. A previous timeout after approval became pending was a different observation.
+
+E1664 is a private encoder control, not a shipped fix. Eight runs per arm reproduced identical 41,548-byte canonical request bytes; median encode time fell from 24.119 to 2.514 ms. E1669 built all nine production stages with just this experimental encoder. Neither result demonstrates a packaged model response.
+
+Private evidence: `prod1658/`, `release1659/`, `request1660/`, `profiles1661/`, `matched1662/`, `unit1663/`, `canon1664/`, `roots1665/`, `static1666/`, `pty1667/`, `core1668/`, `canonprod1669/`, `todo1671/`.

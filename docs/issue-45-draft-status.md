@@ -4776,3 +4776,14 @@ E1615 passed the focused Program cancellation/recovery contract on the E1610 Nat
 | Native Product and release parity | E1650: both packaged arms passed seven absolute gates, but candidate product startup was slower. E1653: 476 passed, seven GC failures and 616 not run out of 1,099. | Pre-cleanup evidence only. Deferred GC is not a pass. |
 
 [Source identities, original deadlines and comparison arms](implementation/plan-execution-reliability.md#physical-cleanup-retained-core-invoices-and-packaged-response). Full acceptance remains open; keep PR #49 Draft.
+
+### Packaged controls and first-install interruption
+
+| Requirement | Evidence at `107a75f2e9` unless stated | Status |
+| --- | --- | --- |
+| Production and actual terminals | E1658–E1659: nine production stages, all three releases and selected packaged checks passed. E1666–E1667: 131 Python tests, architecture, pins and ten real PTY cases passed. | Selected coverage; not complete release acceptance. |
+| Fresh install and first model response | E1661: GC during public bootstrap left nine imported, disabled records and no defaults/grants. Neither timed request started. E1660 traced a different, older package timing out before admission. | Fresh-install lock publication gap identified. No five-second response credit; existing disabled records must not be re-enabled automatically. |
+| Core capacity | E1668: unsplit Core failed Program inspection; the persisted nested read and grep both reported `read_view.output_capacity`. E1665 found continuing shares in the earlier captured Core; no return authority. | Failed; keep the budget and actual-consumer requirement. |
+| Product, Todo and baseline | E1663 exceeded its original Native build bound. E1671: packaged Todo timed out without a new Run or document; watcher cleanup was needed. E1662: seven absolute gates passed in both arms, but candidate startup remained slower. | Native Product, Todo and release parity remain open. |
+
+[Artifact identities, original deadlines and baseline measurements](implementation/plan-execution-reliability.md#released-package-controls-and-first-install-interruption). Deferred GC is not a pass. Keep PR #49 Draft.
