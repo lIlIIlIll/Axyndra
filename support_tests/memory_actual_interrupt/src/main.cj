@@ -31,7 +31,6 @@ func configure(product:ProductRuntime,root:String):ProductPluginRecord{
             objectValue([ValueField("key",textValue("journal")),ValueField("read",boolValue(true)),ValueField("write",boolValue(true))])])),
             ValueField("preparation_provider",textValue("prepare_window_document")),ValueField("payload_references",boolValue(true)),ValueField("read_windows",boolValue(true)),
             ValueField("effect_from_intents",boolValue(true)),ValueField("tool_payload_limits",OrdinaryToolPayloadLimits(name).value())]))}
-    Directory.create(root+"/settings/plugins",recursive:true)
     File.writeTo(root+"/settings/plugins/documents.json",stringifyUnifiedJson(objectValue([
         ValueField("version",integerValue(1)),ValueField("plugins",listValue([objectValue([
             ValueField("namespace",textValue(supportRegistryDescriptor96(record,"namespace"))),ValueField("package_digest",textValue(supportRegistryDescriptor96(record,"content_digest"))),

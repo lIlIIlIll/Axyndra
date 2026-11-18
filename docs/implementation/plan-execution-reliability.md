@@ -10884,3 +10884,26 @@ E1783–E1785 tested one change: when joining a frontend, retain the same `Agent
 E1788 stopped that candidate at the repeated frontend cleanup call **after** the second reply and the final RPC client's return. In the saved debugger snapshot, the concrete socket close had returned, but output frame 1 had no matching return (`expectedOutput=1`, `returnedOutput=0`). The peer still held the physical write frame, its payment and its original failure. The CLI still held its write payment; the frontend still held the exact error presented to the collector, with `failureConsumed180=false`. This is a missing output acknowledgement, not an unpaid *additional* request or evidence of a GC crash. The snapshot cannot establish how many bytes the disconnected client received. Evidence: `heldsnapshot1788/binding.json` and `heldsnapshot1788/verified-fields.json`.
 
 E1789 preserves adopted-child termination evidence in the standard Linux case receipt. Each `adopted_wait_statuses` entry records the PID, original process start time, exit code (negative for a signal) and kernel core-dump flag from the watcher's existing `waitpid`. No new wait, signal or acceptance condition is used. `python3 -m unittest -v rpc_unit_isolation_test` from `scripts/` passed all 48 tests, including a successful leader with an adopted child that exited 1, and a detached live child that needed `SIGKILL`. Their outcomes remain distinct even though both trees were ultimately reaped. Evidence: `adoptedwait1789/final-green.txt`.
+
+E1794 read the same E1788 snapshot offline. The retained physical frame was the ordinary `run.cancelled` error on output frame 1 (97 encoded bytes staged, not a count of bytes delivered). The CLI failure helper had no pending, staged or retiring caller share. The broker had since captured a separate failure consumer, and the peer retained a `SocketException`. Preventing a new offer before it starts is a different problem from releasing this already-staged output. Evidence: `callerflags1794/caller.json` and `callerflags1794/offer.json`.
+
+### Matched real-terminal frame measurements
+
+E1790 used the same trace-compatible PTY runner for the fixed base and the E1756 Coding package. Coding passed the original five 10,000-row scenarios, three runs each, with no silence fallback. Base timed out waiting for a frame-complete key event after Enter in search; it produced no complete five-scenario report. E1793 measured the four mutually observable scenarios separately on base, using the same harness and limits, and paired those results with E1790's candidate samples. The older trace identifies the completing event; the newer trace also identifies coalesced inputs. No active stalls or forced process cleanup occurred in either four-scenario arm.
+
+| P95 (ms) | Fixed base | Coding |
+| --- | ---: | ---: |
+| First visible frame | 199.33 | 184.10 |
+| Key repeat | 54.58 | 6.97 |
+| Stream update | 47.92 | 7.95 |
+| Resize | 67.44 | 11.75 |
+
+Base exceeded the key-repeat and resize limits; Coding passed both. These are fixture PTY timings, not provider startup or a matched search result. Evidence: `matchedpty1790/summary.json` and `matchedframes1793/summary.json`.
+
+### Memory rollback at the real precommit boundary
+
+E1791 found that the standalone `support_tests/memory_actual_interrupt` build lacked a lock for its direct `yjson` dependency. E1792 supplied the existing reviewed pin and built the fixture, but seed failed before its first Memory call: successful Registry import had already created `settings/plugins`, which the fixture tried to create again. The fixture now carries its own lock for the same reviewed `yjson` commit and writes the configuration into the directory created by import. No production permission, journal code or SQL assertion changed.
+
+E1795 rebuilt the fixture with the fixed SDK and ran the original seed/interruption/retry scenario against the E1756 Full package's Native Memory binary. E1796 ran the final checker on that same fixture ELF (`1daa0b0f45f1d18b9d61ae330d4c39a5ab367a47e424a73245176a11923fdcde`); it also requires the parent's `wait` to report `SIGKILL` at the precommit barrier. Inside the transaction the observer saw three events, revision 2 and the Completed Receipt. An independent SQL reader still saw the original history. After the kill the uncommitted Receipt was absent; a fresh canonical retry yielded two rows at revisions 1 and 2, three events, and two completed Derived Receipts including the seed. The checker made no SQL writes and the outer process watcher confirmed cleanup.
+
+A copy of the final database, WAL and SHM passed `quick_check`. The interrupted Operation still had state `executing` and no Receipt after reopen; the retry was a **different** Operation. This proves atomic rollback and an independent successful retry, not automatic settlement of the interrupted Operation or the complete 63 MiB application workflow. Evidence: `memorycommit1796/operator/actual-evidence.json` and `memorycommit1796/durable-state.json`.

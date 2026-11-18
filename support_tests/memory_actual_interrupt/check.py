@@ -5,7 +5,7 @@ This runner never fabricates a Source, receipt, SQL write, or business result.
 All SQL connections below are observation-only. Keep the fresh fixture root
 and evidence after a failure; a failed/prepared root is never overwritten.
 """
-import argparse,hashlib,json,os,sqlite3,subprocess,time
+import argparse,hashlib,json,os,signal,sqlite3,subprocess,time
 from pathlib import Path
 
 def rows(database,sql,parameters=()):
@@ -43,7 +43,9 @@ def main():
             # rows or Receipt even while the observed owner sees all three.
             assert facts(database)==before
             assert not rows(database,'SELECT id FROM operation_receipts WHERE id=?',(witness['receipt_id'],))
-            process.kill();process.wait(timeout=30)
+            process.kill()
+            interrupted_exit_code=process.wait(timeout=30)
+            assert interrupted_exit_code==-signal.SIGKILL, f'unexpected precommit process exit: {interrupted_exit_code}'
         finally:
             if process.poll() is None:process.kill();process.wait(timeout=30)
     after_kill=facts(database);assert after_kill==before
@@ -66,7 +68,8 @@ def main():
         root=str(root),barrier=witness,interrupted_operation=interrupted,
         original_history_sha256=hashlib.sha256(json.dumps(before,ensure_ascii=False,separators=(',',':')).encode()).hexdigest(),
         completed_derived_before=len(completed_before),completed_derived_after=len(completed_after),
-        event_count_after_retry=len(after_retry['events']),external_kill=True,sql_writes_by_runner=0)
+        event_count_after_retry=len(after_retry['events']),external_kill=True,interrupted_exit_code=interrupted_exit_code,
+        sql_writes_by_runner=0)
     (root/'actual-evidence.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(evidence,ensure_ascii=False))
 if __name__=='__main__':main()
