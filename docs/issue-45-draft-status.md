@@ -4861,3 +4861,14 @@ In E1771 the final package admitted the first local profile's Run 4.35 s after l
 E1774 passed four original packaged golden scenarios: cards, ask, initial prompt and first Todo save. The latter two used separate existing operators; the initial prompt completed a local fixture model attempt. This is not the five-second provider-profile test or a fresh-operator GC pass.
 
 E1775 fixed a separate failure-path race: the profile fixture now owns its Linux process tree and removes the temporary operator only after reaping is confirmed. On the same Coding host the original five-second `TimeoutExpired` remained visible, the test failed, and an independent watcher found no surviving process or operator directory. No application runtime or deadline changed.
+
+### Full package protocols and ready-owner model calls
+
+| Requirement | Result on the E1756 release packages | Evidence |
+| --- | --- | --- |
+| Independent Full-package protocols | 557 new passes across 15 endpoints; with Skills on the same artifact, 603 passes across 16 endpoints. No Memory application credit. | E1756/E1777 |
+| Fixed-base terminal comparison | Original 100 cold `--version` starts and 40 headless TUI journeys passed per arm. Coding's headless P95 was 414.0 ms versus 263.8 ms on base. | E1779 |
+| Real local provider selection | After the public plugin list joined execution readiness on a resident owner, both original CLI calls returned the correct profile's response within five seconds; both attempts completed. An RPC state reply alone did not suffice in the separate E1780 control. The original **cold** five-second gate remains failed. | E1771/E1775/E1780/E1781 |
+| Unsplit Core capacity | Frozen fixture copy owners accounted for 2,474,432 bytes in the existing bank; six record links were aliases, not additional bills. No release proof or budget change. | E1639/E1776 |
+
+E1778's separate fresh-setup broker crash has a direct Runtime collector stack and no pass credit. E1780's second-client disconnect remains unclassified. [Model dispatch, package checks and matched measurements](implementation/plan-execution-reliability.md#local-model-dispatch-before-and-after-plugin-readiness). Full Core, Product, cold model startup and release acceptance remain open; PR stays Draft.
