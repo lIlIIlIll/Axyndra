@@ -4825,3 +4825,10 @@ E1718 passed the independent Program budget and cancellation/recovery contracts 
 E1721 found no additional Run in the Todo operator's other Store. In E1722 the terminal displayed the exact `/todo edit` draft, then `loading todo` through the 12-second observation after Enter. No editor or first save was observed; this was a diagnostic on the earlier E1659 package, not a final-package pass.
 
 At `d51eaef287`, E1727–E1731 separate the read-only workspace's real Registry fence failure (`-EROFS`) from the TUI's stale `loading todo` status. The parent required a resize to show the error; the rebuilt App showed it without another key, left both Stores unchanged and exited normally. E1733 also passed the missing-selection public PTY case without a model call. These results verify error presentation, not successful first save, complete Product or final release acceptance.
+
+| Requirement | New evidence | Scope |
+| --- | --- | --- |
+| First Todo save with the existing operator | E1726 passed the original packaged golden flow with a writable private workspace Registry directory. Two Runs completed, all six Operations had completed Receipts, four approvals came from the user, and the Store contained `todo` revision 1. No model attempt occurred. | Positive control on the older E1659 Coding package only. E1731 covers the read-only failure on the rebuilt App. |
+| Streaming and cancellation at the TUI | E1734 passed ten real PTY cases on App `9f2057a0693a`, with local Provider/MCP processes. | Unbundled App; no packaged first-request, mouse or resize credit. |
+| Product Native suite | In E1719 the dependency builds succeeded, but the original Product build timed out. The only test executable left was the older seed. | No enumeration or cases on a new executable. |
+| Matched concurrent output and process reap | E1741 matched all 238 tracked runtime inputs and the worker fixtures to `d51eaef287`. | E1720 still applies, including the slower large-output reap P95; it is not a final release comparison. |
