@@ -1269,6 +1269,13 @@ public class ProductRuntime {
         pluginRuntime.inspect(root)
     }
 
+    // inspect() gives the importer its own descriptor. Only the independently
+    // paid namespace is handed to the mutation; never consume a record's borrowed descriptor here.
+    private func takeInspectedNamespace(descriptor: OwnedPluginPackageDescriptor): String {
+        try { productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) }
+        finally { descriptor.close() }
+    }
+
     public func importLocalPlugin(root: String): PluginRegistryResult<ProductPluginRecord> {
         importLocalPlugin(root, PluginInstallScope.User)
     }
@@ -1279,7 +1286,7 @@ public class ProductRuntime {
             case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         importProductPlugin(
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)),
+            takeInspectedNamespace(descriptor),
             { => pluginRuntime.importLocal(root, scope) }
         )
     }
@@ -1326,7 +1333,7 @@ public class ProductRuntime {
                         case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
                     }
                     importProductPlugin(
-                        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)),
+                        takeInspectedNamespace(descriptor),
                         { => pluginRuntime.importAcquiredSource(acquired, scope) }
                     )
                 } finally {
@@ -1927,7 +1934,8 @@ public class ProductRuntime {
             case PluginRegistryResult.Ok(value) => value
             case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
-        setPluginEnabled(id, enabled, current.scope)
+        let scope = try { current.scope } finally { current.close() }
+        setPluginEnabled(id, enabled, scope)
     }
 
     public func setPluginEnabled(

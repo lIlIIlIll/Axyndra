@@ -493,6 +493,25 @@ func productToolAvailable(product: ProductRuntime, expected: String): Bool {
 }
 
 
+private func expectDisabledImportLookupReturned(product: ProductRuntime, record: ProductPluginRecord): Unit {
+    let probe = record.descriptor.deriveCopiedDataPayment(1024)
+    try {
+        let before = probe.retainedCustodyUsage113()
+        match (product.setPluginEnabled("acquisition-git", false)) {
+            case PluginRegistryResult.Err(error) =>
+                throw IllegalStateException("repeat disable failed: " + supportRegistryExclusiveErrorCode96(error))
+            case PluginRegistryResult.Ok(current) =>
+                try {
+                    expect(!current.enabled && agent_plugin_registry.pluginScopeEquals(current.scope, PluginInstallScope.Workspace),
+                        "repeat disable returns the installed workspace record")
+                } finally { current.close() }
+        }
+        let after = probe.retainedCustodyUsage113()
+        expect(after[0] == before[0] && after[2] == before[2],
+            "closing the returned record leaves no paid temporary scope lookup")
+    } finally { probe.close() }
+}
+
 func runPluginAcquisitionControlContract(root: String, workspace: String): Unit {
     let nativeFixture = pluginAcquisitionNativeFixture(root)
     let gitRoot = workspace + "/plugin-acquisition-git"
@@ -658,6 +677,7 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 exists(Path(supportRegistryDescriptor96(gitRecord,"root") + "/.axyndra-dependencies.lock.json")) &&
                 !exists(Path(supportRegistryDescriptor96(gitRecord,"root") + "/.git")),
                 "Git import installs registry dependencies and stores a disabled immutable licensed snapshot")
+            expectDisabledImportLookupReturned(product, gitRecord)
             expect(pluginAcquisitionHasCompletedOperation(
                 database, gitSession, NetworkPolicyMode.Mediated
             ), "local Git dependency acquisition records its mediated registry access")
