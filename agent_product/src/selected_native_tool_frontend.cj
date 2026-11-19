@@ -306,7 +306,8 @@ public class ProductNativeToolInvocation {
             if(!found || !isProductArtifactReference(reference)){
                 return selectedNativeToolError<ProductNativeToolInvocation>("plugin.frontend_artifact_unobserved")}
             match(selection.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-            let child=match(selection.product.acquireNativeFrontendInvocation(selection)){
+            let child=match(selection.product.acquireNativeFrontendInvocation(selection,
+                operatorOptions180:operatorOptions180,callerCancellation180:Some(cancellation.token))){
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
             artifactReads.add(child);child
         }catch(_:Exception){return selectedNativeToolError<ProductNativeToolInvocation>("plugin.frontend_artifact_unobserved")}

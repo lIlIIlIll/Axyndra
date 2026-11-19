@@ -2202,6 +2202,10 @@ public class DefaultCapabilityPolicy <: CapabilityPolicy {
         }
         let metadata = plan.approvalMetadata
         let effectiveMode = match (context.approvalModeOverride) { case Some(value) => value; case None => mode }
+        if (effectiveMode == ApprovalMode.AlwaysAsk && metadata.assessment.flags.contains("artifact_read")) {
+            return PolicyDecision(PermissionRequirement.Confirm,
+                reason: "reading the retained artifact requires its own one-time approval")
+        }
         // Extension-backed ContextRead keeps its own review even though its
         // effect is ReadOnly. Reviewing it cannot approve the later mutation.
         if (effectiveMode != ApprovalMode.Yolo && isContextReadPlan(plan) &&

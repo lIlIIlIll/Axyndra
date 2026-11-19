@@ -179,7 +179,7 @@ func runToolContract(root: String): Unit {
     let workspaceRoot = root + "/workspace"
     Directory.create(workspaceRoot, recursive: true)
     Directory.create(workspaceRoot + "/exports", recursive: true)
-    let scope = NativeShellContractScope(workspaceRoot, approvalMode: ApprovalMode.AlwaysAsk)
+    let scope = NativeShellContractScope(workspaceRoot, approvalMode: ApprovalMode.Yolo)
     try {
         let binding = scope.binding()
         let database = SqliteDatabase(binding.product.stateRoot + "/state.db")
@@ -209,7 +209,10 @@ private func runArtifactTools(root: String, workspaceRoot: String, database: Sql
             allowWorkspaceWrites: true
         )
     )
-    let first = binding.invoke(SessionId("artifact-session"),
+    // A stricter authenticated request must survive selection of the independent read.
+    let session = SessionId("artifact-session")
+    binding.start(session)
+    let first = binding.product.invokeShellTool(session,
         objectValue(
             [
                 ValueField(
@@ -222,8 +225,8 @@ private func runArtifactTools(root: String, workspaceRoot: String, database: Sql
                 ),
                 ValueField("timeout", integerValue(30))
             ]
-        )
-    )
+        ), operatorOptions180: Some(ProductOperatorOptions180(approvalMode: ApprovalMode.AlwaysAsk))
+    ).value().getOrThrow()
     let pending = first.approval().getOrThrow()
     let count = Path(workspaceRoot).join("bash-count.txt")
     expect(!exists(count), "oversized Bash must not execute before its own approval")
@@ -250,6 +253,35 @@ private func runArtifactTools(root: String, workspaceRoot: String, database: Sql
         readAll(store, stderrRef).endsWith("ERR-END"),
         "Bash artifact references retrieve the complete stdout and stderr"
     )
+    let read = first.beginArtifactRead(stdoutRef).value().getOrThrow()
+    try {
+        let review = match (read.approval()) {
+            case Some(request) => request
+            case None => match (read.failure()) {
+                case Some(error) => throw IllegalStateException("artifact read failed before review: " + error.code)
+                case None => throw IllegalStateException("artifact read has no review; receipt=" + read.receiptId())
+            }
+        }
+        expect(review.operationId.value != pending.operationId.value && !review.sessionApprovalAllowed &&
+            read.decide(pending.operationId.value, ApprovalDecision.Approve).isError() &&
+            read.approval().getOrThrow().operationId.value == review.operationId.value &&
+            read.receiptId() == "" && read.output().isError(),
+            "the Shell approval cannot expose the independent read's page")
+        read.decide(review.operationId.value, ApprovalDecision.Approve).value().getOrThrow()
+        let actual = read.output().value().getOrThrow()
+        expect(read.receiptId() != "" && read.receiptId() != first.receiptId() &&
+            fieldText(actual, "artifact_ref") == stdoutRef && fieldInteger(actual, "offset") == 0 &&
+            fieldInteger(actual, "returned_bytes") == ONE_MIB && fieldBool(actual, "truncated") &&
+            fieldText(actual, "content") == store.read(stdoutRef, limit: ONE_MIB).value().getOrThrow().content,
+            "a separately approved ordinary Root returns the exact first page of the retained Shell output")
+        expect(database.query("SELECT p.id FROM operation_receipts p JOIN operation_effect_records e " +
+            "ON e.operation_id=p.operation_id AND e.reserved_receipt_id=p.id WHERE p.id=? AND p.operation_id=? " +
+            "AND e.tool_id='read_resource' AND p.outcome='completed' AND NOT EXISTS " +
+            "(SELECT 1 FROM derived_operation_admissions a WHERE a.operation_id=p.operation_id)",
+            [SqlParameter.Text(read.receiptId()), SqlParameter.Text(review.operationId.value)]).size == 1,
+            "the approved page has its own completed Root Receipt")
+    } finally { read.close().value().getOrThrow() }
+    first.close().value().getOrThrow()
 
     let page = completedResult(
         executePipelineCall(pipeline,

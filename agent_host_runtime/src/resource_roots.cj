@@ -36,6 +36,9 @@ public func hostRegisterResourceRoots(catalog: ToolCatalog, port: HostResourceRo
                 port.exportMetadata(httpIntentText(call.arguments, "destination"), httpIntentText(call.arguments, "reference"))
             } else { ToolApprovalMetadata(if (call.name == "write_resource") { "workspace.write" } else { "workspace.read" },
                 RiskAssessment(if (call.name == "write_resource") { ApprovalRiskLevel.High } else { ApprovalRiskLevel.Low },
+                    flags: if (call.name == "read_resource" && isHostArtifactReference(httpIntentText(call.arguments, "reference"))) {
+                        ["artifact_read"]
+                    } else { [] },
                     reasons: ["Access this exact resource through a separate canonical Root"]),
                 ApprovalGrantScope(if (call.name == "write_resource") { "workspace.write" } else { "workspace.read" },
                     pathPrefix: httpIntentText(call.arguments, "reference"), toolName: call.name), sessionApprovalAllowed: false) } }),
