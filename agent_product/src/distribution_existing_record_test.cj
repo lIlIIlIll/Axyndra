@@ -184,4 +184,49 @@ class DistributionExistingNativeRecordTests {
             } finally { product.close().value().getOrThrow() }
         } finally { remove(root, recursive: true) }
     }
+
+    @TestCase
+    func invalidContextRecipeDoesNotAccumulateRegistryCustody(): Unit {
+        let root = pluginContractTemp("distribution-rejected-context")
+        try {
+            let bundle = nativeDistributionTestBundle(root)
+            let manifest = parseUnifiedJson(String.fromUtf8(File.readFrom(bundle + "/distribution.json")))
+            let namespace = httpIntentText(manifest.field("plugins").getOrThrow().items[0], "namespace")
+            let recipe = parseUnifiedJson(String.fromUtf8(File.readFrom("profiles/coding-context.json")))
+            recipe.put("id", manifest.field("id").getOrThrow())
+            // A mistyped resources list makes the recipe invalid before any
+            // installation or provider dispatch, even with a matching digest.
+            recipe.field("context").getOrThrow().put("resources", objectValue([]))
+            let encoded = stringifyUnifiedJson(recipe)
+            File.writeTo(bundle + "/recipe.json", encoded.toArray())
+            manifest.put("context", objectValue([ValueField("namespace", textValue(namespace)),
+                ValueField("recipe", textValue("recipe.json")), ValueField("sha256", textValue(modelPolicySha256Text(encoded)))]))
+            File.writeTo(bundle + "/distribution.json", stringifyUnifiedJson(manifest).toArray())
+            let product = lifecycleTestRequire(openProduct(config: ProductConfig(workspaceRoot: root + "/workspace",
+                settingsRoot: root + "/settings", stateRoot: root + "/state", fixture: true, asyncEnabled: false)))
+            try {
+                let record = match (product.importLocalPlugin(bundle + "/source", PluginInstallScope.User)) {
+                    case PluginRegistryResult.Ok(value) => value
+                    case PluginRegistryResult.Err(error) =>
+                        try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                try {
+                    let probe = record.descriptor.deriveCopiedDataPayment(1024)
+                    try {
+                        let before = probe.retainedCustodyUsage113()
+                        for (_ in 0..2) {
+                            let result = applyProductDistributionDefaults(product, bundle)
+                            @Assert(result.isError())
+                            @Expect(result.error().getOrThrow().code, "context.initial_configuration_invalid")
+                            let after = probe.retainedCustodyUsage113()
+                            @Expect(after[0], before[0])
+                            @Expect(after[2], before[2])
+                        }
+                        @Expect(!exists(Path(root + "/settings/plugins/context.json")))
+                        @Expect(!record.enabled)
+                    } finally { probe.close() }
+                } finally { record.close() }
+            } finally { product.close().value().getOrThrow() }
+        } finally { remove(root, recursive: true) }
+    }
 }

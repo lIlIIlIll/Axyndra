@@ -140,8 +140,12 @@ private func applyDistributionDefaultsFrame(product: ProductRuntime, directory: 
                 value.field("version").isNone() || value.field("version").getOrThrow().unifiedKind != ValueKind.Number ||
                 value.field("version").getOrThrow().asNumberText() != "4") {
                 return distributionError("distribution.context_invalid") }
-            for (descriptor in descriptors where descriptor.textEquals(PluginDescriptorText.Namespace, selectedNamespace)) {
-                value.put("namespace", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))); value.put("package_digest", textValue(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest))))
+            // Each unique manifest entry already matched its freshly inspected
+            // package. Binding this private recipe creates no Registry export.
+            for (entry in entries.items where httpIntentText(entry, "namespace") == selectedNamespace) {
+                value.put("namespace", textValue(selectedNamespace))
+                value.put("package_digest", textValue(httpIntentText(entry, "package_digest")))
+                break
             }
             match (product.validateDistributionContext(stringifyUnifiedJson(value))) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
