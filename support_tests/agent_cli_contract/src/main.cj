@@ -47,7 +47,7 @@ main(): Int64 {
         "context",
         "inspect",
         "extensions",
-        "mcp",
+        "view",
         "plugins",
         "prompts",
         "tree",
@@ -85,6 +85,7 @@ main(): Int64 {
             "slash command help metadata is complete: " + definition.name
         )
     }
+    expect(router.route("/mcp").isError(), "the MCP service has no builtin slash route")
     match (router.route("ordinary prompt")) {
         case Result.Ok(RoutedInput.Prompt(value)) => expect(value == "ordinary prompt", "ordinary input is a prompt")
         case _ => throw IllegalStateException("ordinary input did not route to the agent")
