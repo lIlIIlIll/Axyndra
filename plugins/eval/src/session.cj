@@ -25,7 +25,7 @@ class EvalPreparedCell {
     let inputText: String
     let bytesHex: String
     let timeoutMillis: Int64
-    init(input: JsonNode, language: String, maximumMillis: Int64) {
+    init(input: JsonNode, language: String, maximumMillis: Int64, outputBinding: String) {
         require(input.unifiedKind == UnifiedJsonKind.Object, "eval_plugin.input_invalid")
         for (entry in input.fields) {
             require(["language", "code", "title", "timeout", "reset"].contains(entry.name), "eval_plugin.input_invalid")
@@ -40,7 +40,8 @@ class EvalPreparedCell {
         require(seconds >= 1 && seconds <= maximumMillis / 1000, "eval_plugin.timeout_unavailable")
         timeoutMillis = seconds * 1000
         inputText = stringifyUnifiedJson(input)
-        let raw = (timeoutMillis.toString() + "|" + (if (boolean(input, "reset")) { "1" } else { "0" }) +
+        let prefix = if (outputBinding == "") { "" } else { "A|" + outputBinding + "|" }
+        let raw = (prefix + timeoutMillis.toString() + "|" + (if (boolean(input, "reset")) { "1" } else { "0" }) +
             "|" + hex(text(input, "code").toArray()) + "\n").toArray()
         require(raw.size <= 30720, "eval_plugin.request_limit")
         bytesHex = hex(raw)
@@ -53,6 +54,8 @@ class EvalPreparedCell {
 
 class EvalPluginSession {
     private let channel: BrokerChannel
+    private let frames: EvalRunnerFrames
+    private var outputArtifacts = false
     private var started = false
     private var language = ""
     private var configurationText = ""
@@ -60,7 +63,7 @@ class EvalPluginSession {
     private let prepared = HashMap<String, EvalPreparedCell>()
     private let consumed = HashSet<String>()
     private var stderrWorker: ?Future<Unit> = None
-    init(output: WireOutput) { channel = BrokerChannel(output) }
+    init(output: WireOutput) { channel = BrokerChannel(output); frames = EvalRunnerFrames(channel) }
     func receive(frame: JsonNode): Unit { channel.receive(frame) }
     func abort(): Unit { channel.abort() }
     func close(): Unit {
@@ -83,7 +86,7 @@ class EvalPluginSession {
             } catch (_: Exception) { port.abort() }
         })
     }
-    private func runnerLine(timeoutMillis: Int64): String {
+    private func withRunnerDeadline<T>(timeoutMillis: Int64, action: () -> T): T {
         let complete = AtomicBool(false)
         let port = channel
         let until = MonoTime.now() + Duration.millisecond * timeoutMillis
@@ -91,17 +94,7 @@ class EvalPluginSession {
             while (!complete.load() && !port.isClosed() && MonoTime.now() < until) { sleep(Duration.millisecond * 5) }
             if (!complete.load()) { port.abort() }
         }
-        try {
-            let buffer = ArrayList<Byte>()
-            let one = Array<Byte>(1, repeat: 0)
-            while (true) {
-                require(channel.stdout.read(one) == 1, "eval_plugin.runner_closed")
-                if (one[0] == 10u8) { return String.fromUtf8(buffer.toArray()) }
-                require(buffer.size < 131072, "eval_plugin.runner_output_limit")
-                buffer.add(one[0])
-            }
-            ""
-        } finally { complete.store(true); watchdog.get() }
+        try { action() } finally { complete.store(true); watchdog.get() }
     }
     private func directory(): JsonNode {
         let schema = parseUnifiedJson("{\"type\":\"object\",\"properties\":{\"language\":{\"type\":\"string\",\"enum\":[\"" +
@@ -117,7 +110,11 @@ class EvalPluginSession {
         exact(args, ["action", "configuration"])
         require(!started, "eval_plugin.already_started")
         let configuration = field(args, "configuration")
-        exact(configuration, ["version", "language", "max_timeout_ms"])
+        if (configuration.field("output_artifacts").isSome()) {
+            exact(configuration, ["version", "language", "max_timeout_ms", "output_artifacts"])
+            require(field(configuration, "output_artifacts").unifiedKind == UnifiedJsonKind.Boolean, "eval_plugin.configuration_invalid")
+            outputArtifacts = boolean(configuration, "output_artifacts")
+        } else { exact(configuration, ["version", "language", "max_timeout_ms"]) }
         language = text(configuration, "language")
         maximumMillis = number(configuration, "max_timeout_ms")
         require(number(configuration, "version") == 1 && ["py", "js", "rb", "jl"].contains(language) &&
@@ -127,7 +124,7 @@ class EvalPluginSession {
         channel.openWindow(invocation, true)
         startStderr()
         try {
-            require(runnerLine(10000) == "READY|" + language + "|1", "eval_plugin.runner_identity_invalid")
+            require(withRunnerDeadline(10000, { => frames.line(131072) }) == "READY|" + language + "|1", "eval_plugin.runner_identity_invalid")
             channel.closeWindow()
             started = true
             SessionReply(directory())
@@ -161,21 +158,20 @@ class EvalPluginSession {
             case None => ()
         }
         require(prepared.size < 128 && consumed.size + prepared.size < 4096, "eval_plugin.prepared_capacity")
-        let saved = EvalPreparedCell(field(args, "input"), language, maximumMillis)
+        let saved = EvalPreparedCell(field(args, "input"), language, maximumMillis, if (outputArtifacts) { id } else { "" })
         let result = jsonObject([JsonObjectEntry("intents", saved.intents())])
         require(stringifyUnifiedJson(result).size <= OUTPUT_LIMIT, "eval_plugin.prepare_output_limit")
         prepared.add(id, saved)
         SessionReply(result)
     }
-    private func cellResult(line: String, input: JsonNode): SessionReply {
-        let parts = line.split("|")
-        require(parts.size == 6 && parts[0] == "OK" && ["0", "1"].contains(parts[2]), "eval_plugin.runner_protocol_invalid")
-        let exitCode = Int64.parse(parts[1])
-        let duration = Int64.parse(parts[3])
-        require(duration >= 0, "eval_plugin.runner_protocol_invalid")
-        let stdout = String.fromUtf8(unhex(parts[4], 65536))
-        let stderr = String.fromUtf8(unhex(parts[5], 65536))
-        let timedOut = parts[2] == "1"
+    private func cellResult(cell: EvalObservedCell, input: JsonNode): SessionReply {
+        let exitCode = cell.exitCode; let timedOut = cell.timedOut; let duration = cell.duration
+        let stdout = cell.stdout.preview; let stderr = cell.stderr.preview
+        let artifacts = ArrayList<JsonNode>(); let errors = ArrayList<JsonNode>()
+        for (stream in [cell.stdout, cell.stderr]) {
+            match (stream.artifact) { case Some(ref) => artifacts.add(ref); case None => () }
+            match (stream.storageError) { case Some(error) => errors.add(error); case None => () }
+        }
         let failed = exitCode != 0 || timedOut
         var content = stdout
         if (stderr != "") { content += (if (content == "") { "" } else { "\n" }) + stderr }
@@ -183,10 +179,12 @@ class EvalPluginSession {
         let result = jsonObject([JsonObjectEntry("content", jsonString(content)), JsonObjectEntry("language", jsonString(language)),
             JsonObjectEntry("title", jsonString(text(input, "title"))), JsonObjectEntry("status", jsonString(if (failed) { "error" } else { "complete" })),
             JsonObjectEntry("stdout", jsonString(stdout)), JsonObjectEntry("stderr", jsonString(stderr)),
-            JsonObjectEntry("stdout_bytes", jsonNumber(stdout.size.toString())), JsonObjectEntry("stderr_bytes", jsonNumber(stderr.size.toString())),
-            JsonObjectEntry("artifacts", jsonArray([])), JsonObjectEntry("artifact_error", jsonNull()),
+            JsonObjectEntry("stdout_bytes", jsonNumber(cell.stdout.size.toString())), JsonObjectEntry("stderr_bytes", jsonNumber(cell.stderr.size.toString())),
+            JsonObjectEntry("artifacts", jsonArray(artifacts.toArray())),
+            JsonObjectEntry("artifact_error", if (errors.isEmpty()) { jsonNull() } else {
+                jsonObject([JsonObjectEntry("errors", jsonArray(errors.toArray()))]) }),
             JsonObjectEntry("exit_code", jsonNumber(exitCode.toString())), JsonObjectEntry("duration_ms", jsonNumber(duration.toString())),
-            JsonObjectEntry("timed_out", jsonBool(timedOut)), JsonObjectEntry("truncated", jsonBool(false)),
+            JsonObjectEntry("timed_out", jsonBool(timedOut)), JsonObjectEntry("truncated", jsonBool(!artifacts.isEmpty() || !errors.isEmpty())),
             JsonObjectEntry("reset", jsonBool(boolean(input, "reset")))])
         // The Bun runner terminates after timeout. The generic protocol has no
         // completed-and-retire state or process-cleanup ACK. Do not publish a
@@ -214,9 +212,9 @@ class EvalPluginSession {
         channel.openWindow(invocation, false, saved.bytesHex)
         try {
             channel.write(unhex(saved.bytesHex, 30720))
-            let line = runnerLine(saved.timeoutMillis + 1000)
+            let cell = withRunnerDeadline(saved.timeoutMillis + 1000, { => frames.cell(if (outputArtifacts) { id } else { "" }) })
             channel.closeWindow()
-            cellResult(line, field(args, "input"))
+            cellResult(cell, field(args, "input"))
         } catch (_: Exception) {
             channel.abort()
             SessionReply(evalOutcome("unknown", jsonNull(), "eval_plugin.cell_outcome_unknown"), ok: false)

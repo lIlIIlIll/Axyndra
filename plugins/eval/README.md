@@ -1,4 +1,4 @@
-# Persistent eval plugin — uncompiled migration candidate
+# Persistent Eval plugin
 
 This package owns the Python, Bun JavaScript, Ruby and Julia cell runners,
 language selection, cell schema, reset behavior, request bytes and result
@@ -8,11 +8,23 @@ runner, inside the existing host process sandbox. Interpreter state is private
 to that process and service instance; it is not the plugin host or PTC worker.
 Installing or inspecting the package does not start any interpreter.
 
-The native Service configuration is exactly:
+By default the native Service returns inline output:
 
 ```json
 {"version":1,"language":"py","max_timeout_ms":30000}
 ```
+
+To retain large output, set `"output_artifacts": true` in this Service configuration
+and explicitly start the configured service. The option does not change the Host
+output budget, grant a capability, or modify an existing service.
+
+When stdout and stderr together exceed 4 KiB, the runner streams both. Each
+stream over 1 KiB gets a preview and a reference to the complete content after
+the Host confirms its byte count and SHA-256. Smaller streams remain inline.
+If storage is unsafe, the Host can confirm the bytes without retaining them:
+`artifact_error.errors` identifies the affected stream and no reference is returned.
+If an acknowledgement is missing or inconsistent after the cell write, the
+outcome is `unknown`. Do not replay the cell.
 
 The corresponding approved backend argv uses an absolute interpreter and the
 fixed installed runner path: Python `-u runners/python.py`, Bun with the inline
@@ -53,7 +65,7 @@ missing acknowledgements, deadline failures and oversized responses after a
 write retain Unknown; the endpoint cannot retry cells or claim process cleanup.
 
 `runners/extraction.json` records the source commit and exact original and
-packaged runner hashes. Python, Bun and Ruby add only a language readiness line.
+packaged runner hashes. All four runners support bound output frames when enabled.
 The Julia runner also fixes a demonstrated baseline defect: Julia 1.11.5 rejects
 `redirect_stdout(IOBuffer)`. It uses nested temporary IOStreams with automatic
 close/removal, preserving separate stdout/stderr and partial output on errors.
@@ -67,13 +79,12 @@ and all four Julia cases failed with the unsupported IOBuffer redirection. After
 the correction, the actual runner suite passed **27/27, with no skips**, using
 Python 3, Bun 1.4.2, Ruby 3.4.10 and Julia 1.11.5. The three added Julia regressions
 cover Unicode stdout/stderr separation, partial error output plus subsequent
-reuse, and temporary-file cleanup after success and error. This proves the
-runner processes only; native packaging and Product authority remain untested
-for this candidate.
+reuse, and temporary-file cleanup after success and error. Interpreter tests do
+not verify Host approval or artifact persistence.
 
 `scripts/prepare_eval_plugin.py --output NEW_DIRECTORY` builds a fresh package,
 checks its manifest, runtime closure, licenses and runner hashes, removes SDK
-loader environment variables, and requires all 20 native protocol cases to run
+loader environment variables, and requires all 21 native protocol cases to run
 without skips. Those cases launch the packaged Python runner itself through a
 fixture broker. They prove state/reset, pure preparation, exact prepared bytes,
 replay refusal, known Python cell errors and timeouts, cancellation and unknown
@@ -103,19 +114,17 @@ Python timeout recovery, per-Thread state, workspace/profile isolation and
 same-Product fork history. Accepted cancellation and output overflow retain
 the real Unknown Receipt and cleanup owner; no closed cell, artifact, approval
 or replay is fabricated. A lost service requires explicit fresh startup.
-Current preparation has not proved these migrations by compiler or runtime.
-Original native protocol20, current interpreter27, the five native Product
-authorization cases, new publication case and all migrated support gates remain
-required. Source removal and packaging are not whole A3/A7 acceptance.
+The aggregate release contract in `support_tests/artifact_contract` exercises
+explicit approval and reads back both complete streams from the Product Store.
+See the [acceptance ledger](../../docs/issue-45-draft-status.md) for remaining
+Product and release gates.
 
 The native profile accepts 16 KiB input, a 30 KiB request frame, 64 KiB final
 result and at most 120 seconds configured timeout subject to stricter Host
 bounds. The old `timeout=0` seven-day window and 3600-second calls are explicitly
-unsupported and rejected before a cell effect is prepared. They are not silently
-shortened. Large output artifacts and old preview/artifact result behavior still
-need the generic artifact service; oversized output remains Unknown. Multiple
-language services in a single Thread and equal long-duration capacity remain
-unverified support boundaries.
+unsupported and rejected before a cell effect is prepared. With inline output,
+oversized responses remain `unknown`. Multiple language services in one Thread
+and equivalent long-duration capacity remain unverified.
 
 The actual supported duration is also bounded by the operator's native Service
 profile, startup/call window, backend lifetime, CPU budget and cumulative broker

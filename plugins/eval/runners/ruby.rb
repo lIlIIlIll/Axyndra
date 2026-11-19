@@ -1,11 +1,14 @@
 require 'stringio'
 require 'timeout'
+require 'digest'
 STDOUT.write("READY|rb|1\n"); STDOUT.flush
 def fresh_binding
   Object.new.instance_eval { binding }
 end
 state = fresh_binding
 STDIN.each_line do |line|
+  artifacts = line.start_with?('A|')
+  _, binding_id, line = line.split('|', 3) if artifacts
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   out = StringIO.new
   err = StringIO.new
@@ -33,7 +36,24 @@ STDIN.each_line do |line|
     err.write(([error.full_message].compact).join("\n"))
   end
   duration = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).to_i
-  response = ['OK', exit_code, timed_out ? 1 : 0, duration, out.string.unpack1('H*'), err.string.unpack1('H*')].join('|')
-  STDOUT.write(response + "\n")
+  data = [out.string, err.string]
+  meta = [exit_code, timed_out ? 1 : 0, duration]
+  if artifacts && data.sum(&:bytesize) > 4096
+    raise 'cell output exceeds artifact bound' if data.sum(&:bytesize) > 16777216
+    STDOUT.puts(['OUT', binding_id, *meta, *data.flat_map { |s| [s.bytesize, Digest::SHA256.hexdigest(s)] }].join('|'))
+    data.each do |s|
+      start = 0
+      while start < s.bytesize
+        stop = [s.bytesize, start + 16384].min
+        stop -= 1 while stop < s.bytesize && (s.getbyte(stop) & 0xc0) == 0x80 && stop > start
+        raise 'invalid output encoding' if stop == start
+        STDOUT.puts(s.byteslice(start...stop).unpack1('H*'))
+        start = stop
+      end
+    end
+    STDOUT.puts("END|#{binding_id}")
+  else
+    STDOUT.puts([artifacts ? "INLINE|#{binding_id}" : 'OK', *meta, *data.map { |s| s.unpack1('H*') }].join('|'))
+  end
   STDOUT.flush
 end

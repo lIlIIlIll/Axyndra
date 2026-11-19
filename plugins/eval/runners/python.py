@@ -21,6 +21,10 @@ def run_awaitable(value):
 while True:
     line = sys.stdin.buffer.readline()
     if not line: break
+    artifacts = line.startswith(b'A|')
+    if artifacts:
+        _, binding, line = line.split(b'|', 2)
+        binding = binding.decode('ascii')
     started = time.monotonic()
     out, err, exit_code, timed_out = io.StringIO(), io.StringIO(), 0, False
     try:
@@ -54,6 +58,21 @@ while True:
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
     duration = int((time.monotonic() - started) * 1000)
-    response = 'OK|%d|%d|%d|%s|%s\n' % (exit_code, int(timed_out), duration, out.getvalue().encode().hex(), err.getvalue().encode().hex())
-    sys.stdout.write(response)
+    stdout, stderr = out.getvalue().encode(), err.getvalue().encode()
+    if artifacts and len(stdout) + len(stderr) > 4096:
+        import hashlib
+        if len(stdout) + len(stderr) > 16777216:
+            raise ValueError('cell output exceeds artifact bound')
+        print('OUT', binding, exit_code, int(timed_out), duration, len(stdout), hashlib.sha256(stdout).hexdigest(),
+              len(stderr), hashlib.sha256(stderr).hexdigest(), sep='|')
+        for data in (stdout, stderr):
+            start = 0
+            while start < len(data):
+                end = min(len(data), start + 16384)
+                while end < len(data) and data[end] & 0xc0 == 0x80: end -= 1
+                print(memoryview(data)[start:end].hex())
+                start = end
+        print('END', binding, sep='|')
+    else:
+        print('INLINE|' + binding if artifacts else 'OK', exit_code, int(timed_out), duration, stdout.hex(), stderr.hex(), sep='|')
     sys.stdout.flush()

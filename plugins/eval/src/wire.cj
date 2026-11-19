@@ -55,16 +55,14 @@ func hex(bytes: Array<Byte>): String {
 }
 func unhex(value: String, maximum: Int64): Array<Byte> {
     require(value.size % 2 == 0 && value.size <= maximum * 2, "eval_plugin.channel_response_invalid")
-    let bytes = value.toArray()
-    let result = ArrayList<Byte>()
+    let result = Array<Byte>(value.size / 2, repeat: 0)
     func digit(value: Byte): Byte {
         if (value >= 48u8 && value <= 57u8) { return value - 48u8 }
         if (value >= 97u8 && value <= 102u8) { return value - 87u8 }
         throw PluginFailure("eval_plugin.channel_response_invalid")
     }
-    var index: Int64 = 0
-    while (index < bytes.size) { result.add(digit(bytes[index]) * 16u8 + digit(bytes[index + 1])); index += 2 }
-    result.toArray()
+    for (i in 0..result.size) { result[i] = digit(value[2*i]) * 16u8 + digit(value[2*i+1]) }
+    result
 }
 func sha(value: String): String { let hash = SHA256(); hash.write(value.toArray()); hex(hash.finish()) }
 func stableId(invocation: JsonNode): String {

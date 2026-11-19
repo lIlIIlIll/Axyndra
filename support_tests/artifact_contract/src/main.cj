@@ -9,6 +9,7 @@ import agent_domain.*
 import agent_product.*
 import workspace_legacy_oracle.*
 import shell_native_contract.*
+import eval_native_contract.{NativeEvalContractBinding, nativeEvalStartChecked}
 import agent_store.*
 import agent_testkit.*
 import persistence_runtime.*
@@ -393,44 +394,42 @@ private func runArtifactTools(root: String, workspaceRoot: String, database: Sql
         "sensitive export target is classified as a protected write and never executed"
     )
 
-    let evalContext = toolContext("eval-run", "eval-session")
-    let evalPending = pendingResult(
-        executePipelineCall(pipeline,
-            evalContext,
-            ToolCall(
-                "eval-large",
-                "eval",
-                objectValue(
-                    [
-                        ValueField("language", textValue("py")),
-                        ValueField(
-                            "code",
-                            textValue(
-                                "import sys\n" +
-                                "count = open('eval-count.txt', 'a').write('x')\n" +
-                                "out_count = sys.stdout.write('EVAL-OUT-BEGIN\\n' + 'u' * 1049000 + '\\nEVAL-OUT-END')\n" +
-                                "err_count = sys.stderr.write('EVAL-ERR-BEGIN\\n' + 'v' * 1049010 + '\\nEVAL-ERR-END')\n"
-                            )
-                        ),
-                        ValueField("timeout", integerValue(30))
-                    ]
-                )
-            )
-        ),
-        "oversized eval requests approval"
-    )
-    let eval = completedResult(
-        pipeline.decide(evalContext, evalPending.operationId, ApprovalDecision.Approve),
-        "approved oversized eval completes"
-    )
-    expect(
-        !eval.isError && fieldBool(eval.output, "truncated") &&
-        eval.output.field("artifacts").getOrThrow().items.size == 2 &&
-        readAll(store, artifactRef(eval.output, "stdout")).endsWith("EVAL-OUT-END") &&
-        readAll(store, artifactRef(eval.output, "stderr")).endsWith("EVAL-ERR-END") &&
-        String.fromUtf8(File.readFrom(workspaceRoot + "/eval-count.txt")) == "x",
-        "Eval persists complete stdout and stderr while retaining process success semantics"
-    )
+    let eval = NativeEvalContractBinding(binding.product, maxOutputBytes: 16777216, outputArtifacts: true)
+    let evalThread = SessionId("eval-session")
+    nativeEvalStartChecked(eval, evalThread)
+    let app = ApplicationSession(binding.product, sessionId: Some(evalThread),
+        operatorOptions180: Some(ProductOperatorOptions180(approvalMode: ApprovalMode.AlwaysAsk)))
+    let cell = objectValue([ValueField("language", textValue("py")), ValueField("timeout", integerValue(30)),
+        ValueField("code", textValue("import sys\n" +
+            "count = open('eval-count.txt', 'a').write('x')\n" +
+            "out_count = sys.stdout.write('EVAL-OUT-BEGIN\\n' + 'u' * 1049000 + '\\nEVAL-OUT-END')\n" +
+            "err_count = sys.stderr.write('EVAL-ERR-BEGIN\\n' + 'v' * 1049010 + '\\nEVAL-ERR-END')\n"))])
+    binding.product.fixtureProbe.getOrThrow().enqueueToolCallReply("eval-large", eval.name, cell)
+    app.submit("Run the requested Python cell after approval.").value().getOrThrow()
+    let approval = app.approval().getOrThrow()
+    let marker = Path(workspaceRoot + "/eval-count.txt")
+    expect(!exists(marker), "oversized Eval cannot execute before its own approval")
+    app.decide(approval.operationId.value, ApprovalDecision.Approve).value().getOrThrow()
+    for (item in SqliteThreadCommitSink(database).loadThread(ThreadId(evalThread.value)).items) {
+        match (item.content) {
+            case ThreadItemContent.ToolResult(id, _, _, envelope, isError) => if (id.value == "eval-large") {
+                let result = envelope.field("result").getOrThrow()
+                expect(!isError && fieldText(envelope, "status") == "complete" && fieldInteger(result, "exit_code") == 0 &&
+                    fieldBool(result, "truncated") && result.field("artifacts").getOrThrow().items.size == 2 &&
+                    readAll(store, artifactRef(result, "stdout")) == "EVAL-OUT-BEGIN\n" + repeatText("u", 1049000) + "\nEVAL-OUT-END" &&
+                    readAll(store, artifactRef(result, "stderr")) == "EVAL-ERR-BEGIN\n" + repeatText("v", 1049010) + "\nEVAL-ERR-END" &&
+                    String.fromUtf8(File.readFrom(marker)) == "x" &&
+                    eval.count("SELECT COUNT(*) FROM operation_receipts WHERE operation_id=? AND outcome='completed'",
+                        parameters: [SqlParameter.Text(approval.operationId.value)]) == 1 &&
+                    eval.count("SELECT COUNT(*) FROM audit_events WHERE operation_id=? AND kind='service_artifact_observed'",
+                        parameters: [SqlParameter.Text(approval.operationId.value)]) == 2,
+                    "approved Eval retains both complete streams on its original Operation without replay")
+                return
+            }
+            case _ => ()
+        }
+    }
+    throw IllegalStateException("approved oversized Eval has no committed tool result")
 }
 
 func runPersistenceFailureContract(root: String): Unit {

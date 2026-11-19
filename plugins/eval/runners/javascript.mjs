@@ -1,6 +1,8 @@
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import readline from 'node:readline';
+import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 process.stdout.write('READY|js|1\n');
 const require = createRequire(import.meta.url);
 let context;
@@ -9,7 +11,11 @@ function fresh() {
 }
 fresh();
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-for await (const line of rl) {
+for await (const input of rl) {
+  const artifacts = input.startsWith('A|');
+  const boundary = artifacts ? input.indexOf('|', 2) : -1;
+  const binding = artifacts ? input.slice(2, boundary) : '';
+  const line = artifacts ? input.slice(boundary + 1) : input;
   const started = Date.now(); let out = []; let err = []; let exitCode = 0; let timedOut = false;
   try {
     const first = line.indexOf('|'), second = line.indexOf('|', first + 1);
@@ -33,7 +39,24 @@ for await (const line of rl) {
     exitCode = timedOut ? 124 : 1;
     err.push(timedOut ? 'eval cell timed out' : message);
   }
-  const encode = value => Buffer.from(value).toString('hex');
-  process.stdout.write('OK|' + exitCode + '|' + (timedOut ? 1 : 0) + '|' + (Date.now() - started) + '|' + encode(out.join('\n')) + '|' + encode(err.join('\n')) + '\n');
+  const stdout = Buffer.from(out.join('\n')), stderr = Buffer.from(err.join('\n'));
+  const meta = [exitCode, Number(timedOut), Date.now() - started];
+  if (artifacts && stdout.length + stderr.length > 4096) {
+    if (stdout.length + stderr.length > 16777216) throw new Error('cell output exceeds artifact bound');
+    const digest = data => createHash('sha256').update(data).digest('hex');
+    process.stdout.write(['OUT', binding, ...meta, stdout.length, digest(stdout), stderr.length, digest(stderr)].join('|') + '\n');
+    for (const data of [stdout, stderr]) {
+      let start = 0;
+      while (start < data.length) {
+        let end = Math.min(data.length, start + 16384);
+        while (end < data.length && (data[end] & 0xc0) === 0x80) end--;
+        if (!process.stdout.write(data.toString('hex', start, end) + '\n')) await once(process.stdout, 'drain');
+        start = end;
+      }
+    }
+    process.stdout.write('END|' + binding + '\n');
+  } else {
+    process.stdout.write([artifacts ? 'INLINE|' + binding : 'OK', ...meta, stdout.toString('hex'), stderr.toString('hex')].join('|') + '\n');
+  }
   if (timedOut) setImmediate(() => process.exit(0));
 }

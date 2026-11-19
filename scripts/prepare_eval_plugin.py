@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_CASES = 20
+EXPECTED_CASES = 21
 
 
 def digest(path):

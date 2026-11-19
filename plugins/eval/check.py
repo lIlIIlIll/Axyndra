@@ -139,6 +139,8 @@ class Peer:
             response['result'] = {'written_bytes': len(data), 'receipt_id': 'fixture-receipt-completed'}
             if self.omit_receipt:
                 del response['result']['receipt_id']
+        elif service == 'output.artifact' and hasattr(self, 'artifact_reply'):
+            response['result'] = self.artifact_reply(args)
         else:
             raise AssertionError(f'plugin requested unsupported service {service}')
         self.send(response)
@@ -385,6 +387,41 @@ class NativeEvalTests(unittest.TestCase):
             value = peer.execute(peer.prepare(data=data), data=data)
             self.assertFalse(value['ok']); self.assertEqual(value['result']['status'], 'unknown')
             self.assertEqual(len(peer.observed()), 1)
+
+    def test_incorrect_artifact_ack_after_cell_write_is_unknown(self):
+        output = b'x' * 5000
+        digest = hashlib.sha256(output).hexdigest()
+        for fault in ('offset', 'reference'):
+            with self.subTest(fault=fault), Peer() as peer:
+                calls = []
+
+                def reply(args):
+                    calls.append(args['action'])
+                    self.assertEqual(args['stream'], 'stdout')
+                    if args['action'] == 'begin':
+                        self.assertEqual((args['bytes'], args['sha256']), (len(output), digest))
+                        return {'accepted_bytes': len(output)}
+                    if args['action'] == 'append':
+                        self.assertEqual((args['offset'], args['text'].encode()), (0, output))
+                        return {'next_offset': len(output) + int(fault == 'offset')}
+                    self.assertEqual(args['action'], 'finish')
+                    return {'artifact': {'stream': 'stdout', 'bytes': len(output),
+                                         'sha256': digest, 'ref': 'blob:sha256:' + '0' * 64},
+                            'preview': 'x' * 512, 'truncated': True}
+
+                peer.artifact_reply = reply
+                self.assertTrue(peer.invoke({'action': 'start', 'configuration': dict(configuration(), output_artifacts=True)},
+                                            call='startup', run='maintenance')['ok'])
+                data = cell("import sys\nn = sys.stdout.write('x' * 5000)")
+                prepared = peer.prepare(data=data)
+                self.assertTrue(prepared['ok'])
+                self.assertEqual(peer.observed(), [])
+                result = peer.execute(prepared, data=data)
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['result']['status'], 'unknown')
+                self.assertFalse(result['result']['retry_safe'])
+                self.assertEqual(len(peer.observed()), 1)
+                self.assertEqual(calls, ['begin', 'append'] + (['finish'] if fault == 'reference' else []))
 
     def test_escaped_json_result_limit_is_checked_after_actual_execution(self):
         with Peer() as peer:

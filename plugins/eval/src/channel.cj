@@ -159,7 +159,7 @@ class BrokerInput <: InputStream {
             if (eof) { return 0 }
             let response = channel.request("process.channel.read", jsonObject([
                 JsonObjectEntry("stream", jsonString(stream)), JsonObjectEntry("max_bytes", jsonNumber("16384")),
-                JsonObjectEntry("wait_ms", jsonNumber("25"))]))
+                JsonObjectEntry("wait_ms", jsonNumber(if (stream == "stderr") { "0" } else { "25" }))]))
             match (response) {
                 case None => sleep(Duration.millisecond * 5)
                 case Some(value) =>
@@ -167,7 +167,14 @@ class BrokerInput <: InputStream {
                     require(field(value, "bytes_hex").unifiedKind == UnifiedJsonKind.Text &&
                         field(value, "eof").unifiedKind == UnifiedJsonKind.Boolean, "eval_plugin.channel_response_invalid")
                     buffered = unhex(text(value, "bytes_hex"), 16384); offset = 0; eof = boolean(value, "eof")
-                    if (buffered.isEmpty() && !eof) { sleep(Duration.millisecond * 2) }
+                    if (buffered.isEmpty() && !eof) {
+                        // Host services are synchronous. A quiet diagnostic pipe must not
+                        // occupy the broker while a cell is delivering stdout and artifact ACKs.
+                        if (stream == "stderr") {
+                            let until = MonoTime.now() + Duration.second
+                            while (!channel.isClosed() && MonoTime.now() < until) { sleep(Duration.millisecond * 10) }
+                        } else { sleep(Duration.millisecond * 2) }
+                    }
             }
         }
         0

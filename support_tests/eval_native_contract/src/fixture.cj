@@ -24,7 +24,8 @@ public class NativeEvalContractBinding {
     private let explicitlyStarted = HashSet<String>()
 
     public init(product: ProductRuntime, language!: String = "py",
-        executable!: String = "/usr/bin/python3", maxOutputBytes!: Int64 = 1048576, startupTimeoutMillis!: Int64 = 30000) {
+        executable!: String = "/usr/bin/python3", maxOutputBytes!: Int64 = 1048576,
+        startupTimeoutMillis!: Int64 = 30000, outputArtifacts!: Bool = false) {
         this.product = product
         this.language = language
         let record = supportRegistryRecord96(nativeEvalRegistryMutation204({ =>
@@ -77,17 +78,25 @@ public class NativeEvalContractBinding {
                 ValueField("max_output_bytes", integerValue(min(16384, maxOutputBytes))), ValueField("max_writes", integerValue(4))])),
             ValueField("environment", objectValue([])), ValueField("credential_refs", listValue([]))
         ])
-        let document = objectValue([ValueField("version", integerValue(1)), ValueField("plugins", listValue([
-            objectValue([ValueField("namespace", textValue(namespace)),
-                ValueField("package_digest", textValue(supportRegistryDescriptor96(record,"content_digest"))),
-                ValueField("configuration", objectValue([ValueField("version", integerValue(1)),
-                    ValueField("language", textValue(language)), ValueField("max_timeout_ms", integerValue(30000))])),
-                ValueField("max_instances", integerValue(16)), ValueField("services", listValue([service]))])
-        ]))])
+        let configuration = objectValue([ValueField("version", integerValue(1)), ValueField("language", textValue(language)),
+            ValueField("max_timeout_ms", integerValue(30000))])
+        if (outputArtifacts) { configuration.put("output_artifacts", boolValue(true)) }
+        let path = Path(product.settingsRoot + "/plugins/lifecycle.json")
+        let document = if (exists(path)) { parseUnifiedJson(String.fromUtf8(File.readFrom(path))) } else {
+            objectValue([ValueField("version", integerValue(1)), ValueField("plugins", listValue([]))])
+        }
+        let installed = document.field("plugins").getOrThrow().items
+        let profiles = ArrayList<AgentValue>(installed.size + 1)
+        for (profile in installed) { profiles.add(profile) }
+        profiles.add(objectValue([ValueField("namespace", textValue(namespace)),
+            ValueField("package_digest", textValue(supportRegistryDescriptor96(record,"content_digest"))),
+            ValueField("configuration", configuration), ValueField("max_instances", integerValue(16)),
+            ValueField("services", listValue([service]))]))
+        document.put("plugins", listValue(profiles.toArray()))
         if (!exists(Path(product.settingsRoot + "/plugins"))) {
             Directory.create(product.settingsRoot + "/plugins", recursive: true)
         }
-        File.writeTo(product.settingsRoot + "/plugins/lifecycle.json", stringifyUnifiedJson(document).toArray())
+        File.writeTo(path, stringifyUnifiedJson(document).toArray())
     }
 
     // Each new Thread is explicitly started by the test frontend. call() never

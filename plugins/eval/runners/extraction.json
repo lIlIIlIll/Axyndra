@@ -1,29 +1,30 @@
 {
   "source_commit": "d3e9a3a53682b22fd1dd450285eb0767efebe160",
   "source_file": "agent_product/src/eval_runtime.cj",
+  "output_protocol": "An operator-selected A|binding| request uses bounded UTF-8 chunks, stream lengths and SHA-256; ordinary cells retain the original OK response.",
   "runners": {
     "python.py": {
       "source_function": "pythonEvalRunner",
       "original_sha256": "f911625e5dfe855aec374d7fd0076a1512f6547cecc29fd5dc3b90c3c2f9c0d7",
-      "packaged_sha256": "39ef888e8b8738b09deb111e4ccbf37e06503be17764e4db7a8bd9f1a7d61a9a",
+      "packaged_sha256": "5d44b41d4f4fe6fd00d61b8c9f10903f3c2357a1d558c65df7a6dfbe8a344394",
       "added_ready_line": "print('READY|py|1', flush=True)"
     },
     "javascript.mjs": {
       "source_function": "javascriptEvalRunner",
       "original_sha256": "e9f1f4c6346c9b97d95af53bba76d68d0c24f43e359f2088e75f8911030d75d5",
-      "packaged_sha256": "c57da0296e143dd481bfc6529f8a1adf60955f19202376fc67b2c77b7865eb05",
+      "packaged_sha256": "4c485997a52552436c1dd5b52e10f52f554f90e1634818cefe0ac9ed75680349",
       "added_ready_line": "process.stdout.write('READY|js|1\\n');"
     },
     "ruby.rb": {
       "source_function": "rubyEvalRunner",
       "original_sha256": "ecfc1a3b09dc8a1c8b1087df9cae8ab778fdc438416902337f7e0ce9a729cd47",
-      "packaged_sha256": "1e28d09504add4ef3d14f9ad87b612810ba9aec7dea24d79c3f55e86dab77c05",
+      "packaged_sha256": "e75592d8b04d874976c0e78870b7a8e2cd59081819cc6e295717212999efc6a7",
       "added_ready_line": "STDOUT.write(\"READY|rb|1\\n\"); STDOUT.flush"
     },
     "julia.jl": {
       "source_function": "juliaEvalRunner",
       "original_sha256": "4b999ea41d1731846dcb1422c4890e916501aa7f074aab55eb6ef4464046a9b0",
-      "packaged_sha256": "d342fd804540366113fec8f9661bfeb3c2a5f1545529c7f58a87554f6b32dbe4",
+      "packaged_sha256": "fee9d44cacaae991068b6fc48841449f6789e4617248d03f79c212f2185e8a85",
       "added_ready_line": "println(stdout, \"READY|jl|1\"); flush(stdout)",
       "behavior_fixes": [
         {
