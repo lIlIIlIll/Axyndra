@@ -5,6 +5,8 @@ import agent_ports.*
 import agent_runtime.*
 import agent_testkit.*
 import tool_runtime.*
+import yjson.JsonNode
+import yjson_support.*
 
 main(): Int64 {
     scriptedModelContract()
@@ -74,8 +76,15 @@ func reviewedFixtureModelContract(): Unit {
     for (qualified in [false, true]) {
         let planName = if (qualified) { "plugin.axyndra:workflow.plan_write" } else { "plan_write" }
         let globName = if (qualified) { "plugin.axyndra:workspace.glob" } else { "glob" }
+        let properties = objectValue([
+            ValueField("pattern", objectValue([ValueField("type", textValue("string"))])),
+            ValueField("limit", objectValue([ValueField("type", textValue("integer"))]))
+        ])
+        if (!qualified) { properties.put("_plan", objectValue([])) }
+        let globSchema = objectValue([ValueField("type", textValue("object")),
+            ValueField("properties", properties), ValueField("additionalProperties", boolValue(false))])
         let tools = [ModelToolDefinition(planName, "review fixture", objectValue([])),
-            ModelToolDefinition(globName, "workspace fixture", objectValue([]))]
+            ModelToolDefinition(globName, "workspace fixture", globSchema)]
         let model = FixtureModelPort()
         let planning = ModelRequest("fixture", [ModelMessage(ModelRole.User,
             [ModelBlock(ModelBlockKind.Text, text: "fixture plan write")])],
@@ -95,9 +104,21 @@ func reviewedFixtureModelContract(): Unit {
             [ModelBlock(ModelBlockKind.Text, text: "[plan-review approved hash=1 source=fixture] fixture-inspect")])],
             system: "workspace_root: /workspace", tools: tools, requestId: "fixture-approved-plan")
         let executed = model.execute(execution, { _ => () }).value().getOrThrow()
-        expect(executed.blocks.size == 1 && executed.blocks[0].name == globName &&
-            executed.blocks[0].arguments.field("_plan").getOrThrow().field("action_id").getOrThrow().text == "fixture-glob",
-            "approved fixture action retains the same frontend identity and execution binding")
+        expect(executed.blocks.size == 1 && executed.blocks[0].name == globName, "approved action uses the selected frontend")
+        let action = contract.steps[0].actions[0]
+        let arguments = executed.blocks[0].arguments
+        expect(action.id == "fixture-glob" && action.exactArguments &&
+            arguments.field("pattern").getOrThrow().text == "**/*" &&
+            arguments.field("limit").getOrThrow().asInt64() == 1, "approved glob preserves its exact business action")
+        if (qualified) {
+            expect(canonicalAgentValue(arguments) == canonicalAgentValue(action.argumentConstraints),
+                "Native frontend receives only the reviewed business arguments, with no unadvertised binding")
+        } else {
+            let binding = arguments.field("_plan").getOrThrow()
+            expect(binding.field("action_id").getOrThrow().text == action.id &&
+                binding.field("step_id").getOrThrow().text == contract.steps[0].id.value,
+                "compiled frontend receives its advertised explicit step and action")
+        }
         let failure = model.execute(ModelRequest("fixture", [ModelMessage(ModelRole.User,
             [ModelBlock(ModelBlockKind.Text,
                 text: "[plan-review approved hash=1 source=fixture] FIXTURE-APPROVED-PLAN-EXECUTION-FAILURE")])],

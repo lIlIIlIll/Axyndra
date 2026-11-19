@@ -12,3 +12,5 @@
   "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }
   "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
