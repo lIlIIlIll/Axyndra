@@ -4996,3 +4996,11 @@ E2000/E2003 fixed an independent non-GC regression: rejecting an invalid distrib
 | Core read-view capacity (E2001, E2014) | The same refusal had 25 legacy-executor-only, 18 child-validation-only, and 12 overlapping Prepared owners. All four counted consumers were in the child-only group. | The observed exports have no blanket DATA return. No quota or ACK change; original unsplit Core still unpassed. |
 
 PR remains Draft. GC deferral has zero pass credit. Raw evidence and the five current failure identities are indexed in the execution reliability record.
+
+### Final Coding/Full artifacts and Core refusal (`6c5a8e1124`)
+
+Coding and Full passed clean startup and setup. Four Full wire endpoints reran 115 checks; 491 earlier checks apply to identical plugin trees and unchanged checkers. The rebuilt App passed ten real Provider/MCP PTY cases; final Coding passed Todo edit/save with four real approval inputs, six completed reserved Receipts and no model call. The executable artifacts and reuse boundaries are recorded in [the reliability evidence](implementation/plan-execution-reliability.md#final-packages-real-frontends-and-the-original-core-refusal).
+
+The original continuous Core still failed. E2020 measured a 9,793,200-byte shortfall at the actual acquiring bank. E2027's retained main Store has a completed Run but a failed Program Receipt; no second-store or full-core image was saved at this stop. No quota or ownership rule changed. Complete Core, the cold five-second request, deferred GC paths and final release are not passed.
+
+E2012 passed four final-package tamper refusals before durable admission. E2015 passed both matched seven-probe arms, with slower candidate CLI help/inspect. E2022/E2030: original five-second provider gate failed before either local handler saw a POST. One actual attempt reached `created` / `prepared`, not dispatch or completion; the stale-owner terminal diagnostic followed timeout recording. E2029 identified four installed startup, one bundled and nine installed context-identity digest opens of the same AST library in a separate trace. This locates repeated verification, not its individual elapsed cost or permission to omit it. Full release remains unaccepted; PR stays Draft.
