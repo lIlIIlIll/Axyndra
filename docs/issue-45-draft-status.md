@@ -4970,3 +4970,5 @@ E1943/E1944: Minimal with only MCP client/server installed now reaches the actua
 | Matched baseline | Both arms passed the seven-record performance gate; the output and cancellation comparison remains source-bound. | CLI startup and physical cancellation were slower than baseline. Not a blanket performance improvement. |
 
 [Commands, artifact hashes, receipt outcomes, timings and evidence locations](implementation/plan-execution-reliability.md#coding-and-full-at-802ee60f01-containment-receipts-and-timing). Draft; Issue #45 is not fully accepted.
+
+E1958/E1962 completed the eligible Product selection on `802ee60f01`: **467/471 passed** on one ELF. Three newly observed failures had direct Runtime GC frames; the fourth passed its assertion but failed process custody. The other 630 were not run. A private producer-reference change passed Tool tests but still failed the original unsplit Core contract and was not adopted. [Case identities and Store evidence](implementation/plan-execution-reliability.md#eligible-product-cases-and-the-core-producer-reference-experiment).

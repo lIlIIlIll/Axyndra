@@ -11265,3 +11265,16 @@ E1951 compared the pinned baseline `4d88fa6072` with `802ee60f01` under the same
 E1955 checked the 255 candidate inputs, both fixture types and all four measured executables against E1877. Its existing 32 KiB output and physical cancellation comparisons therefore still apply; these are not new timing samples. Output-to-reap P95 went from 11,175 to 20,089 µs and cancellation-to-reap from 17,416 to 23,023 µs.
 
 Evidence: `currentprod1946/`, `controlowners1947/roots.json`, `currentpackages1948/`, `fullcore1949/`, `currentprofile1950/`, `currentmatched1951/{baseline,candidate}/`, `lockedstores1952/`, `finalproduct1953/`, `currentwires1954/`, `loadclosure1955/`, `finaltodopty1956/`, `finalproviderpty1957/`. GC is deferred, not passed. Full Product and release acceptance remain open.
+
+### Eligible Product cases and the Core producer-reference experiment
+
+E1958 rebuilt Product from `802ee60f01` using the dependency-ready target, the original 900-second compilation limit and the pinned SDK. The build finished in 314 seconds. ELF `6f88ca3e2e29a6978316186631025471573c84b4ccec9fc7985617dd3ec9ab48` enumerated 1,101 cases. Of the 471 eligible identities, 430 passed in the first 434 invocations. E1962 ran only the 37 not yet started on the same ELF: all passed. Combined result: **467 passed, four failed, 630 previously deferred cases not executed**. The new scoped-enable record-lifetime regression passed.
+
+| Failed Product case | Evidence from this execution |
+|---|---|
+| `realDirectRootWritesExactBinaryBytesWithOneChildReceiptAndOneSlot` | SIGSEGV at `CheckAndPush`; next frame `CJ_MCC_C2NStub`. GC deferred, not passed. |
+| `cycleAndCorruptDependencyNeverPublishDependentRegistrations` | SIGSEGV in `GCTib::ForEachBitmapWord`, called through `BaseObject::ForEachRefField` by `Mutator::GcPhaseEnum`. GC deferred, not passed. |
+| `expiryAfterTheModelPacketWasPreparedPreventsProviderDispatch` | SIGSEGV at `CheckAndPush`; next frame `CJ_MCC_C2NStub`. GC deferred, not passed. |
+| `ordinaryEmptyEofPreservesItsOriginalDisconnectContract` | Assertion passed, process gate failed. One `/proc` identity had state `R`, parent `0`, group and session `-1`. No cleanup PID or unreaped child remained, but ancestry was unconfirmed. Not a GC classification or a pass. |
+
+E1959 removed only the closed producer reference from a **private** Prepared DATA owner. The unknown-export and final consumer payment rules were unchanged. Its Tool ELF passed 75/75 individual cases. E1961 then rebuilt and ran the unsplit Core contract: the expected Program inspection content was still missing. E1963's detached Store copies show that both the read-view and grep Receipts failed with `read_view.output_capacity`; the parent committed a failed Receipt. Six original Store files retained their digests. The watcher observed 56 surviving processes at case exit, signalled 44 exact PIDs, and reported none remaining or unreaped after cleanup. The candidate was not adopted. Evidence: `readyproduct1958/`, `producttail1962/`, `productcustody1966/summary.json`, `detachedproducer1959/`, `detachedcore1961/`, `detachedstore1963/`.
