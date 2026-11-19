@@ -46,10 +46,12 @@ required before A4-02 can be marked complete.
 The subsequent output candidate adds the explicit backend `--stream-output`
 option. Output larger than 4 KiB is sent as bounded UTF-8 chunks through the
 native endpoint to the host's current-invocation `output.artifact` service. The
-host returns the immutable reference; the backend cannot choose one. The final
-Shell result carries small previews and full artifact descriptors. The native
-endpoint validates the stream identity, ordering, length and host digest, and
-an incomplete transfer produces Unknown. Empty stderr polls wait locally so
+host returns the immutable reference; the backend cannot choose one. Each
+large stream has a UTF-8 preview of at most 4 KiB: its beginning, the exact
+number of omitted bytes, and its end. The full artifact is unchanged.
+The endpoint publishes the preview and reference only after the host confirms
+the offsets, final length and digest. Incomplete transfers produce Unknown.
+Empty stderr polls wait locally so
 they cannot block stdout or artifact requests in the host's synchronous service
 callback loop.
 

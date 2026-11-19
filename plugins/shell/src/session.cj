@@ -8,6 +8,8 @@ import yjson.*
 import yjson_support.*
 
 let BACKEND_SCHEMA = "axyndra.shell-backend/v1"
+// Two UTF-8 edges and an omission count must fit the original 4096-byte result preview.
+let SHELL_PREVIEW_EDGE_BYTES: Int64 = 1984
 
 class SessionReply {
     let value: JsonNode
@@ -110,6 +112,7 @@ class ShellPluginSession {
             var offset: Int64 = 0
             var length: Int64 = 0
             var expectedDigest = ""
+            var ending: ?StringBuilder = None
             var total: Int64 = 0
             var terminal: ?JsonNode = None
             while (terminal.isNone()) {
@@ -132,6 +135,7 @@ class ShellPluginSession {
                     length = number(value, "bytes")
                     require(length >= 0 && length <= 16777216 - total, "shell_plugin.output_limit")
                     names.add(name); total += length; active = name; offset = 0; expectedDigest = text(value, "sha256")
+                    if (length > 4096) { ending = Some(StringBuilder()) }
                     args.put("action", jsonString("begin")); args.put("bytes", field(value, "bytes")); args.put("sha256", field(value, "sha256"))
                 } else if (kind == "output_chunk") {
                     let encoded = value.field("data_base64")
@@ -150,6 +154,14 @@ class ShellPluginSession {
                     // the Host boundary; decoded content and offsets are identical.
                     match (encoded) { case Some(raw) => args.put("data_base64", raw)
                         case None => args.put("text", data) }
+                    // The declared length locates the suffix without buffering the stream.
+                    // Do not publish it until the Host confirms all offsets and the final digest.
+                    if (ending.isSome() && length - offset - data.text.size < SHELL_PREVIEW_EDGE_BYTES) {
+                        let chunk = data.text
+                        var start = max(0, length - SHELL_PREVIEW_EDGE_BYTES - offset)
+                        while (start < chunk.size && (chunk[start] & 192u8) == 128u8) { start++ }
+                        ending.getOrThrow().append(chunk[start..])
+                    }
                     offset += data.text.size
                 } else {
                     exact(value, ["schema", "id", "stream", "type"])
@@ -166,9 +178,19 @@ class ShellPluginSession {
                         text(reference, "sha256") == expectedDigest && text(reference, "ref") == "blob:sha256:" + expectedDigest,
                         "shell_plugin.output_ack_invalid")
                     artifacts.add(reference)
-                    let raw = text(observed, "preview").toArray(); var cut = min(raw.size, 4096)
-                    while (cut < raw.size && cut > 0 && (raw[cut] & 192u8) == 128u8) { cut -= 1 }
-                    previews.add(name, String.fromUtf8(raw[..cut]))
+                    let prefix = text(observed, "preview")
+                    match (ending) {
+                        case Some(builder) =>
+                            var cut = min(prefix.size, SHELL_PREVIEW_EDGE_BYTES)
+                            while (cut < prefix.size && cut > 0 && (prefix[cut] & 192u8) == 128u8) { cut-- }
+                            let tail = builder.toString()
+                            let omitted = length - cut - tail.size
+                            previews.add(name, prefix[..cut] + "\n... [omitted " + omitted.toString() + " bytes] ...\n" + tail)
+                            ending = None
+                        case None =>
+                            require(prefix.size == length, "shell_plugin.output_ack_invalid")
+                            previews.add(name, prefix)
+                    }
                 }
             }
             let value = terminal.getOrThrow()

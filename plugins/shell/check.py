@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import selectors
 import subprocess
 import sys
@@ -438,16 +439,28 @@ class NativeShellTests(unittest.TestCase):
         peer = Peer('artifact')
         try:
             self.assertTrue(peer.start()['ok'])
-            data = {'command': "/usr/bin/python3 -c 'print(\"雪\"*100000,end=\"\")'"}
+            data = {'command': "/usr/bin/python3 -c 'import sys; "
+                    "sys.stdout.write(\"OUT-BEGIN雪\"+\"雪\"*100000+\"OUT-END\"); "
+                    "sys.stderr.write(\"ERR-BEGIN🌍\"+\"🌍\"*4100+\"ERR-END\")'"}
             prepared = peer.prepare(data=data)
             self.assertTrue(prepared['ok'])
             reply = peer.execute(prepared, data=data)
             self.assertTrue(reply['ok'], reply)
             output = reply['result']['result']
-            raw = ('雪' * 100000).encode()
-            self.assertEqual(peer.artifact_values[('run-1', 'call-1', 'stdout')], raw)
-            self.assertEqual(output['artifacts'][0]['sha256'], hashlib.sha256(raw).hexdigest())
-            self.assertLessEqual(len(output['stdout'].encode()), 4096)
+            streams = {'stdout': 'OUT-BEGIN雪' + '雪'*100000 + 'OUT-END',
+                       'stderr': 'ERR-BEGIN🌍' + '🌍'*4100 + 'ERR-END'}
+            artifacts = {item['stream']: item for item in output['artifacts']}
+            for stream, complete in streams.items():
+                raw = complete.encode()
+                self.assertEqual(peer.artifact_values[('run-1', 'call-1', stream)], raw)
+                self.assertEqual(artifacts[stream]['sha256'], hashlib.sha256(raw).hexdigest())
+                preview = output[stream].encode()
+                self.assertLessEqual(len(preview), 4096)
+                match = re.fullmatch(rb'(.+)\n\.\.\. \[omitted ([0-9]+) bytes\] \.\.\.\n(.+)', preview, re.DOTALL)
+                self.assertIsNotNone(match, f'{stream} is missing its head/tail preview')
+                head, omitted, tail = match.groups()
+                self.assertTrue(raw.startswith(head) and raw.endswith(tail))
+                self.assertEqual(len(head) + int(omitted) + len(tail), len(raw))
             self.assertTrue(output['truncated'])
         finally:
             peer.close()
