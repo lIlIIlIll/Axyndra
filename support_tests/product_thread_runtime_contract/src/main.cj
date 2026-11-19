@@ -3240,7 +3240,9 @@ func requireProductCoreDurableReadback96(
                 workspaceRoot:workspace,fixture:true,asyncEnabled:false,
                 compactionOverride:Some(ProductCompactionSettings(keepRecentMessages:2)))).value().getOrThrow()
             try{
-                let faultBinding=NativeProgramContractBinding(faultProduct)
+            // Reopen the installed contribution without importing, enabling
+            // or writing its operator grants a second time.
+            let faultProgram = nativeProgramContractToolName(faultProduct)
             let admissionFailureSession = SessionId("fault-matrix-admission-persistence")
             expect(!productToolAvailable(faultProduct,"read"),
                 "retired read alias is absent before the independent root admission persistence fault observer")
@@ -3265,7 +3267,7 @@ func requireProductCoreDurableReadback96(
             )
             faultProduct.fixtureProbe.getOrThrow().enqueueToolCallReply(
                 "fixture-admission-persistence-root",
-                faultBinding.name,
+                faultProgram,
                 objectValue([ValueField(
                     "code", textValue("return await tools.read({});")
                 )])
@@ -3291,7 +3293,7 @@ func requireProductCoreDurableReadback96(
             var realFaultCalls:Int64=0
             for(item in failedThread.items){match(item.content){
                 case ThreadItemContent.ToolCall(callId,name,_)=>
-                    if(callId.value=="fixture-admission-persistence-root" && name==faultBinding.name){realFaultCalls+=1}
+                    if(callId.value=="fixture-admission-persistence-root" && name==faultProgram){realFaultCalls+=1}
                 case _=>()}}
             expect(realFaultCalls==1,"actual canonical model ToolCall exists before its SQLite admission trigger refuses the Root")
             }finally{faultProduct.close().value().getOrThrow()}
