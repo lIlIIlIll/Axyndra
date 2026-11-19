@@ -1949,14 +1949,42 @@ public class ProductRuntime {
             case PluginRegistryResult.Ok(value) => value
             case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
-        let explicitDisableChange = pluginScopeEquals(scope, PluginInstallScope.User) &&
-            !enabled && !target.explicitlyDisabled
-        if (target.enabled == enabled && !explicitDisableChange &&
-            (!enabled || target.descriptor.entryKind != PluginEntryKind.NativeExecutable ||
-                vnext.javascriptPlugins.instanceGeneration(target.descriptor) != 0u64)) {
-            return PluginRegistryResult.Ok(target)
+        var effectiveBefore: ?ProductPluginRecord = None
+        var returnsTarget = false
+        try {
+            let explicitDisableChange = pluginScopeEquals(scope, PluginInstallScope.User) &&
+                !enabled && !target.explicitlyDisabled
+            if (target.enabled == enabled && !explicitDisableChange &&
+                (!enabled || target.descriptor.entryKind != PluginEntryKind.NativeExecutable ||
+                    vnext.javascriptPlugins.instanceGeneration(target.descriptor) != 0u64)) {
+                returnsTarget = true
+                return PluginRegistryResult.Ok(target)
+            }
+            effectiveBefore = pluginRuntime.get(id)
+            applyPluginEnableChange(id, enabled, scope, target, effectiveBefore)
+        } finally {
+            match (effectiveBefore) { case Some(previous) => previous.close(); case None => () }
+            if (!returnsTarget) { target.close() }
         }
-        let effectiveBefore = pluginRuntime.get(id)
+    }
+
+    private func activateAfterEnableChange(id: String, mounted: ProductMountedPluginInstances83): PluginRegistryResult<Unit> {
+        match (remountProductPluginInstances(mounted)) {
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(_) => ()
+        }
+        match (pluginRuntime.get(id)) {
+            case Some(active) =>
+                try { if (active.enabled) { activateProductPlugin(active) } else { PluginRegistryResult<Unit>.Ok(()) } }
+                finally { active.close() }
+            case None => PluginRegistryResult<Unit>.Ok(())
+        }
+    }
+
+    // The caller owns both lookup records throughout activation and rollback.
+    // Only the durable writer's result can be handed to the API caller here.
+    private func applyPluginEnableChange(id: String, enabled: Bool, scope: PluginInstallScope,
+        target: ProductPluginRecord, effectiveBefore: ?ProductPluginRecord): PluginRegistryResult<ProductPluginRecord> {
         match (effectiveBefore) {
             case Some(previous) =>
                 if (previous.enabled) {
@@ -1992,13 +2020,12 @@ public class ProductRuntime {
                 }
                 PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(record) =>
-                let activation = match (remountProductPluginInstances(mounted)) {
-                    case PluginRegistryResult.Err(error) => PluginRegistryResult<Unit>.Err(error)
-                    case PluginRegistryResult.Ok(_) => match (pluginRuntime.get(id)) {
-                        case Some(active) => if (active.enabled) { activateProductPlugin(active) } else { PluginRegistryResult<Unit>.Ok(()) }
-                        case None => PluginRegistryResult<Unit>.Ok(())
-                    }
-                }
+                var returnsRecord = false
+                let activation = try {
+                    let result = activateAfterEnableChange(id, mounted)
+                    returnsRecord = result.isOk()
+                    result
+                } finally { if (!returnsRecord) { record.close() } }
                 match (activation) {
                     case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(record)
                     case PluginRegistryResult.Err(error) =>

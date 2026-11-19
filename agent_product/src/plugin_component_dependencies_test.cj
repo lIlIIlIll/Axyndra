@@ -58,6 +58,46 @@ func componentDependencyError<T>(result: agent_plugin_registry.PluginRegistryRes
 @Test
 class PluginComponentDependencyProductTests {
     @TestCase
+    func failedScopedEnableReturnsItsRecordLookups(): Unit {
+        let root = pluginContractTemp("component-dependency-refusal")
+        try {
+            let installer = componentDependencyProduct(root)
+            try {
+                componentDependencyImport(installer, componentDependencySource(root, "consumer", dependency: "base")).close()
+            } finally { installer.close().value().getOrThrow() }
+            // Both sides of the comparison must own the same loaded lock row.
+            // The initial import and a disk reload have different live invoices.
+            let product = componentDependencyProduct(root)
+            try {
+                let rows = product.pluginSnapshots()
+                let consumer = try { @Assert(rows.size, 1); rows.take(0) } finally { rows.close() }
+                try { checkScopedEnableRefusals(product, consumer) } finally { consumer.close() }
+            } finally { product.close().value().getOrThrow() }
+        } finally { remove(root, recursive: true) }
+    }
+
+    private func checkScopedEnableRefusals(product: ProductRuntime, consumer: ProductPluginRecord): Unit {
+        let probe = consumer.descriptor.deriveCopiedDataPayment(1024)
+        try {
+            let before = probe.retainedCustodyUsage113()
+            for (_ in 0..3) {
+                match (product.setPluginEnabled("axyndra:consumer", true, consumer.scope)) {
+                    case PluginRegistryResult.Err(error) =>
+                        try { @Expect(error.code, "plugin.component_dependency_missing") }
+                        finally { error.close() }
+                    case PluginRegistryResult.Ok(record) =>
+                        record.close()
+                        throw IllegalStateException("an unmet dependency was enabled")
+                }
+                let after = probe.retainedCustodyUsage113()
+                @Expect(after[0], before[0])
+                @Expect(after[2], before[2])
+            }
+            @Expect(consumer.enabled, false)
+        } finally { probe.close() }
+    }
+
+    @TestCase
     func installIsStaticAndEnableRequiresExplicitInstalledReadyDependency(): Unit {
         let root = pluginContractTemp("component-dependency-enable")
         let product = componentDependencyProduct(root)
