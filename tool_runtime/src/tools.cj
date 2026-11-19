@@ -1001,8 +1001,18 @@ public class ToolCatalog {
         } finally { lock.unlock() }
     }
 
+    private func retainCatalogOwnerLocked159(value: ToolCatalogDataPayment159): ?ToolCatalogDataLink159 {
+        match (value as ToolCatalogRetirableData159) {
+            case Some(producer) =>
+                value.reserveCatalogData159(4096)
+                Some(ToolCatalogDataLink159(producer.retainCatalogData159(), dataOwners159))
+            case None => None<ToolCatalogDataLink159>
+        }
+    }
+
     // Candidates are staged before mutation, then published by one locked list replacement.
-    // An empty batch is a no-op.
+    // An empty batch publishes no Tool. A mounted service can still supply
+    // the original Registry DATA owner for snapshots of its dynamic exports.
     public func registerBatch(entries: Array<ToolCatalogRegistration>,
         dataPayment!: ?ToolCatalogDataPayment159 = None): Result<Unit> {
         lock.lock()
@@ -1035,6 +1045,25 @@ public class ToolCatalog {
     }
     private func registerBatchFrame159(entries: Array<ToolCatalogRegistration>,
         dataPayment: ?ToolCatalogDataPayment159, temporary: ?ToolCatalogTemporaryData159): Result<Unit> {
+        if (entries.isEmpty()) {
+            lock.lock()
+            try {
+                if (dataClosed159) { return toolCatalogError("tool.catalog_closed", "catalog data was retired") }
+                match (dataPayment) {
+                    case Some(value) => if (snapshotPayment159.isNone()) {
+                        match (value as ToolCatalogSnapshotPayment159) {
+                            case Some(source) => match (retainCatalogOwnerLocked159(value)) {
+                                case Some(node) => dataOwners159 = Some(node); snapshotPayment159 = Some(source)
+                                case None => ()
+                            }
+                            case None => ()
+                        }
+                    }
+                    case None => ()
+                }
+                return Result.Ok(())
+            } finally { lock.unlock() }
+        }
         let staged = ArrayList<ToolRegistration>()
         for (entry in entries) {
             let descriptor = entry.descriptor
@@ -1057,7 +1086,6 @@ public class ToolCatalog {
             }
             staged.add(ToolRegistration(descriptor, entry.executor))
         }
-        if (staged.size == 0) { return Result.Ok(()) }
 
         lock.lock()
         try {
@@ -1101,14 +1129,7 @@ public class ToolCatalog {
             // All potentially failing DATA preparation precedes the original
             // publication. Only non-allocating field assignments remain.
             let nextDataOwner159 = match (dataPayment) {
-                case Some(value) => match (value) {
-                    case actual: ToolCatalogRetirableData159 =>
-                        // The original retained parent pays this link before
-                        // either the lease carrier or private node is created.
-                        value.reserveCatalogData159(4096)
-                        Some(ToolCatalogDataLink159(actual.retainCatalogData159(), dataOwners159))
-                    case _ => None<ToolCatalogDataLink159>
-                }
+                case Some(value) => retainCatalogOwnerLocked159(value)
                 case None => None<ToolCatalogDataLink159>
             }
             registrationsData159 = Some(committed)
@@ -1364,14 +1385,7 @@ public class ToolCatalog {
                 ))
             }
             let nextDataOwner159 = match (dataPayment) {
-                case Some(value) => match (value) {
-                    case actual: ToolCatalogRetirableData159 =>
-                        // The original retained parent pays this link before
-                        // either the lease carrier or private node is created.
-                        value.reserveCatalogData159(4096)
-                        Some(ToolCatalogDataLink159(actual.retainCatalogData159(), dataOwners159))
-                    case _ => None<ToolCatalogDataLink159>
-                }
+                case Some(value) => retainCatalogOwnerLocked159(value)
                 case None => None<ToolCatalogDataLink159>
             }
             hookHandlersData159 = Some(staged)

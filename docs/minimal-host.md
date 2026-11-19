@@ -55,6 +55,9 @@ uses the real maintenance manager, configured route and explicit operator decisi
 `serve` uses `plugins/ingress.json`; optional bounded service-start requests must
 also carry explicit decisions. No package manifest, approval string or historical
 record can manufacture service/model authority.
+An MCP client and server can expose a service Tool without an unrelated static
+Tool installed. The operator must still grant that exact export for the target
+Thread; changing the grant revokes the connection.
 
 For `invoke`, a failure response includes a nonempty `run_id` only if that Run
 exists for the requested Thread. A missing capability returns
