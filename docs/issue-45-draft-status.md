@@ -4958,3 +4958,15 @@ The private smaller Coding package still timed out before its first HTTP request
 E1932–E1934: Minimal no longer creates a Thread or advertises a nonexistent Run on capability denial. A granted invocation from the wrong workspace still fails, and admitted failures retain their real Run IDs. All 30 Runtime, Model and Service cases passed on one rebuilt Minimal package. [CLI, Store and package evidence](implementation/plan-execution-reliability.md#minimal-invocation-a-rejected-request-is-not-a-persisted-run). This does not qualify Coding or Full against the changed Host and Runtime libraries.
 
 E1943/E1944: Minimal with only MCP client/server installed now reaches the actual backend without a dummy static Tool. Both cancellation negatives and 45 additional Minimal checks passed on the same binary. [Service-only failure, fix and package scope](implementation/plan-execution-reliability.md#service-only-minimal-installations). The previous App passed Full assembly and selected checks; its Coding assembly was interrupted by a fail-closed process watcher. Full Core, cold startup, Product and final release remain open.
+
+### Current package and entrypoint evidence (`802ee60f01`)
+
+| Requirement | Verified result | Remaining gap |
+|---|---|---|
+| Production and package assembly | All nine build stages; Coding and Full assembly, clean environment and setup; all 606 independent Full protocol cases passed. | Not the complete release gate. |
+| Core/recovery | Rebuilt and ran the original unsplit contract. Detached Store copies confirm failed `host.process.readview` and `workspace.grep` Receipts; Program committed a failed Receipt. | Read-only model-selected Program still fails `read_view.output_capacity`. Returned producer identity is not a DATA acknowledgement. |
+| Cold provider | First local profile exceeded five seconds with no POST or Model Attempt; `host.context.read` did complete. | `runtime.run_stale` does not identify which model-boundary condition fired. The second profile was not exercised. |
+| UI and Product | Existing-operator Todo first save and ten real PTY Provider/MCP cases passed. E1953's Product compile timed out before executing any case. | No full Product, fresh-operator or 63 MiB Memory pass. Known GC failures remain deferred. |
+| Matched baseline | Both arms passed the seven-record performance gate; the output and cancellation comparison remains source-bound. | CLI startup and physical cancellation were slower than baseline. Not a blanket performance improvement. |
+
+[Commands, artifact hashes, receipt outcomes, timings and evidence locations](implementation/plan-execution-reliability.md#coding-and-full-at-802ee60f01-containment-receipts-and-timing). Draft; Issue #45 is not fully accepted.

@@ -11237,3 +11237,31 @@ E1936 completed the six remaining production builds for `1da22c440f`; together w
 On the preceding Minimal package, E1937 passed nine management and six offline checks, but the service-only terminal case never reached its first backend call. E1939 captured `plugin.ingress_data_owner_missing`. The installed MCP client and server had completed discovery and tool listing; neither declares a static Tool. An ingress-only loan in a private build funded the parser but not fixed-export validation. E1942 traced the original exception through `fixedExportsCurrent` and `openExternalIngressConnection`. That private change was withdrawn.
 
 E1943 fixed the shared catalog, not the permission checks: the first mounted package that declares no static Tools may supply its actual Registry snapshot payer and counted DATA share. It publishes no Tool, grants no capability and does not replace an existing payer. Both original terminal negatives passed on packaged Minimal ELF `72c60551c74b4c30da1ed65d2a01ba0b2b364f5ba4f4251123daa43d62fe02b8`. The uncancelled queued call never executed, and an operator change revoked the decoder even with a pending cancellation. Each case checked the peer transcript, canonical Receipts and process cleanup. E1944 passed Runtime 10, Service 10, Model 10, management 9 and offline 6 on that same ELF. Evidence: `terminalresponse1939/`, `ingressthrow1942/`, `servicecatalog1943/summary.json`, `minimalall1944/summary.json`. This does not establish a complete Product or release pass.
+
+### Coding and Full at `802ee60f01`: containment, receipts and timing
+
+E1943/E1946 completed all nine pinned production build stages. The native App SHA-256 was `ce16a3e8bfc990fd881ec580da38467cc91c44093a92c8908dcb31fb67878e84`. E1948 assembled both distributions; Coding (nine plugins) and Full (17) contained the same packaged App, `41219c7faa261e72a303a1c58776113de7898e1837c459d6b1a0229cb0be8bc9`. Both passed clean-environment and setup checks. E1948/E1954 passed all 606 cases in Full's 16 independent protocol checkers, none skipped. Memory has no such checker. These results do not qualify its 63 MiB Product path.
+
+* **Core remains failed.** E1949 rebuilt the unsplit `--core-and-recovery-contract` (ELF `3e3f37a87917cb96c6dd2f04622e233522316712089687ad8751cfe6fe8bfb71`). The Program inspection never returned the expected content. E1952 queried detached copies of the main Store (35 Runs, 69 Operations) and fault-case Store (one Run, four Operations). In the completed inspection Run, `host.process.readview` and `workspace.grep` both failed with `read_view.output_capacity`; the committed parent Program Operation has a **failed** reserved Receipt. No numeric shortfall was captured in this execution. The analysis copies passed `quick_check`; all six original Store files retained their hashes.
+* **Closed producer is not returned DATA.** E1947 inspected the retained E1898 stop, not the new E1949 execution. Fifty-four paid Prepared owners referred to 18 distinct Core Run controls. The 17 closed controls had 51 associated owners (14,136,728 billed bytes). All 51 marked an unknown export; four also had a counted consumer. The active control had three associated owners (1,165,448 bytes). These amounts were already in the ledger. Removing a producer reference would not prove that a raw export returned.
+* **Cold local profiles remain failed.** E1950's first Coding invocation exceeded the original five seconds (5,003 ms). No HTTP POST arrived; the second profile did not execute. E1952's detached Store shows one failed Run, one completed `host.context.read` Receipt at +568 ms and no Model Attempt. At +1,775 ms from Run start the journal recorded `runtime.run_stale`; the diagnostic identifies a model-boundary owner change or cancellation, not which guard fired. The database, WAL and SHM were unchanged by analysis. Neither deadlock nor GC is established.
+* **Product coverage is incomplete.** E1953 attempted a new test build for the previously eligible cases, without rerunning known GC paths. Compilation reached its unchanged 900-second deadline. The watcher reaped three workers; no new Product case ran in that attempt.
+* **Actual TUI flows passed.** E1956 verified all nine installed Coding package trees before exercising Todo through the real PTY. Four Allow-once decisions produced two completed Runs, six committed Operations with completed Receipts, and `todo` revision 1. E1957 passed ten native-App PTY cases with sealed Full fixture plugins: three streaming protocols, cancel and Ctrl-C with follow-up, HTTP error, timeout, incomplete EOF, invalid UTF-8 and MCP tool use. The fixtures were local; the proof covers neither public providers nor mouse or resize behavior.
+
+E1951 compared the pinned baseline `4d88fa6072` with `802ee60f01` under the same isolated performance gate. Both arms passed its absolute bounds. The relative results are mixed:
+
+| P95 metric | Samples per arm | Baseline | Candidate |
+|---|---:|---:|---:|
+| Extension cold start (µs) | 12 | 61,405 | 41,024 |
+| First extension call (µs) | 12 | 2,510 | 702 |
+| Steady IPC (µs) | 240 | 8,156 | 239 |
+| Extension host RSS (bytes) | 12 | 29,442,048 | 20,647,936 |
+| Cancellation including 100 ms trigger (µs) | 12 | 126,279 | 134,262 |
+| Plugins-disabled CLI startup (µs) | 20 | 158,544 | 421,036 |
+| Plugins-disabled CLI peak RSS (bytes) | 20 | 94,572,544 | 50,847,744 |
+| Declarative inspect startup (µs) | 20 | 156,032 | 443,513 |
+| Declarative inspect peak RSS (bytes) | 20 | 94,183,424 | 50,667,520 |
+
+E1955 checked the 255 candidate inputs, both fixture types and all four measured executables against E1877. Its existing 32 KiB output and physical cancellation comparisons therefore still apply; these are not new timing samples. Output-to-reap P95 went from 11,175 to 20,089 µs and cancellation-to-reap from 17,416 to 23,023 µs.
+
+Evidence: `currentprod1946/`, `controlowners1947/roots.json`, `currentpackages1948/`, `fullcore1949/`, `currentprofile1950/`, `currentmatched1951/{baseline,candidate}/`, `lockedstores1952/`, `finalproduct1953/`, `currentwires1954/`, `loadclosure1955/`, `finaltodopty1956/`, `finalproviderpty1957/`. GC is deferred, not passed. Full Product and release acceptance remain open.
