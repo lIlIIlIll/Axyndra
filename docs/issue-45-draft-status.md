@@ -4906,3 +4906,11 @@ E1821: both packaged hosts passed the original seven-record performance gate und
 E1838/E1841: the Program fixture no longer exports full installed records. The original budget and cancellation/recovery modes and the independently selected original file-plan suite passed with actual Source, SQLite and filesystem fault checks. The historical unsplit capacity failure remains open. [Core evidence](implementation/plan-execution-reliability.md#program-fixture-consumes-installed-identity-without-copying-registry-records).
 
 E1840: the cold profile still timed out. Over the observed window the broker accumulated 2.50 GB of reads and 6.41 s of process CPU, versus 106 kB and 0.02 s for the print client. These counters are not a CPU breakdown or permission to trust cached package bytes. [Measurement and limits](implementation/plan-execution-reliability.md#cold-profile-measured-broker-reads-during-the-five-second-window).
+
+E1846: all 626 unexecuted E1832 Product names have an exact historical deferred sample. None was replayed or counted as a current pass. [Inventory join and limits](implementation/plan-execution-reliability.md#which-product-cases-remain-unexecuted-on-e1832).
+
+E1842: Minimal, Coding and Full assembled with the revised Shell source where applicable. Clean launch passed in each; Minimal passed six offline cases, and Coding/Full passed setup and 46 Skills protocol cases each. The initial Shell checker invocation ran no tests. [Artifact identities and entrypoints](implementation/plan-execution-reliability.md#release-assemblies-from-the-verified-host-and-revised-shell).
+
+E1845/E1847: the corrected Shell invocation passed all 18 wire cases in each packaged distribution containing Shell. Four additional standalone release consumers passed. [Executable identities and scope](implementation/plan-execution-reliability.md#release-assemblies-from-the-verified-host-and-revised-shell).
+
+E1844: three model-selected Program Runs across two Threads completed with 21 canonical Receipts. The separate direct-control Run failed without an Operation, but its expected error-code assertion also failed. No complete Core pass. [Store reconciliation and remaining failure](implementation/plan-execution-reliability.md#three-model-selected-program-runs-and-a-separate-control-failure).
