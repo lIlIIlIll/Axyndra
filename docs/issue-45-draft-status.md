@@ -4986,3 +4986,13 @@ E1986 passed all ten real Provider/MCP PTY flows. E1969/E1991 passed 606 tests a
 E1999: a freshly assembled Minimal passed clean startup and all 47 selected management, offline, local-peer, runtime and terminal-negative cases. E2001/E2005: the original unsplit Core on a private observer still failed; 3,363 actual exports spanned 76 call sites, and the real output refusal was 9,793,208 bytes short. No observer result proves DATA return. [Minimal, Core and package dependency evidence](implementation/plan-execution-reliability.md#minimal-release-package-dependencies-and-all-observed-prepared-export-sites).
 
 E2000/E2003 fixed an independent non-GC regression: rejecting an invalid distribution context recipe added two Registry leases (24,896 billed bytes) every time. The fixed path uses the just-verified manifest identities for private validation and still publishes only the effective installed record’s lock. Seven selected Native Product cases passed out of 1,103 enumerated. [Reproduction, ownership and scope](implementation/plan-execution-reliability.md#rejecting-an-invalid-distribution-recipe-without-retaining-registry-copies). This is not a Core or cold-request pass.
+
+### Product eligibility and rebuilt App (`6c5a8e1124`)
+
+| Requirement | Verified outcome | Remaining gap |
+| --- | --- | --- |
+| Product Native inventory (E2003, E2009, E2013) | 455 of 1,103 passed: seven distribution cases plus 448 other eligible cases. All 460 attempted cases ended with closed process custody. | Five newly observed Runtime GC failures; 643 previously deferred cases not rerun. No full Product or 63 MiB application pass. |
+| Production App (E2004) | Product, RPC and App rebuilt on the fixed SDK; App `b72e4a1e3394a54c4b255fb3799075f0a055be05358215fbd1231d5f1e246784`. E1999 Minimal's 1,053 dependency inputs are unchanged. | App build is not final provider, CLI, ACP or release acceptance. |
+| Core read-view capacity (E2001, E2014) | The same refusal had 25 legacy-executor-only, 18 child-validation-only, and 12 overlapping Prepared owners. All four counted consumers were in the child-only group. | The observed exports have no blanket DATA return. No quota or ACK change; original unsplit Core still unpassed. |
+
+PR remains Draft. GC deferral has zero pass credit. Raw evidence and the five current failure identities are indexed in the execution reliability record.
