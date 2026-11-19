@@ -435,61 +435,49 @@ private func runArtifactTools(root: String, workspaceRoot: String, database: Sql
 
 func runPersistenceFailureContract(root: String): Unit {
     let workspaceRoot = root + "/workspace"
-    let operationState = root + "/operations"
-    let blockedState = root + "/blocked-state"
     Directory.create(workspaceRoot, recursive: true)
-    Directory.create(blockedState, recursive: true)
-    File.writeTo(blockedState + "/blobs", "not-a-directory".toArray())
-    let workspace = LocalWorkspace(workspaceRoot)
-    let database = SqliteDatabase(operationState + "/state.db")
-    let processes = LocalProcessPort(workspace, sandboxEnabled: true)
-    let catalog = ToolCatalog()
-    installLegacyLocalTools(
-        catalog,
-        workspace,
-        processes,
-        artifactStore: Some(ProductArtifactStore(blockedState))
-    ).value().getOrThrow()
-    let pipeline = ToolPipeline(
-        catalog,
-        InMemoryOperationRuntimePort(),
-        SqliteAuditRepository(database),
-        ProductIds(),
-        policy: DefaultCapabilityPolicy(mode: ApprovalMode.AlwaysAsk)
-    )
-    let context = toolContext("failure-run", "failure-session")
-    let pending = pendingResult(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "artifact-failure",
-                "bash",
-                objectValue(
-                    [
-                        ValueField(
-                            "command",
-                            textValue(
-                                "printf x >> failure-count.txt; /usr/bin/python3 -c 'print(\"f\"*1049000, end=\"\")'"
-                            )
-                        )
-                    ]
-                )
-            )
-        ),
-        "artifact failure Bash requests approval"
-    )
-    let first = completedResult(
-        pipeline.decide(context, pending.operationId, ApprovalDecision.Approve),
-        "artifact persistence failure remains a ToolResult"
-    )
-    expect(
-        !first.isError && fieldBool(first.output, "truncated") &&
-        first.output.field("artifacts").getOrThrow().items.isEmpty() &&
-        firstArtifactErrorCode(first.output) == "artifact.root_unsafe" &&
-        String.fromUtf8(File.readFrom(workspaceRoot + "/failure-count.txt")) == "x",
-        "artifact write failure reports artifact_error without changing exit semantics"
-    )
-    database.close()
+    let scope = NativeShellContractScope(workspaceRoot, approvalMode: ApprovalMode.AlwaysAsk)
+    try {
+        let binding = scope.binding()
+        let thread = SessionId("failure-session")
+        binding.start(thread)
+        let call = binding.product.invokeShellTool(thread, objectValue([
+            ValueField("command", textValue(
+                "printf x >> failure-count.txt; /usr/bin/python3 -c 'print(\"f\"*1049000, end=\"\")'"))
+        ])).value().getOrThrow()
+        try {
+            let pending = call.approval().getOrThrow()
+            let count = Path(workspaceRoot + "/failure-count.txt")
+            expect(call.receiptId() == "" && !exists(count), "artifact failure Bash needs its own approval")
+            let blobs = binding.product.stateRoot + "/blobs"
+            let saved = blobs + ".before-fault"
+            let hadRoot = exists(Path(blobs))
+            if (hadRoot) { rename(blobs, to: saved, overwrite: false) }
+            try {
+                File.writeTo(blobs, "not-a-directory".toArray())
+                call.decide(pending.operationId.value, ApprovalDecision.Approve).value().getOrThrow()
+                let envelope = call.observedOutput().value().getOrThrow()
+                let output = envelope.field("result").getOrThrow()
+                expect(call.failure().isNone() && call.receiptId() != "" &&
+                    fieldText(envelope, "status") == "complete" && fieldInteger(output, "exitCode") == 0 &&
+                    fieldBool(output, "truncated") && fieldInteger(output, "stdoutBytes") == 1049000 &&
+                    output.field("artifacts").getOrThrow().items.isEmpty() &&
+                    firstArtifactErrorCode(output) == "artifact.root_unsafe" &&
+                    String.fromUtf8(File.readFrom(count)) == "x" &&
+                    String.fromUtf8(File.readFrom(blobs)) == "not-a-directory" &&
+                    binding.count("SELECT COUNT(*) FROM operation_receipts WHERE id=? AND operation_id=? AND " +
+                        "outcome='completed'", parameters: [SqlParameter.Text(call.receiptId()),
+                        SqlParameter.Text(pending.operationId.value)]) == 1 &&
+                    binding.count("SELECT COUNT(*) FROM artifacts WHERE size=1049000") == 0 &&
+                    binding.count("SELECT COUNT(*) FROM audit_events WHERE operation_id=? AND " +
+                        "kind='service_artifact_observed'", parameters: [SqlParameter.Text(pending.operationId.value)]) == 0,
+                    "storage failure preserves actual command exit and bytes without a retained artifact")
+            } finally {
+                let _ = removeIfExists(blobs)
+                if (hadRoot) { rename(saved, to: blobs, overwrite: false) }
+            }
+        } finally { call.close().value().getOrThrow() }
+    } finally { scope.close() }
 }
 
 

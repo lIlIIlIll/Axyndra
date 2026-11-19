@@ -62,6 +62,7 @@ class Peer:
             self.artifact_values = {}
             self.encoded_artifact_chunks = 0
             self.poison_artifact = False
+            self.unretained_stream = None
             self.omit_receipt = False
             self.send({'type': 'hello', 'protocol': 'axyndra-js-host-v2', 'extension_id': 'shell',
                 'extension_version': '1.1.0', 'generation': 7, 'capabilities': ['process.channel']})
@@ -148,12 +149,14 @@ class Peer:
             assert self.current['kind'] == 'service' and self.current['operation_id']
             key = (self.current['run_id'], self.current['call_id'], args['stream'])
             action = args['action']
+            unretained = args['stream'] == self.unretained_stream
             if action == 'begin':
                 assert set(args) == {'action', 'stream', 'bytes', 'sha256'} and key not in self.artifact_streams
                 assert 0 <= args['bytes'] <= 16777216
                 self.artifact_streams[key] = [args['bytes'], args['sha256'], bytearray()]
-                response['result'] = {'accepted_bytes': args['bytes']}
-            elif action == 'append':
+                response['result'] = ({'storage_error': 'artifact.root_unsafe'} if unretained
+                                      else {'accepted_bytes': args['bytes']})
+            elif action == ('observe_append' if unretained else 'append'):
                 field = 'data_base64' if 'data_base64' in args else 'text'
                 assert set(args) == {'action', 'stream', 'offset', field}
                 maximum, digest, data = self.artifact_streams[key]
@@ -167,17 +170,22 @@ class Peer:
                     raw = args['text'].encode()
                 assert 0 < len(raw) <= 16384 and len(raw) <= maximum - len(data)
                 data.extend(raw)
-                response['result'] = {'next_offset': len(data)}
+                response['result'] = {('observed_offset' if unretained else 'next_offset'): len(data)}
             else:
-                assert action == 'finish' and set(args) == {'action', 'stream'}
+                assert action == ('observe_finish' if unretained else 'finish') and set(args) == {'action', 'stream'}
                 maximum, digest, data = self.artifact_streams[key]
                 assert len(data) == maximum and hashlib.sha256(data).hexdigest() == digest
-                self.artifact_values[key] = bytes(data)
-                response['result'] = {'artifact': {'stream': args['stream'], 'ref': 'blob:sha256:' + digest,
-                    'sha256': digest, 'bytes': maximum, 'content_type': 'text/plain; charset=utf-8'},
-                    'preview': bytes(data[:8192]).decode('utf-8', errors='ignore'), 'truncated': maximum > 8192}
-                if self.poison_artifact:
-                    response['result']['artifact']['sha256'] = '0' * 64
+                preview = bytes(data[:8192]).decode('utf-8', errors='ignore')
+                reported_digest = '0' * 64 if self.poison_artifact else digest
+                if unretained:
+                    response['result'] = {'storage_error': {'stream': args['stream'], 'code': 'artifact.root_unsafe',
+                        'message': 'artifact root must be a real directory'}, 'observed_bytes': len(data),
+                        'sha256': reported_digest, 'preview': preview}
+                else:
+                    self.artifact_values[key] = bytes(data)
+                    response['result'] = {'artifact': {'stream': args['stream'], 'ref': 'blob:sha256:' + digest,
+                        'sha256': reported_digest, 'bytes': maximum, 'content_type': 'text/plain; charset=utf-8'},
+                        'preview': preview, 'truncated': maximum > 8192}
         elif service == 'process.channel.write':
             assert set(args) == {'intent_id'} and args['intent_id'] == 'shell-call'
             data = self.allowed.pop((self.current['run_id'], self.current['call_id']))
@@ -488,6 +496,35 @@ class NativeShellTests(unittest.TestCase):
             self.assertEqual(reply['result']['status'], 'unknown')
         finally:
             peer.close()
+
+    def test_storage_error_does_not_replace_the_other_stream_or_original_exit(self):
+        with Peer('artifact') as peer:
+            self.assertTrue(peer.start()['ok'])
+            peer.unretained_stream = 'stdout'
+            # Exit the command's subshell, not the persistent interpreter that
+            # must emit the authenticated end-of-command marker.
+            data = {'command': 'head -c 16000 /dev/zero; head -c 18000 /dev/zero >&2; (exit 7)'}
+            reply = peer.execute(peer.prepare(data=data), data=data)['result']
+            self.assertEqual(reply['status'], 'complete')
+            output = reply['result']
+            self.assertEqual(output['exitCode'], 7)
+            self.assertEqual([item['stream'] for item in output['artifacts']], ['stderr'])
+            self.assertNotIn(('run-1', 'call-1', 'stdout'), peer.artifact_values)
+            self.assertEqual(peer.artifact_values[('run-1', 'call-1', 'stderr')], bytes(18000))
+            self.assertEqual([(e['stream'], e['code']) for e in output['artifact_error']['errors']],
+                             [('stdout', 'artifact.root_unsafe')])
+            self.assertTrue(output['stdout'].startswith('\0') and output['stdout'].endswith('\0'))
+
+    def test_unretained_output_with_a_wrong_observed_digest_stays_unknown(self):
+        with Peer('artifact') as peer:
+            self.assertTrue(peer.start()['ok'])
+            peer.unretained_stream = 'stdout'
+            peer.poison_artifact = True
+            data = {'command': 'head -c 16000 /dev/zero'}
+            reply = peer.execute(peer.prepare(data=data), data=data)
+            self.assertFalse(reply['ok'])
+            self.assertEqual(reply['result']['status'], 'unknown')
+            self.assertFalse(peer.artifact_values)
 
     def test_managed_child_uses_frozen_original_bytes_with_actual_child_identity(self):
         with Peer() as peer:

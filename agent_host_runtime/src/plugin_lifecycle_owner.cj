@@ -694,11 +694,20 @@ public class HostPluginLifecycleLease {
         cancelled
     }
 
-    func openArtifactWriter(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        binding: AgentValue): Result<HostServiceArtifactWriter> {
+    func openArtifactSink(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        binding: AgentValue): Result<HostServiceArtifactSink> {
         match (verifyInvocationRoot(context, prepared, binding)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        match (payloadArtifacts) { case Some(value) => value.openServiceArtifactWriter()
-            case None => hostLifecycleLeaseError("artifact.observation_store_required") }
+        let store = match (payloadArtifacts) { case Some(value) => value
+            case None => return hostLifecycleLeaseError("artifact.observation_store_required") }
+        match (store.openServiceArtifactWriter()) {
+            case Result.Ok(writer) => Result.Ok(HostServiceArtifactSink.Retain(writer))
+            case Result.Err(error) =>
+                // Only the Store's pre-open refusal has no file or cleanup
+                // debt. Root verification errors above never select this path.
+                if (error.code == "artifact.root_unsafe") {
+                    Result.Ok(HostServiceArtifactSink.UnsafeRoot(error.message))
+                } else { Result.Err(error) }
+        }
     }
     func artifactObservationMaximum(): Int64 {
         min(16777216, hostLifecycleInt(grant.launchPlan, "max_output_bytes", HOST_PLUGIN_LIFECYCLE_TRANSPORT_OUTPUT_BYTES))

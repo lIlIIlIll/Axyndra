@@ -55,6 +55,15 @@ Empty stderr polls wait locally so
 they cannot block stdout or artifact requests in the host's synchronous service
 callback loop.
 
+If the Host refuses the artifact directory with `artifact.root_unsafe` before
+opening a file, Shell can still report the command's exit status. The Host
+checks the byte offsets and SHA-256 of that stream without retaining its
+contents. The result includes its preview and the stream's error under
+`artifact_error.errors`; it has no artifact reference for that stream. An
+incomplete transfer or mismatched digest leaves the outcome unknown. The
+command is not retried. Older Host or Shell versions keep the unknown outcome
+on this storage refusal; the successful retention protocol has not changed.
+
 The backend's 15 actual tests cover complete 3 MB UTF-8 streaming and escaped
 control characters. Native protocol and actual Product/SQLite/GC tests for this
 increment are authored but not yet run. The original process-channel output

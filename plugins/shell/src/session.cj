@@ -106,12 +106,14 @@ class ShellPluginSession {
         }
         try {
             let artifacts = ArrayList<JsonNode>()
+            let storageErrors = ArrayList<JsonNode>()
             let previews = HashMap<String, String>()
             let names = HashSet<String>()
             var active = ""
             var offset: Int64 = 0
             var length: Int64 = 0
             var expectedDigest = ""
+            var unretained = false
             var ending: ?StringBuilder = None
             var total: Int64 = 0
             var terminal: ?JsonNode = None
@@ -149,7 +151,8 @@ class ShellPluginSession {
                     }
                     require(active == name && number(value, "offset") == offset && data.unifiedKind == UnifiedJsonKind.Text &&
                         data.text.size > 0 && data.text.size <= 16384 && data.text.size <= length - offset, "shell_plugin.output_offset")
-                    args.put("action", jsonString("append")); args.put("offset", field(value, "offset"))
+                    args.put("action", jsonString(if (unretained) { "observe_append" } else { "append" }))
+                    args.put("offset", field(value, "offset"))
                     // Preserve the already validated compact wire form through
                     // the Host boundary; decoded content and offsets are identical.
                     match (encoded) { case Some(raw) => args.put("data_base64", raw)
@@ -166,18 +169,37 @@ class ShellPluginSession {
                 } else {
                     exact(value, ["schema", "id", "stream", "type"])
                     require(kind == "output_end" && active == name && offset == length, "shell_plugin.output_incomplete")
-                    args.put("action", jsonString("finish")); active = ""
+                    args.put("action", jsonString(if (unretained) { "observe_finish" } else { "finish" })); active = ""
                 }
                 let observed = channel.request("output.artifact", args).getOrThrow()
-                if (kind == "output_begin") { require(number(observed, "accepted_bytes") == length, "shell_plugin.output_ack_invalid") }
-                else if (kind == "output_chunk") { require(number(observed, "next_offset") == offset, "shell_plugin.output_ack_invalid") }
-                else {
-                    exact(observed, ["artifact", "preview", "truncated"])
-                    let reference = field(observed, "artifact")
-                    require(text(reference, "stream") == name && number(reference, "bytes") == length &&
-                        text(reference, "sha256") == expectedDigest && text(reference, "ref") == "blob:sha256:" + expectedDigest,
-                        "shell_plugin.output_ack_invalid")
-                    artifacts.add(reference)
+                if (kind == "output_begin") {
+                    unretained = observed.field("storage_error").isSome()
+                    if (unretained) {
+                        exact(observed, ["storage_error"])
+                        require(text(observed, "storage_error") == "artifact.root_unsafe", "shell_plugin.output_ack_invalid")
+                    } else {
+                        require(number(observed, "accepted_bytes") == length, "shell_plugin.output_ack_invalid")
+                    }
+                } else if (kind == "output_chunk") {
+                    let key = if (unretained) { "observed_offset" } else { "next_offset" }
+                    require(number(observed, key) == offset, "shell_plugin.output_ack_invalid")
+                } else {
+                    if (unretained) {
+                        exact(observed, ["storage_error", "observed_bytes", "sha256", "preview"])
+                        let error = field(observed, "storage_error")
+                        exact(error, ["stream", "code", "message"])
+                        require(text(error, "stream") == name && text(error, "code") == "artifact.root_unsafe" &&
+                            number(observed, "observed_bytes") == length && text(observed, "sha256") == expectedDigest,
+                            "shell_plugin.output_ack_invalid")
+                        storageErrors.add(error)
+                    } else {
+                        exact(observed, ["artifact", "preview", "truncated"])
+                        let reference = field(observed, "artifact")
+                        require(text(reference, "stream") == name && number(reference, "bytes") == length &&
+                            text(reference, "sha256") == expectedDigest && text(reference, "ref") == "blob:sha256:" + expectedDigest,
+                            "shell_plugin.output_ack_invalid")
+                        artifacts.add(reference)
+                    }
                     let prefix = text(observed, "preview")
                     match (ending) {
                         case Some(builder) =>
@@ -195,11 +217,14 @@ class ShellPluginSession {
             }
             let value = terminal.getOrThrow()
             exact(value, ["schema", "id", "status", "result", "error"])
-            if (!artifacts.isEmpty()) {
+            if (!previews.isEmpty()) {
                 let body = field(value, "result")
                 require(body.unifiedKind == UnifiedJsonKind.Object, "shell_plugin.output_terminal_missing")
                 for ((name, preview) in previews) { body.put(name, jsonString(preview)) }
-                body.put("artifacts", jsonArray(artifacts.toArray())); body.put("artifact_error", jsonNull())
+                body.put("artifacts", jsonArray(artifacts.toArray()))
+                body.put("artifact_error", if (storageErrors.isEmpty()) { jsonNull() } else {
+                    jsonObject([JsonObjectEntry("errors", jsonArray(storageErrors.toArray()))])
+                })
                 body.put("truncated", jsonBool(true))
             }
             require(text(value, "schema") == BACKEND_SCHEMA && text(value, "id") == id &&
