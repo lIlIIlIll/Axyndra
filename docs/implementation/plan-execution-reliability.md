@@ -11128,3 +11128,58 @@ E1876 passed all nine production build stages after that fix (`a20c643ffc`): App
 E1883/E1884 installed a disabled Native package with a missing dependency, closed Product, reopened the same Registry, and requested enable three times. Every request returned `plugin.component_dependency_missing`; the caller closed each error. Before the fix, each refusal retained 73,568 declared bytes and two leases: 4,534,288 bytes / four leases became 4,754,992 / ten. On the fixed source the readings remained 4,534,288 / four after **each** refusal, and the caller could still read its disabled record. The bank floor remained 16 MiB in both arms. These are declared live invoices, not a physical-memory saving or a refund against a different Core Run.
 
 E1881/E1882 used a newly imported record rather than a reopened one. In that setup the first writer reload also changed the live state's invoice, so it cannot isolate the lookup bytes. E1878/E1879 both reached the original 900-second full Product build deadline before executing a test. E1885 instead built the two affected suites against all production sources. Its Native ELF `f872ccc0d7ba5e20114958828bf8d59b732553281280957b0c9da3bb07c8b59c` enumerated 12 cases. Six were executed separately and passed: the refusal regression, three disabled/scope controls, same-worker reuse, and fresh install/disable/reopen/re-enable. No full Product or Core pass is claimed. Evidence: `reopenscopedred1883/`, `reopenscopedgreen1884/`, `scopedunits1885/`.
+
+### Lane inbox recovery across process exit
+
+E1889 ran the original Core inbox and fork assertions against `99cad28964` in two Native processes. The first installed the pinned Compaction policy, forked the seeded Thread, withdrew steering, queued a follow-up, and delivered a different follow-up inside a live Run. After that process exited, the second opened the same Product and recovered exactly the pending text and correlation ID. The SQLite copy passed `quick_check`: four completed Runs, one queued and one rejected main-Thread entry, and exactly one Step enclosing the delivered follow-up. Both processes were reaped. The earlier E1888 fork stopped without an installed Compaction policy and did not reach recovery. This verifies those clauses, not the unsplit Core capacity gate. Evidence: `pinnedinbox1889/summary.json`; consumer ELF `611509174e807031b606a1ef1ffdb6b8cbec41bfb80c4a57d4d7036888bf7c0f`.
+
+### Production binaries after the scoped enable fix
+
+On `99cad28964`, all nine E1886 production commands exited zero with confirmed process cleanup. Its post-build byte-comparison gate failed: CJPM wrote a target-specific `cjpm.lock` containing only `yjson`. E1890 started each terminal link with the reviewed lock, removed the previous output from the link destination, and verified the generated lock against CJPM's resolved checkout. Both links selected the reviewed `yjson` commit `54b4965dee0f0b96710cbc678ec5ec9a126b055c`; all other bound source inputs kept their hashes. Both executables reproduced E1886 byte-for-byte:
+
+| Binary | SHA-256 |
+| --- | --- |
+| `agent_app` | `3f74a4f6ed0c682ea94c04c6a674f6552151066699eadfee8320088203da05d0` |
+| `agent_minimal` | `7d1664eea982be4bd2242912fd7dea28118036375f11efe431a50faa05cd69f2` |
+
+The reviewed lock was not changed in the repository. The dependency-pin gate passed on both the repository and the fresh release archive. This identifies the binaries; it does not establish a packaged release pass. Evidence: `scopedprod1886/summary.json`, `releaseclosurerecord1890/summary.json`.
+
+### Packaged release and matched measurements on `99cad28964`
+
+E1891 assembled Minimal, Coding, and Full from the E1890 binaries. All 15 selected checks exited zero with confirmed process cleanup. Minimal contained no plugins and passed offline empty-host and clean-environment checks. Coding (nine plugins) and Full (17) both passed clean-environment, setup, and packaged Skills, Program and Shell protocol checks. Coding and Full use the same packaged executable `24a2b0ef5defd9180982a896650f50d33ac0666978c383f560cf5e334ea22e43`; their manifests and plugin sets differ. Evidence: `scopedrelease1891/summary.json`.
+
+E1892 ran the original performance gate sequentially on base `4d88fa6072` and that Coding package, with the same fixed SDK, fixture bytes, normalized paths and clean per-arm state. Both arms met all seven absolute gates. The two packaged CLI operations were slower on the candidate despite lower sampled peak RSS:
+
+| P95 | Samples per arm | Base | Candidate |
+| --- | ---: | ---: | ---: |
+| Extension cold start (µs) | 12 | 77,020 | 60,540 |
+| Extension first call (µs) | 12 | 3,780 | 854 |
+| Extension steady IPC (µs) | 240 | 12,033 | 274 |
+| Extension host RSS (bytes) | 12 | 29,339,648 | 20,709,376 |
+| Extension cancellation after 100 ms trigger (µs) | 12 | 131,556 | 128,345 |
+| Plugins-disabled CLI (µs / peak RSS bytes) | 20 | 271,617 / 90,554,368 | 469,181 / 51,228,672 |
+| Declarative inspect CLI (µs / peak RSS bytes) | 20 | 191,939 / 90,796,032 | 490,088 / 51,322,880 |
+
+E1893 exercised the original local HTTP profile oracle with nine installed packages. The first call timed out at 5,004 ms with no POST; the second was not invoked. The watcher confirmed process cleanup. E1895's read-only Store copy passed `quick_check`: one cancelled Run, one committed `host.context.read` with a completed Receipt at +678 ms from Run start, and **no model attempt**. Neither these rows nor the seven absolute performance gates establish a successful provider request. Evidence: `scopedmatched1892/{baseline,candidate}/summary.json`, `scopedprofile1893/summary.json`, `profiledb1895/summary.json`.
+
+### Reproducing the read-view refusal on the final source
+
+E1896 kept the same Product and bank through the three matched Program/native workflow pairs, the original file-plan success and fault cases, then the model-selected read-only Program. It used the E1891 packaged Workspace, Program and Compaction plugins. The last Run reached the original inspection assertion and failed. E1897's read-only Store copies passed `quick_check`: 25 Runs / 67 Operations in the main Store and one Run / four Operations in the artifact-failure Store. The inspected Run's `host.process.readview` and `workspace.grep` both have failed `read_view.output_capacity` receipts; the Program Root also has a failed Receipt. No previous refusal's numeric balance is attributed to this invocation. This reproduces the non-GC failure without running the unsplit GC sample. Evidence: `programpressure1896/trajectory.log`, `pressurestore1897/summary.json`; Native consumer `fa37e587776df699503450dfe99eba5c83f34abef274bc1a2461943fa2391ac4`.
+
+E1898 stopped a separate execution at the locked bank refusal. The read-view request (131,072 raw bytes) needed a new 16,777,216-byte reservation. The bank already billed 144,767,072 of 150,994,944 bytes: the request was short by 10,549,344 bytes. The application reported the original failure after the debugger detached.
+
+E1902 reconciled that stop, not the earlier E1896 invocation:
+
+| Billed owner | Bytes | Same-stop evidence |
+|---|---:|---|
+| Main Product shared ledger | 43,415,560 | Live lease sum 38,333,448 |
+| Fault-case Product shared ledger | 17,145,944 | Live lease sum 6,349,360 |
+| Program input attachment | 67,108,864 | Writer and evidence present; started, not released |
+| Application checkpoint | 16,777,216 | Same Run as attachment; invoking, not transferred |
+| Fixed buffers | 319,488 | 32 reservations |
+
+All 54 retained Prepared owners matched distinct Operation leases in the two Stores; every owner still marked its exported consumer unknown. A failed Receipt cannot return these references. The offline reader checked the fixed SDK's `TraceBarrier` and collector methods against this core rather than reusing the historical `IdleBarrier` reader. Evidence: `pressurecapture1898/locked-refusals.json`, `pressuretrace1902/{four-root-inventory,reconciliation}.json`. The shortfall is reproduced and accounted for, not fixed.
+
+### Private cold-host experiment
+
+E1894/E1899 combined the canonical JSON writer change and reduced duplicate unsigned-package inspection, retaining the final pin. The private Host built, but the first local profile timed out at 5,002 ms with no HTTP POST; the second was not called. E1903's read-only Store copy shows one completed `host.context.read` Receipt at +605 ms from Run start and one cancelled model attempt, with dispatch claimed at +1,643 ms. A claimed dispatch is not a provider arrival. Neither change was adopted. Evidence: `combinedprofile1899/summary.json`, `candidateprofiledb1903/summary.json`.
