@@ -323,6 +323,16 @@ public class SharedToolSetSnapshot159 {
             match (loan) { case Some(value) => value.holdFailure159(); case None => () }; throw error
         }
     }
+    func excludesPublishedTool(name: String): Bool {
+        var loan: ?SharedToolSnapshotLoan159 = Some(begin159())
+        try { loan.getOrThrow().excludesPublishedTool(name) }
+        catch (error: Exception) { loan.getOrThrow().holdFailure159(); throw error }
+        finally {
+            let payments = sharedSnapshotReturnLoanFrame159(loan.getOrThrow())
+            loan = None<SharedToolSnapshotLoan159>
+            sharedSnapshotClosePayments159(payments)
+        }
+    }
     public func hasExportName159(name: String): Bool {
         var loan: ?SharedToolSnapshotLoan159 = Some(begin159())
         try { sharedSnapshotHasNameFrame159(loan.getOrThrow(), name) }
@@ -715,6 +725,7 @@ class SharedToolSnapshotLoan159 {
         }
         false
     }
+    func excludesPublishedTool(name: String): Bool { snapshot.getOrThrow().excludesPublishedTool(name) }
     func hasName159(name: String): Bool {
         for (entry in snapshot.getOrThrow().entries where entry.name == name) { return true }
         false

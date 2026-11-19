@@ -163,6 +163,11 @@ public class ToolSetSnapshot {
         this.entries = entries
         this.hookHandlers = hookHandlers
     }
+
+    func excludesPublishedTool(name: String): Bool {
+        for (entry in entries where entry.name == name) { return !entry.availableAtSnapshot }
+        false
+    }
 }
 public class ModelLane {
     public let role: ModelLaneRole
@@ -464,6 +469,17 @@ public class ModelLane {
         try {
             match (ownedToolSet159) { case Some(value) => Some(value.fork159())
                 case None => None<SharedToolSetSnapshot159> }
+        } finally { toolDataLock159.unlock() }
+    }
+    // Absence is not a capability decision. Only an explicitly unavailable
+    // entry can rule out routing; availability never authorizes execution.
+    public func excludesPublishedTool(name: String): Bool {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) {
+                case Some(value) => value.excludesPublishedTool(name)
+                case None => rawToolSet159.getOrThrow().excludesPublishedTool(name)
+            }
         } finally { toolDataLock159.unlock() }
     }
     public func hasAvailableTools159(): Bool {

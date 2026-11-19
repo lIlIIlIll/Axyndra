@@ -169,11 +169,25 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
             case Some(value) => value
             case None => ids.nextRunId()
         }
+        // The compatibility predicate is retained in the constructor, but ordinary
+        // roots are classified by the actual published descriptor. Hidden fixed
+        // services and control roots keep their original non-catalog lane semantics.
+        // Unknown tools still reach canonical rejection and settlement below.
+        let ordinary159e = catalog.isPublishedOrdinaryTool159e(call.name, threadId: Some(ThreadId(sessionId.value)))
+        let lane159e = hostGatewayModelLane159e(catalog, effectiveRunId, capabilities, ordinary159e, ThreadId(sessionId.value))
+        // A direct user cannot address a contribution excluded from this exact
+        // lane. Refuse before acquire can create a durable Thread. Routable
+        // calls still require normal preparation, Source and capability checks.
+        if (ordinary159e && !trustedControl && externalConnection.isNone() && lane159e.excludesPublishedTool(call.name)) {
+            lane159e.returnOwnedLaneFrame159()
+            return Result.Err(AgentError(AgentErrorKind.PermissionDenied, "tool.capability_denied",
+                "tool is unavailable to this direct caller"))
+        }
         let runtime = match (threadRuntimes.acquire(
             ThreadId(sessionId.value), workspaceRoot
         )) {
             case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
+            case Result.Err(error) => lane159e.returnOwnedLaneFrame159(); return Result.Err(error)
         }
         let runBudget = objectValue([
             ValueField("run_kind", textValue(if (externalConnection.isSome()) { "external" } else if (hostServiceOrigin.isSome()) { "host_service" } else { "direct_tool" })),
@@ -182,12 +196,6 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
             ValueField("max_concurrent_tools", integerValue(budget.maxConcurrentTools)),
             ValueField("deadline_millis", integerValue(budget.deadlineMillis))
         ])
-        // The compatibility predicate is retained in the constructor, but ordinary
-        // roots are classified by the actual published descriptor. Hidden fixed
-        // services and control roots keep their original non-catalog lane semantics.
-        // Unknown tools still reach canonical rejection and settlement below.
-        let ordinary159e = catalog.isPublishedOrdinaryTool159e(call.name, threadId: Some(ThreadId(sessionId.value)))
-        let lane159e = hostGatewayModelLane159e(catalog, effectiveRunId, capabilities, ordinary159e, ThreadId(sessionId.value))
         let frame159e = hostCreateDirectGatewayFrame159e(lane159e)
         match (dataReturn180) { case Some(receiver) => receiver.bindGatewayFrame180(frame159e); case None => () }
         let result159e = executeGatewayConsumerFrame159e(runtime, lane159e, frame159e, ordinary159e,
