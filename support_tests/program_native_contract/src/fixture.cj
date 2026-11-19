@@ -45,51 +45,31 @@ private func nativeContractContributionReady96(product: ProductRuntime, snapshot
 // object is not a Source, grant, Receipt, invocation or substitute executor.
 public class NativeProgramContractBinding {
     public let product: ProductRuntime
-    public let program: ProductPluginRecord
-    public let workspace: ProductPluginRecord
+    private let programDigest: FixtureRegistryText
+    private let programVersion: FixtureRegistryText
+    private let workspaceDigest: FixtureRegistryText
     private let attachInput: Bool
-    private let programName96: String
-    private let readName96: String
-    private let grepName96: String
-    private let globName96: String
 
     public init(product: ProductRuntime, filePlanProposals!: Bool=false, inputAttachment!: Bool=true) {
         this.product=product;this.attachInput=inputAttachment
-        let resources=match(product.importLocalPlugin(
-            getVariable("AXYNDRA_WORKSPACE_PLUGIN_PACKAGE").getOrThrow(),PluginInstallScope.Workspace)){
-            case PluginRegistryResult.Ok(value)=>supportRegistryRecord96(value)
-            case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))}
-        if(supportRegistryDescriptor96(resources,"namespace")!="axyndra:workspace" || resources.descriptor.entryKind!=PluginEntryKind.NativeExecutable){
-            throw IllegalStateException("actual packaged Workspace contribution required")}
-        match(product.setPluginEnabled(supportRegistryDescriptor96(resources,"namespace"),true,PluginInstallScope.Workspace)){
-            case PluginRegistryResult.Ok(discard96)=>supportRegistryDiscard96(discard96)
-            case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))}
-        let installed=match(product.importLocalPlugin(
-            getVariable("AXYNDRA_PROGRAM_PLUGIN_PACKAGE").getOrThrow(),PluginInstallScope.Workspace)){
-            case PluginRegistryResult.Ok(value)=>supportRegistryRecord96(value)
-            case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))}
-        if(supportRegistryDescriptor96(installed,"namespace")!="axyndra:program" || installed.descriptor.entryKind!=PluginEntryKind.NativeExecutable){
-            throw IllegalStateException("actual packaged Program contribution required")}
-        match(product.setPluginEnabled(supportRegistryDescriptor96(installed,"namespace"),true,PluginInstallScope.Workspace)){
-            case PluginRegistryResult.Ok(discard96)=>supportRegistryDiscard96(discard96)
-            case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))}
-        this.program=installed;this.workspace=resources
-        // Actual installed records are immutable. Reuse their paid descriptive
-        // names instead of exporting another namespace copy on every check.
-        let programNamespace=supportRegistryDescriptor96(installed,"namespace")
-        let workspacePrefix="plugin."+supportRegistryDescriptor96(resources,"namespace")+"."
-        this.programName96="plugin."+programNamespace+".run"
-        this.readName96=workspacePrefix+"read"
-        this.grepName96=workspacePrefix+"grep"
-        this.globName96=workspacePrefix+"glob"
+        let resources = importNativeFixture(product, "AXYNDRA_WORKSPACE_PLUGIN_PACKAGE", "axyndra:workspace")
+        this.workspaceDigest = try { FixtureRegistryText(resources, PluginDescriptorText.ContentDigest) }
+            finally { resources.close() }
+        enableNativeFixture(product, "axyndra:workspace")
+        let installed = importNativeFixture(product, "AXYNDRA_PROGRAM_PLUGIN_PACKAGE", "axyndra:program")
+        try {
+            this.programDigest = FixtureRegistryText(installed, PluginDescriptorText.ContentDigest)
+            this.programVersion = FixtureRegistryText(installed, PluginDescriptorText.Version)
+        } finally { installed.close() }
+        enableNativeFixture(product, "axyndra:program")
         configure(filePlanProposals)
     }
 
-    public prop name: String { get(){programName96} }
+    public prop name: String { get(){ "plugin.axyndra:program.run" } }
     public func workspaceName(contribution: String): String {
-        if(contribution=="read"){return readName96}
-        if(contribution=="grep"){return grepName96}
-        if(contribution=="glob"){return globName96}
+        if(contribution=="read"){return "plugin.axyndra:workspace.read"}
+        if(contribution=="grep"){return "plugin.axyndra:workspace.grep"}
+        if(contribution=="glob"){return "plugin.axyndra:workspace.glob"}
         throw IllegalStateException("readonly fixture has no other delegated contribution")
     }
     public func input(code: String): AgentValue {objectValue([ValueField("code",textValue(code))])}
@@ -103,25 +83,25 @@ public class NativeProgramContractBinding {
                 previous.field("plugins").getOrThrow().unifiedKind!=ValueKind.List){
                 throw IllegalStateException("actual operator configuration shape")}
             for(entry in previous.field("plugins").getOrThrow().items where
-                entry.field("namespace").getOrThrow().text!=supportRegistryDescriptor96(workspace,"namespace") &&
-                entry.field("namespace").getOrThrow().text!=supportRegistryDescriptor96(program,"namespace")){entries.add(entry)}
+                entry.field("namespace").getOrThrow().text!="axyndra:workspace" &&
+                entry.field("namespace").getOrThrow().text!="axyndra:program"){entries.add(entry)}
         }
         let grants=ArrayList<AgentValue>();let targets=ArrayList<AgentValue>()
         for(contribution in ["read","grep","glob"]){
             grants.add(objectValue([ValueField("kind",textValue("tool")),ValueField("name",textValue(contribution)),
                 ValueField("effect",textValue("read_only")),ValueField("services",listValue([textValue("process.readview")]))]))
             targets.add(objectValue([ValueField("alias",textValue(contribution)),
-                ValueField("plugin",textValue(supportRegistryDescriptor96(workspace,"namespace"))),ValueField("contribution",textValue(contribution))]))}
-        entries.add(objectValue([ValueField("namespace",textValue(supportRegistryDescriptor96(workspace,"namespace"))),
-            ValueField("package_digest",textValue(supportRegistryDescriptor96(workspace,"content_digest"))),ValueField("configuration",objectValue([])),
+                ValueField("plugin",textValue("axyndra:workspace")),ValueField("contribution",textValue(contribution))]))}
+        entries.add(objectValue([ValueField("namespace",textValue("axyndra:workspace")),
+            ValueField("package_digest",textValue(workspaceDigest.publish())),ValueField("configuration",objectValue([])),
             ValueField("requests",listValue([])),ValueField("credentials",listValue([])),ValueField("tool_read_grants",listValue(grants.toArray()))]))
         let delegation=objectValue([ValueField("contribution",textValue("run")),ValueField("max_calls",integerValue(32)),
             ValueField("max_depth",integerValue(2)),ValueField("tools",listValue(targets.toArray()))])
         // Preview permission is an explicit fixture choice. It never creates
         // permission to apply the resulting plan or changes a Run budget.
         if(filePlanProposals){delegation.put("file_plan_proposals",boolValue(true))}
-        let actualProgram=objectValue([ValueField("namespace",textValue(supportRegistryDescriptor96(program,"namespace"))),
-            ValueField("package_digest",textValue(supportRegistryDescriptor96(program,"content_digest"))),ValueField("configuration",objectValue([])),
+        let actualProgram=objectValue([ValueField("namespace",textValue("axyndra:program")),
+            ValueField("package_digest",textValue(programDigest.publish())),ValueField("configuration",objectValue([])),
             ValueField("requests",listValue([])),ValueField("credentials",listValue([])),ValueField("tool_delegations",listValue([delegation]))])
         if(attachInput){actualProgram.put("tool_input_attachments",listValue([objectValue([
             ValueField("contribution",textValue("run")),ValueField("field",textValue("code")),ValueField("max_bytes",integerValue(262144))])]))}
@@ -222,9 +202,9 @@ public class NativeProgramContractBinding {
         let parent=store.loadPlan(root,run).value().getOrThrow();let child=store.loadPlan(generated,run).value().getOrThrow()
         let frozen=parent.canonicalArguments.field("host_plan").getOrThrow()
         if(httpIntentText(source,"kind")!="plugin" || root.value==generated.value || parent.toolName!=name ||
-            httpIntentText(source,"plugin_namespace")!=supportRegistryDescriptor96(program,"namespace") ||
-            httpIntentText(source,"package_digest")!=supportRegistryDescriptor96(program,"content_digest") ||
-            httpIntentText(source,"plugin_version")!=supportRegistryDescriptor96(program,"version") ||
+            httpIntentText(source,"plugin_namespace")!="axyndra:program" ||
+            !programDigest.matches(httpIntentText(source,"package_digest")) ||
+            !programVersion.matches(httpIntentText(source,"plugin_version")) ||
             httpIntentText(source,"contribution")!=parent.toolName ||
             httpIntentText(source,"instance_generation")!=httpIntentText(frozen,"generation") ||
             parent.canonicalArguments.field("input").getOrThrow().field("code").getOrThrow().text!=code ||
@@ -373,136 +353,81 @@ public class NativeProgramPlanArtifactFault {
     }
 }
 
-// Test consumer DATA only. No copied metadata becomes an installed Source,
-// pin, receipt, grant, operation, or replacement public Registry record.
-// The source Registry byte carrier pays its complete copied graph before
-// allocating an Array/String/DOM. Original configuration/public fixture text
-// has no retirement protocol, so those independent loans remain paid.
+// The fixture supports exactly these installed packages. Check the live record
+// before using a literal namespace; take digest/version from the actual bytes.
+private func importNativeFixture(product: ProductRuntime, variable: String, namespace: String): ProductPluginRecord {
+    let record = match (product.importLocalPlugin(getVariable(variable).getOrThrow(), PluginInstallScope.Workspace)) {
+        case PluginRegistryResult.Ok(value) => value
+        case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))
+    }
+    try {
+        let descriptor = record.descriptor
+        if (!descriptor.textEquals(PluginDescriptorText.Namespace, namespace) ||
+            descriptor.entryKind != PluginEntryKind.NativeExecutable) {
+            throw IllegalStateException("actual packaged Native contribution required: " + namespace)
+        }
+        record
+    } catch (error: Exception) { record.close(); throw error }
+}
+
+private func enableNativeFixture(product: ProductRuntime, namespace: String): Unit {
+    match (product.setPluginEnabled(namespace, true, PluginInstallScope.Workspace)) {
+        case PluginRegistryResult.Ok(record) => record.close()
+        case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))
+    }
+}
+
+// No full record or parsed descriptor escapes. Each published String retains
+// its own original-bank invoice; matching an immutable field exports no data.
+private class FixtureRegistryText {
+    private let value: String
+    private let payment: LogicalJsonOwnerReservation
+
+    init(record: ProductPluginRecord, field: PluginDescriptorText) {
+        let source = match (record.descriptor.copyText(field)) {
+            case PluginRegistryResult.Ok(bytes) => bytes
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error))
+        }
+        try {
+            let size = source.byteCount
+            this.payment = source.deriveCopiedDataPayment(supportRegistryInvoice96(size))
+            supportRegistryRetain96(this.payment)
+            this.value = String.fromUtf8(Array<UInt8>(size, {index => source.byteAt(index)}))
+        } finally { source.close() }
+    }
+
+    func matches(expected: String): Bool { value == expected }
+
+    func publish(): String {
+        let occurrence = payment.deriveRetainedLease()
+        try { occurrence.ensureRetainedPeak(supportRegistryInvoice96(value.size)) }
+        catch (error: Exception) { occurrence.close(); throw error }
+        supportRegistryRetain96(occurrence)
+        value
+    }
+}
+
 class SupportRegistryCopyDebt96 {
     let payment:LogicalJsonOwnerReservation
     let previous:?SupportRegistryCopyDebt96
     init(payment:LogicalJsonOwnerReservation,previous:?SupportRegistryCopyDebt96){
         this.payment=payment;this.previous=previous}
 }
-class SupportRegistryRecordData96 {
-    let record:ProductPluginRecord
-    private let graph:AgentValue
-    private let payment:LogicalJsonOwnerReservation
-    private let lock=Mutex()
-    private var pending:?LogicalJsonOwnerReservation=None<LogicalJsonOwnerReservation>
-    let enabled:Bool
-    let explicitlyDisabled:Bool
-    let sourceKind:PluginSourceKind
-    let scope:PluginInstallScope
-    let previous:?SupportRegistryRecordData96
-    init(record:ProductPluginRecord,graph:AgentValue,payment:LogicalJsonOwnerReservation,
-        enabled:Bool,explicitlyDisabled:Bool,sourceKind:PluginSourceKind,scope:PluginInstallScope,
-        previous:?SupportRegistryRecordData96){
-        this.record=record;this.graph=graph;this.payment=payment
-        this.enabled=enabled;this.explicitlyDisabled=explicitlyDisabled;this.sourceKind=sourceKind
-        this.scope=scope;this.previous=previous}
-    func text(key:String,descriptor!:Bool=false):String{
-        lock.lock();try{
-            if(pending.isSome()){throw LogicalJsonPayloadError("same copied metadata keeps its failed occurrence payment")}
-            let value=if(descriptor){graph.field("descriptor").getOrThrow().field(key).getOrThrow().text}
-                else{graph.field(key).getOrThrow().text}
-            let loan=payment.deriveRetainedLease();pending=Some(loan)
-            loan.ensureRetainedPeak(supportRegistryInvoice96(value.size,0))
-            supportRegistryRetain96(loan);pending=None<LogicalJsonOwnerReservation>;value
-        }finally{lock.unlock()}
-    }
-}
 class SupportRegistryCopies96 {
     let lock=Mutex()
     var payments:?SupportRegistryCopyDebt96=None<SupportRegistryCopyDebt96>
-    var records:?SupportRegistryRecordData96=None<SupportRegistryRecordData96>
 }
 let supportRegistryCopies96=SupportRegistryCopies96()
-func supportRegistryInvoice96(bytes:Int64,nodes:Int64):Int64{
-    if(bytes<0 || nodes<0 || nodes>(134217728-8192)/1024 ||
-        bytes>(134217728-8192-nodes*1024)/64){
+func supportRegistryInvoice96(bytes:Int64):Int64{
+    if(bytes<0 || bytes>(134217728-8192)/64){
         throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity")}
-    bytes*64+nodes*1024+8192
+    bytes*64+8192
 }
 func supportRegistryRetain96(payment:LogicalJsonOwnerReservation):Unit{
     supportRegistryCopies96.lock.lock();try{
         supportRegistryCopies96.payments=Some(SupportRegistryCopyDebt96(payment,supportRegistryCopies96.payments))
     }finally{supportRegistryCopies96.lock.unlock()}
 }
-func supportRegistryText96(result:PluginRegistryResult<OwnedRegistryUtf8>):String{
-    let source=match(result){case PluginRegistryResult.Ok(value)=>value
-        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
-    try{
-        let size=source.byteCount
-        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,0))
-        supportRegistryRetain96(payment)
-        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
-        String.fromUtf8(bytes)
-    }finally{source.close()}
-}
-func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
-        match(error.staticReason){
-            case PluginRegistryStaticReason.MetadataCapacity=>"registry metadata cannot fit the original shared capacity"
-            case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
-            case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
-            case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
-            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
-}
-func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
-    try{supportRegistryErrorText96(error)}finally{error.close()}
-}
 func supportRegistryExclusiveErrorCode96(error:PluginRegistryOwnedError):String{
     try{error.code}finally{error.close()}
-}
-func supportRegistryDiscard96(record:ProductPluginRecord):Unit{record.close()}
-func supportRegistryOkay96(result:PluginRegistryResult<ProductPluginRecord>):Bool{
-    match(result){case PluginRegistryResult.Ok(record)=>record.close();true
-        case PluginRegistryResult.Err(error)=>
-            try{println("REGISTRY_MUTATION_REFUSED " + error.code);false}finally{error.close()}}
-}
-func supportRegistryData96(record:ProductPluginRecord):SupportRegistryRecordData96{
-    supportRegistryCopies96.lock.lock();try{
-        var current=supportRegistryCopies96.records
-        while(current.isSome()){
-            let row=current.getOrThrow()
-            if(refEq(row.record,record)){return row};current=row.previous}
-    }finally{supportRegistryCopies96.lock.unlock()}
-    // Read real immutable scalar data while the actual view is live. State
-    // replacement may revoke it later; the test's original metadata stays in
-    // this independent same-bank copy instead of resurrecting that view.
-    let enabled=record.enabled;let disabled=record.explicitlyDisabled
-    let kind=record.sourceKind;let scope=record.scope
-    let source=match(record.copyJson()){case PluginRegistryResult.Ok(value)=>value
-        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
-    try{
-        let size=source.byteCount
-        var quoted=false;var escaped=false;var primitive=false;var nodes:Int64=0
-        for(index in 0..size){
-            let byte=source.byteAt(index)
-            if(quoted){if(escaped){escaped=false}else if(byte==92u8){escaped=true}else if(byte==34u8){quoted=false};continue}
-            if(byte==34u8){nodes+=1;quoted=true;primitive=false}
-            else if(byte==123u8 || byte==91u8){nodes+=1;primitive=false}
-            else if(byte==44u8 || byte==58u8 || byte==125u8 || byte==93u8 || byte<=32u8){primitive=false}
-            else if(!primitive){nodes+=1;primitive=true}}
-        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,nodes))
-        supportRegistryRetain96(payment)
-        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
-        let graph=parseUnifiedJson(String.fromUtf8(bytes),maxBytes:size)
-        supportRegistryCopies96.lock.lock();try{
-            let row=SupportRegistryRecordData96(record,graph,payment,enabled,disabled,kind,scope,supportRegistryCopies96.records)
-            supportRegistryCopies96.records=Some(row);row
-        }finally{supportRegistryCopies96.lock.unlock()}
-    }finally{source.close()}
-}
-func supportRegistryRecord96(record:ProductPluginRecord):ProductPluginRecord{
-    let _=supportRegistryData96(record);record
-}
-func supportRegistryDescriptor96(record:ProductPluginRecord,key:String):String{
-    let row=supportRegistryData96(record)
-    // Each returned occurrence is separately paid before it can escape into
-    // configuration, a path, a fixture field, an exception or another frame.
-    row.text(key,descriptor:true)
-}
-func supportRegistryField96(record:ProductPluginRecord,key:String):String{
-    supportRegistryData96(record).text(key)
 }

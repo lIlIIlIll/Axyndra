@@ -10981,3 +10981,31 @@ E1830 passed the original Store executable gate in 178.72 s with clean process c
 E1825's Product build exceeded the unchanged 900 s deadline: no executable and zero tests. E1832 rebuilt with exclusive access to the same budget, enumerated 1,100 cases, and ran the 474 previously passing cases in separate processes. On ELF `3170bb9e053af37b95362595bd7cf0433e71a59729350767be9aacd83c8daf30`, 470 passed and four crashed. The channel cancellation case faulted in `CheckAndPush → GCTib::ForEachBitmapWord` under `Mutator::GcPhaseEnum`. The HTTP parent deadline and startup quarantine cases faulted at the same `CheckAndPush` instruction; their next reported frame was `CJ_MCC_C2NStub`, not the full channel stack. The mixed-provider case faulted in the `GcPhaseEnum` reference-field callback. None of the four passed. The 626 excluded cases were not run. This uses the E1825 source closure at `18419eeac8` and the recorded package fixtures, not the new Shell. Evidence: `productexclusive1832/summary.json` and its four case logs.
 
 E1823 did not measure the cold startup CPU distribution: the sandbox denied `cpu-clock:u` before invocation, and the trace contained zero bytes. No sampling privileges or deadlines were changed. Evidence: `profilecpu1823/summary.json`.
+
+### Matched performance on the E1807 Coding host
+
+E1821 ran the original seven-record performance gate on both packaged hosts, sequentially with exclusive access. Both arms used the same SDK, interpreter, echo fixtures, paths, and fresh state. The baseline's annotated yjson tag resolves to the same commit (`54b4965dee`); neither arm used the other's ELF. Baseline host: `a85907b7df0bb579ceb9b68339eadbc1c43b165616571187921bd6debd3af498`; candidate: `64af1fac47f32317f7afae65ebdbb047fbc468d8195916f4fface92885260463`.
+
+| Metric | Samples/arm | Baseline p50 / p95 | Candidate p50 / p95 |
+|---|---:|---:|---:|
+| Extension activation (µs) | 12 | 40,972 / 101,400 | 40,270 / 41,975 |
+| First extension call (µs) | 12 | 1,549 / 2,042 | 407 / 494 |
+| Steady IPC (µs) | 240 | 1,360 / 3,922 | 167 / 233 |
+| Extension host RSS (bytes) | 12 | 18,366,464 / 29,106,176 | 15,282,176 / 20,721,664 |
+| Cancellation after 100 ms trigger (µs) | 12 | 123,436 / 127,948 | 122,075 / 125,974 |
+| Disabled-plugin `/help` (µs; RSS bytes) | 20 | 105,856 / 144,554; 91,381,760 / 91,672,576 | 411,972 / 422,950; 52,584,448 / 53,211,136 |
+| Declarative inspection (µs; RSS bytes) | 20 | 106,541 / 124,518; 91,312,128 / 91,725,824 | 433,607 / 438,803; 52,551,680 / 53,096,448 |
+
+Both absolute gates passed. Candidate inspection and `/help` took about four times as long at the median despite lower RSS. Neither command dispatches a model request. These measurements qualify the named host pair only, not the later Shell package or a final release. Evidence: `matched1821/{baseline,candidate}/summary.json` and the original gate logs.
+
+### Program fixture consumes installed identity without copying registry records
+
+The Program fixture needs two package digests and one version, not the complete Workspace and Program records. It now checks the namespace and Native entry kind on each live imported record, copies those three fields under their original bank, and closes the record before enabling the package. A digest published into operator configuration still pays for each occurrence. Source checks compare the immutable copied fields without exporting another string. The fixture no longer serializes or retains a record graph. No production quota, capability, Source, SQL join or release rule changed.
+
+E1838 built a fresh executable from fixture SHA-256 `298675cf1f1640bf9bda2c3436d28ca2d0a8dc525be0f38e45c2adb6960dff7f`. The original Program budget and cancellation/recovery modes passed on ELF `ae66d11231680e84d95929ee9217037144f485abbe326564a2f14935e2693254`. E1841 used a private entry to call the original file-plan suite, including the real storage fault. Generated Source, permissions, immutable preview, refusal and SQLite settlement assertions passed in 50.85 s on ELF `b14233ae9869954375cb17eb64e5ccbde8f618965aa32bc644a64badd7a0fe88`. Neither run required forced cleanup. The unsplit GC-blocked run was not repeated. E1776's historical copy invoices do not measure the new refusal-time balance or establish that the full Core capacity failure is fixed. Evidence: `coreprojection1838/summary.json`, `planprojection1841/summary.json`.
+
+### Cold profile: measured broker reads during the five-second window
+
+E1839 never reached `invoke`: the read-only fixture workspace rejected its registry lock during operator setup. E1840 provided a writable, isolated registry workspace and passively sampled the unmodified E1807 Coding binary. The first local profile timed out after 5.003 s; profile two did not run. Of 194 sampling rounds, the same broker appeared in 192. Between its first and last observations (51–4,988 ms), the broker accumulated 2,503,876,570 `rchar` bytes, 45,716 read syscalls and 6.41 s of process-wide user plus system CPU. The print client accumulated 106,052 bytes and 0.02 s of CPU. Package files were open on the broker in 121 samples, including installed libraries and files from all nine shipped packages.
+
+`rchar` counts bytes read across file descriptors, not physical disk I/O or bytes uniquely attributable to verification; descriptor sightings are not hash counts. These measurements locate work in the broker but do not authorize skipping verification. Earlier one-companion and all-file two-reader assignments already failed the original deadline. The watcher required no forced cleanup here; this does not alter E1807's separate cleanup failure. Evidence: `coldobserved1840/summary.json`, `samples-profile-one.json` and `worker.log`.
