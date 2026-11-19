@@ -195,12 +195,15 @@ func productRegistryFailure83<T>(runtime: ProductPluginRuntime, code: String, me
     PluginRegistryResult.Err(runtime.ownedError(code, message))
 }
 
-func productRegistryPrepayCells83(descriptor: OwnedPluginPackageDescriptor, count: Int64, custody!: ?OwnedApplicationRegistryResponse161 = None): Unit {
+func productRegistryCellPayment83(descriptor: OwnedPluginPackageDescriptor, count: Int64): LogicalJsonOwnerReservation {
     if (count < 0 || count > (134217728 - 8192) / 256) {
         throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity")
     }
-    let payment = descriptor.deriveCopiedDataPayment(count * 256 + 8192)
-    productRegistryAdoptCopied161(payment, custody: custody)
+    descriptor.deriveCopiedDataPayment(count * 256 + 8192)
+}
+
+func productRegistryPrepayCells83(descriptor: OwnedPluginPackageDescriptor, count: Int64, custody!: ?OwnedApplicationRegistryResponse161 = None): Unit {
+    productRegistryAdoptCopied161(productRegistryCellPayment83(descriptor, count), custody: custody)
 }
 
 func productRegistryComponents83(descriptor: OwnedPluginPackageDescriptor, custody!: ?OwnedApplicationRegistryResponse161 = None): Array<OwnedPluginComponent> {

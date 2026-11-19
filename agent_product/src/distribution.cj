@@ -15,6 +15,15 @@ import yjson_support.*
 // Distribution is an explicit host installation choice. It supplies package
 // defaults, never capabilities, credentials, an approval or a second registry.
 public func applyProductDistributionDefaults(product: ProductRuntime, directory: String): Result<Unit> {
+    // These payments cover private collection cells, not the records or text
+    // published by the Registry. Nothing receiving a record receives this list.
+    let cellPayments = ArrayList<LogicalJsonOwnerReservation>()
+    try { applyDistributionDefaultsFrame(product, directory, cellPayments) }
+    finally { for (payment in cellPayments) { payment.close() } }
+}
+
+private func applyDistributionDefaultsFrame(product: ProductRuntime, directory: String,
+    cellPayments: ArrayList<LogicalJsonOwnerReservation>): Result<Unit> {
     let descriptors = ArrayList<OwnedPluginPackageDescriptor>()
     try {
         let root = canonicalize(Path(directory)).toString()
@@ -45,7 +54,9 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 case PluginRegistryResult.Ok(value) => value
                 case PluginRegistryResult.Err(error) => error.close(); return distributionError("distribution.package_invalid") }
             try {
-                productRegistryPrepayCells83(descriptor, entries.items.size * 4)
+                let payment = productRegistryCellPayment83(descriptor, entries.items.size * 4)
+                try { cellPayments.add(payment) }
+                catch (error: Exception) { payment.close(); throw error }
                 descriptors.add(descriptor)
             } catch (error: Exception) { descriptor.close(); throw error }
             let namespace = httpIntentText(entry, "namespace")

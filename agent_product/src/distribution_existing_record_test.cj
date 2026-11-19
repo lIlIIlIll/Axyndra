@@ -154,4 +154,34 @@ class DistributionExistingNativeRecordTests {
         } finally { remove(root, recursive: true) }
     }
 
+    @TestCase
+    func reapplyingInstalledDefaultsDoesNotAccumulateRegistryCustody(): Unit {
+        let root = pluginContractTemp("distribution-returned-defaults")
+        try {
+            let bundle = nativeDistributionTestBundle(root)
+            let product = lifecycleTestRequire(openProduct(config: ProductConfig(
+                workspaceRoot: root + "/workspace", settingsRoot: root + "/settings",
+                stateRoot: root + "/state", fixture: true, asyncEnabled: false)))
+            try {
+                let record = match (product.importLocalPlugin(bundle + "/source", PluginInstallScope.User)) {
+                    case PluginRegistryResult.Ok(value) => value
+                    case PluginRegistryResult.Err(error) =>
+                        try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                try {
+                    let probe = record.descriptor.deriveCopiedDataPayment(1024)
+                    try {
+                        @Assert(applyProductDistributionDefaults(product, bundle).isOk())
+                        let before = probe.retainedCustodyUsage113()
+                        for (_ in 0..3) {
+                            @Assert(applyProductDistributionDefaults(product, bundle).isOk())
+                            let after = probe.retainedCustodyUsage113()
+                            @Expect(after[0], before[0])
+                            @Expect(after[2], before[2])
+                        }
+                    } finally { probe.close() }
+                } finally { record.close() }
+            } finally { product.close().value().getOrThrow() }
+        } finally { remove(root, recursive: true) }
+    }
 }
