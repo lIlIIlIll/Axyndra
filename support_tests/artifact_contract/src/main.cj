@@ -8,6 +8,7 @@ import agent_runtime.*
 import agent_domain.*
 import agent_product.*
 import workspace_legacy_oracle.*
+import shell_native_contract.*
 import agent_store.*
 import agent_testkit.*
 import persistence_runtime.*
@@ -176,12 +177,20 @@ func runStoreContract(root: String): Unit {
 
 func runToolContract(root: String): Unit {
     let workspaceRoot = root + "/workspace"
-    let state = root + "/state"
     Directory.create(workspaceRoot, recursive: true)
     Directory.create(workspaceRoot + "/exports", recursive: true)
+    let scope = NativeShellContractScope(workspaceRoot, approvalMode: ApprovalMode.AlwaysAsk)
+    try {
+        let binding = scope.binding()
+        let database = SqliteDatabase(binding.product.stateRoot + "/state.db")
+        try { runArtifactTools(root, workspaceRoot, database, binding) } finally { database.close() }
+    } finally { scope.close() }
+}
+
+private func runArtifactTools(root: String, workspaceRoot: String, database: SqliteDatabase,
+    binding: NativeShellContractBinding): Unit {
     let workspace = LocalWorkspace(workspaceRoot)
-    let database = SqliteDatabase(state + "/state.db")
-    let store = ProductArtifactStore(state, database: Some(database))
+    let store = ProductArtifactStore(binding.product.stateRoot, database: Some(database))
     let processes = LocalProcessPort(workspace, sandboxEnabled: true)
     let catalog = ToolCatalog()
     installLegacyLocalTools(
@@ -200,10 +209,7 @@ func runToolContract(root: String): Unit {
             allowWorkspaceWrites: true
         )
     )
-    let context = toolContext("bash-run", "artifact-session")
-    let bashCall = ToolCall(
-        "bash-large",
-        "bash",
+    let first = binding.invoke(SessionId("artifact-session"),
         objectValue(
             [
                 ValueField(
@@ -218,25 +224,25 @@ func runToolContract(root: String): Unit {
             ]
         )
     )
-    let pending = pendingResult(executePipelineCall(pipeline, context, bashCall), "oversized bash requests approval")
-    let first = completedResult(
-        pipeline.decide(context, pending.operationId, ApprovalDecision.Approve),
-        "approved oversized bash completes"
-    )
+    let pending = first.approval().getOrThrow()
+    let count = Path(workspaceRoot).join("bash-count.txt")
+    expect(!exists(count), "oversized Bash must not execute before its own approval")
+    first.decide(pending.operationId.value, ApprovalDecision.Approve).value().getOrThrow()
+    let envelope = first.observedOutput().value().getOrThrow()
+    let output = envelope.field("result").getOrThrow()
     expect(
-        !first.isError && fieldBool(first.output, "truncated") &&
-        fieldInteger(first.output, "stdout_bytes") > ONE_MIB &&
-        fieldInteger(first.output, "stderr_bytes") > ONE_MIB &&
-        first.output.field("artifacts").getOrThrow().items.size == 2 &&
-        first.output.field("artifact_error").getOrThrow().unifiedKind == ValueKind.Null &&
-        fieldText(first.output, "stdout").startsWith("OUT-BEGIN\n") &&
-        fieldText(first.output, "stdout").endsWith("OUT-END") &&
-        fieldText(first.output, "stderr").startsWith("ERR-BEGIN\n") &&
-        fieldText(first.output, "stderr").endsWith("ERR-END"),
+        first.failure().isNone() && first.receiptId() != "" && fieldText(envelope, "status") == "complete" &&
+        fieldBool(output, "truncated") &&
+        fieldInteger(output, "stdoutBytes") > ONE_MIB && fieldInteger(output, "stderrBytes") > ONE_MIB &&
+        output.field("artifacts").getOrThrow().items.size == 2 &&
+        output.field("artifact_error").getOrThrow().unifiedKind == ValueKind.Null &&
+        fieldText(output, "stdout").startsWith("OUT-BEGIN\n") && fieldText(output, "stdout").endsWith("OUT-END") &&
+        fieldText(output, "stderr").startsWith("ERR-BEGIN\n") && fieldText(output, "stderr").endsWith("ERR-END") &&
+        String.fromUtf8(File.readFrom(count)) == "x",
         "Bash preserves compatible previews plus complete dual-stream artifact metadata"
     )
-    let stdoutRef = artifactRef(first.output, "stdout")
-    let stderrRef = artifactRef(first.output, "stderr")
+    let stdoutRef = artifactRef(output, "stdout")
+    let stderrRef = artifactRef(output, "stderr")
     expect(
         store.read(stdoutRef, limit: ONE_MIB).value().getOrThrow().content.startsWith("OUT-BEGIN\n") &&
         readAll(store, stdoutRef).endsWith("OUT-END") &&
@@ -393,7 +399,6 @@ func runToolContract(root: String): Unit {
         String.fromUtf8(File.readFrom(workspaceRoot + "/eval-count.txt")) == "x",
         "Eval persists complete stdout and stderr while retaining process success semantics"
     )
-    database.close()
 }
 
 func runPersistenceFailureContract(root: String): Unit {

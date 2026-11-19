@@ -72,6 +72,8 @@ AXYNDRA_WORKSPACE_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_workspace_plug
 export AXYNDRA_WORKSPACE_PLUGIN_PACKAGE
 AXYNDRA_PROGRAM_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_program_plugin.py")
 export AXYNDRA_PROGRAM_PLUGIN_PACKAGE
+AXYNDRA_SHELL_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_shell_plugin.py")
+export AXYNDRA_SHELL_PLUGIN_PACKAGE
 AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_shell_readonly_plugin.py")
 export AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE
 # Standalone contracts execute after the unit-gate Python process exits;
