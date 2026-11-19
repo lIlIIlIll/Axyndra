@@ -399,7 +399,7 @@ class ProgramInputAttachmentPackageTests(unittest.TestCase):
             request=peer.receive();fields={key:request[key] for key in KEYS}
             peer.send(dict(fields,type='service_response',request_id=request['request_id'],ok=False,
                 error={'code':'wire-only-refusal','message':'no Root grant in this fixture'}))
-            reply=peer.receive();self.assertFalse(reply['ok']);self.assertEqual(reply['result']['sub_call_count'],0)
+            reply=peer.receive();self.assertFalse(reply['ok']);self.assertEqual(reply['result']['sub_call_count'],1)
             self.assertEqual(request['request_id'],'program-call-1')
             self.assertEqual(reply['result']['error_code'],'wire-only-refusal')
             self.assertEqual(reply['result']['program_artifact'],packet['artifact']['ref'])

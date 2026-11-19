@@ -91,15 +91,15 @@ class ProgramHost <: ProgramSubOperationExecutor {
     // operator opt-in, Derived preview, stored origin and durable Receipt.
     func proposeCompletedValue(value: JsonNode): Result<JsonNode> {
         if(value.unifiedKind!=UnifiedJsonKind.Object || value.field("application_plan").isNone()){return Result.Ok(value)}
-        calls++
-        if(calls>32){return Result.Err(AgentError(AgentErrorKind.InvalidInput,"tool_program.subcall_limit","program exceeds its bounded service count"))}
-        let id="program-plan-"+calls.toString()
+        if(calls>=32){return Result.Err(AgentError(AgentErrorKind.InvalidInput,"tool_program.subcall_limit","program exceeds its bounded service count"))}
+        let next=calls+1
+        let id="program-plan-"+next.toString()
         let fields=envelope(invocation,"service_request")
         fields.add(JsonObjectEntry("request_id",jsonString(id)))
         fields.add(JsonObjectEntry("service",jsonString("file.plan.propose")))
         fields.add(JsonObjectEntry("arguments",jsonObject([JsonObjectEntry("proposal",value.field("application_plan").getOrThrow())])))
-        window.request(calls+1,jsonObject(fields.toArray()))
-        emittedPreviewRequests++
+        window.request(next+1,jsonObject(fields.toArray()))
+        calls=next
         let started=MonoTime.now()
         try{
             let response=window.response(calls+1,id);require(sameIdentity(response,invocation))
@@ -133,19 +133,19 @@ class ProgramHost <: ProgramSubOperationExecutor {
     private let invocation: JsonNode; private let input: ProgramInput; private let clock: ProgramClock
     private let window: ProgramPayloadWindow
     private var calls: Int64 = 0
-    private var emittedPreviewRequests: Int64 = 0
-    func additionalEmittedServiceRequests(): Int64 { emittedPreviewRequests }
+    func emittedServiceRequests(): Int64 { calls }
     var uncertain: Bool = false
     init(invocation: JsonNode, input: ProgramInput, clock: ProgramClock, window: ProgramPayloadWindow) { this.invocation = invocation; this.input = input; this.clock = clock; this.window = window }
     public func isReadOnly(call: ToolCall): Bool { channelIntentIdentifier(call.name) }
     public func invoke(call: ToolCall): Result<ToolInvocationResult> {
-        calls++
-        if (calls > 32) { return Result.Err(AgentError(AgentErrorKind.InvalidInput, "tool_program.subcall_limit", "program exceeds the Product subcall limit")) }
-        let id = "program-call-" + calls.toString()
+        if (calls >= 32) { return Result.Err(AgentError(AgentErrorKind.InvalidInput, "tool_program.subcall_limit", "program exceeds the Product subcall limit")) }
+        let next = calls + 1
+        let id = "program-call-" + next.toString()
         let fields = envelope(invocation, "service_request")
         fields.add(JsonObjectEntry("request_id", jsonString(id))); fields.add(JsonObjectEntry("service", jsonString("tool.readonly")))
         fields.add(JsonObjectEntry("arguments", jsonObject([JsonObjectEntry("tool", jsonString(call.name)), JsonObjectEntry("input", call.arguments)])))
-        window.request(calls + 1, jsonObject(fields.toArray()))
+        window.request(next + 1, jsonObject(fields.toArray()))
+        calls = next
         let started = MonoTime.now()
         try {
             let response = window.response(calls + 1, id); require(sameIdentity(response, invocation))
@@ -225,7 +225,7 @@ main(): Int64 {
                             actualErrorCode=error.code;actualErrorMessage=error.message}}
                 let output = jsonObject([JsonObjectEntry("status", jsonString(actualStatus)), JsonObjectEntry("value", observedValue),
                     JsonObjectEntry("instruction_count", jsonNumber(result.instructions.toString())),
-                    JsonObjectEntry("sub_call_count", jsonNumber((result.subOperations.size + host.additionalEmittedServiceRequests()).toString())),
+                    JsonObjectEntry("sub_call_count", jsonNumber(host.emittedServiceRequests().toString())),
                     JsonObjectEntry("error_code", jsonString(actualErrorCode)), JsonObjectEntry("error_message", jsonString(actualErrorMessage))])
                 reply(invocation, programWithInputAttachment(output, attachment), actualStatus == "completed", window: Some(window))
             } catch (_: ProgramCancelled) { return 0 }

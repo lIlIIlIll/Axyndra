@@ -13,6 +13,10 @@ empty network `requests` and `credentials`, and `tool_delegations` for the exact
 its own current read grants. The Product endpoint keeps the original 32-call
 ceiling. Startup approval never approves a later Program Root.
 
+`sub_call_count` counts service requests the Program actually sent, including
+requests the Host refused. It does not count a request blocked before sending
+or imply that a child Operation or Receipt exists.
+
 Input attachment persistence is **off when its operator entry is absent**.
 An operator may explicitly add this sibling field to that exact plugin entry:
 
