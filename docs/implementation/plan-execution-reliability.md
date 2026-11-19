@@ -11091,3 +11091,32 @@ E1872 reopened a copy of the E1865 Store, then the fixture tried to import the i
 E1875 used the same starting database (`e89a1eff08798c6b19620a75e82655e5c5b3fe4f048085936c01962b5dfa7f29`) and the same packaged Program. The model selected `plugin.axyndra:program.run`; the original trigger refused Root admission. Submission returned an error and the execution probe recorded zero calls. After Product close, read-only SQLite inspection found exactly one canonical ToolCall for that request, zero Operation and derived-admission rows, no surviving trigger, and a `recovery_required` Run. `quick_check` passed; the original E1865 database kept its hash.
 
 Evidence: `programreadyfault1875/{summary,readback}.json`; focused consumer SHA-256 `f5df262728d5abe3882cb1064893e175676952d2c7ffb7c929c181e28629679d`. This verifies the original fault block, not the complete Core executable or recovery from that fault.
+
+### Cold requests with and without a duplicate startup check
+
+E1874 compared two rebuilt hosts against the same nine sealed Coding packages, fixed SDK and original loopback profile fixture. Each had a fresh operator; all nine packages were installed before timing. Both timed out on `profile-one/shared-model`: 5,003 ms in each arm. Neither HTTP handler received a POST and profile two did not run.
+
+E1880 read separate copies of each database, WAL and SHM after physical process cleanup. Both passed `quick_check`, kept their original file hashes and contained the `profile smoke` input and a completed `host.context.read` Receipt. The published host (`14ba84da7d`) reached the context safe cut 1,163 ms after Run start, with no model attempt recorded. The private host reached the cut at 1,237 ms, created an attempt at 1,860 ms and claimed dispatch at 2,018 ms. The attempt was cancelled, with no provider terminal state. Claiming dispatch is not evidence of an HTTP request. The private change was not shipped; one paired timeout does not establish a speedup. Evidence: `pairedlastpin1874/` and `coldstore1880/summary.json`.
+
+### Matched concurrent output and physical cancellation
+
+E1877 built each arm from its own source: base `4d88fa6072` and candidate `ddffdde933`. Both used the pinned SDK, the same JS echo fixtures and paths, and the same scheduler exclusion during measurement. For each payload, 12 pairs of overlapping calls on two distinct live workers returned the exact bodies and one progress event per call. At normal close, each worker PID disappeared. All 12 cancellation samples per arm observed the worker before the trigger, received `process.cancelled`, and found no live worker at return.
+
+| Time in µs, P50 / P95 | Base | Candidate |
+|---|---:|---:|
+| Paired call span, 256-byte output | 2,873 / 10,088 | 603 / 855 |
+| First progress, 256-byte output | 1,074 / 1,456 | 499 / 738 |
+| Close and reap, 256-byte output | 8,028 / 10,204 | 9,711 / 19,632 |
+| Paired call span, 32,768-byte output | 69,121 / 100,165 | 2,188 / 2,901 |
+| First progress, 32,768-byte output | 1,631 / 2,082 | 1,025 / 1,245 |
+| Close and reap, 32,768-byte output | 5,490 / 11,175 | 9,953 / 20,089 |
+| Cancellation trigger to result | 16,650 / 17,406 | 15,943 / 23,014 |
+| Cancellation trigger to observed PID absence | 16,664 / 17,416 | 15,955 / 23,023 |
+
+The candidate returned output sooner, but both normal close and cancellation had higher P95. Physical return does not prove DATA release. Commands, four executable hashes, individual samples and watcher records: `matchedload1877/{baseline,candidate}-{output,cancel}/`. This measures the Extension runtime, not complete Product activation, memory or cold provider latency.
+
+### Distribution and production build versions
+
+E1867 passed real assembly and clean-environment checks on `14ba84da7d` for Minimal (0 plugins), Coding (9) and Full (17). Minimal passed the empty/offline gate; Coding and Full passed setup and their packaged Skills, Program and Shell protocols. Coding/Full packaged host SHA-256: `e121fda8a297dfc4edb38bce9317dd4cb477c5a401ce2791f145d9c00077428b`; Minimal: `43f0b07c03bb5800265a8ed29797983f58eb78f5c01c709841194872584797c1`. This predates the Shell storage-failure fix.
+
+E1876 passed all nine production build stages after that fix (`a20c643ffc`): App `a8de4a85ea0b245df19e936bf2be25b09f73fe9d4146932b5a040308b7f46a12`, Minimal `7d1664eea982be4bd2242912fd7dea28118036375f11efe431a50faa05cd69f2`. Those are source build outputs, not a later distribution acceptance. Evidence: `combinedrelease1867/summary.json` and `typedstorageprod1876/summary.json`.
