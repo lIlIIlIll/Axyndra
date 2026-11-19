@@ -515,7 +515,7 @@ public class ThreadCoordinator {
     private let lock = Mutex()
     private let commitSink: ThreadCommitSink
     private let threadId: ThreadId
-    private let workspaceId: String
+    let workspaceId: String
     private var status: ThreadStatus
     private var revision: Int64
     private var nextItemOrdinal: Int64

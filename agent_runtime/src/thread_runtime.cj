@@ -346,6 +346,7 @@ public class AgentThreadRuntime {
         ))
     }
 
+    public func belongsToWorkspace(workspaceId: String): Bool { coordinator.workspaceId == workspaceId }
     public func threadSnapshot(): AgentThreadSnapshot { coordinator.snapshot() }
     public func hasRetainedQueuedInputCache113(): Bool { coordinator.hasRetainedQueuedInputCache113() }
     // Complete conversation data is borrowed from the actual Store row owner.

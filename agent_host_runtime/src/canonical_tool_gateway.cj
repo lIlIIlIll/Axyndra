@@ -26,15 +26,18 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
     private let contextForRoot: (String) -> ToolContextDescriptor
     private let requiresToolSnapshot: (String) -> Bool
     private let preAdmissionPolicy: (ToolCall) -> Result<Unit>
+    private let workspaceMismatch: ?AgentError
     private let ownedFailures113 = HostOwnedCheckpointFailureQueue113()
     public init(database: SqliteDatabase, catalog: ToolCatalog, pipeline: ToolPipeline,
         ids: IdGenerator, threadRuntimes: ThreadRuntimeRegistry, operations: OperationRuntimePort,
         workspaceRoot: String, contextForRoot: (String) -> ToolContextDescriptor,
-        requiresToolSnapshot: (String) -> Bool, preAdmissionPolicy: (ToolCall) -> Result<Unit>) {
+        requiresToolSnapshot: (String) -> Bool, preAdmissionPolicy: (ToolCall) -> Result<Unit>,
+        workspaceMismatch!: ?AgentError = None) {
         this.database = database; this.catalog = catalog; this.pipeline = pipeline; this.ids = ids
         this.threadRuntimes = threadRuntimes; this.operations = operations; this.workspaceRoot = workspaceRoot
         this.contextForRoot = contextForRoot; this.requiresToolSnapshot = requiresToolSnapshot
         this.preAdmissionPolicy = preAdmissionPolicy
+        this.workspaceMismatch = workspaceMismatch
     }
 
     public func takeOwnedCheckpointFailure113(run: RunId): OwnedHostDirectToolResult113 {
@@ -188,6 +191,15 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => lane159e.returnOwnedLaneFrame159(); return Result.Err(error)
+        }
+        // A workspace-bound frontend must validate the actual owner, but
+        // must not acquire (and thereby create) a Thread before lane preflight.
+        match (workspaceMismatch) {
+            case Some(error) => if (!runtime.belongsToWorkspace(workspaceRoot)) {
+                lane159e.returnOwnedLaneFrame159()
+                return Result.Err(error)
+            }
+            case None => ()
         }
         let runBudget = objectValue([
             ValueField("run_kind", textValue(if (externalConnection.isSome()) { "external" } else if (hostServiceOrigin.isSome()) { "host_service" } else { "direct_tool" })),

@@ -257,9 +257,12 @@ def main():
     assert inspection["ok"] and cli.rows("SELECT * FROM runs ORDER BY id") == history_before
     completed.append("javascript-actual-root-cross-process-thread-reopen-readonly-history")
 
+    admissions = cli.rows("SELECT id,run_id,state FROM operations ORDER BY id")
     denied = cli.call("invoke", "denied-thread", native_name, "{}", runtime=True, approval="yolo", code=2)
-    assert not denied["ok"] and cli.run(denied["run_id"])[1] == "failed"
-    assert cli.rows("SELECT COUNT(*) FROM operations WHERE run_id=?", (denied["run_id"],)) == [(0,)]
+    assert not denied["ok"] and denied["code"] == "tool.capability_denied" and denied["run_id"] == ""
+    assert cli.rows("SELECT id FROM threads WHERE id='denied-thread'") == []
+    assert cli.rows("SELECT * FROM runs ORDER BY id") == history_before
+    assert cli.rows("SELECT id,run_id,state FROM operations ORDER BY id") == admissions
     completed.append("explicit-yolo-does-not-grant-missing-capability")
 
     (cli.workspace / "input.txt").write_text("MINIMAL_WORKER_SENTINEL\n")
@@ -310,8 +313,12 @@ def main():
     other.mkdir()
     saved_base = cli.base
     cli.base = ["--settings-root", str(cli.settings), "--workspace-root", str(other)]
+    bound_runs = cli.rows("SELECT * FROM runs ORDER BY id")
     mismatch = cli.call("tools", "actual-thread", runtime=True, code=2)
     assert mismatch["code"] == "minimal.thread_workspace_mismatch" and cli.run(first["run_id"]) == prior
+    mismatch = cli.call("invoke", "actual-thread", native_name, "{}", code=2, **granted)
+    assert not mismatch["ok"] and mismatch["code"] == "minimal.thread_workspace_mismatch" and mismatch["run_id"] == ""
+    assert cli.rows("SELECT * FROM runs ORDER BY id") == bound_runs
     cli.base = saved_base
     completed.append("same-thread-reopen-rejects-different-canonical-workspace")
 

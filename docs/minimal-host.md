@@ -56,6 +56,12 @@ uses the real maintenance manager, configured route and explicit operator decisi
 also carry explicit decisions. No package manifest, approval string or historical
 record can manufacture service/model authority.
 
+For `invoke`, a failure response includes a nonempty `run_id` only if that Run
+exists for the requested Thread. A missing capability returns
+`tool.capability_denied` with an empty `run_id` and does not create a Thread.
+An existing Thread cannot be invoked from a different workspace. If an admitted
+Run fails, use its returned ID with `history inspect`.
+
 `--grant <capability[:resource]>` is repeatable. Runtime defaults to `always-ask`;
 `--approval-mode write|yolo` is an explicit operator choice. Timeouts remain
 1..120000 ms, tool budgets 1..32, and tools execute serially. `--ca-bundle` names an

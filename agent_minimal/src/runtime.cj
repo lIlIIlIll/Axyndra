@@ -56,6 +56,11 @@ func minimalRuntimeFailure(error: AgentError, thread!: String = "", run!: String
         ValueField("run_id", textValue(run)), ValueField("call_id", textValue(call))]), runId: run)
 }
 
+private func minimalWorkspaceMismatch(): AgentError {
+    AgentError(AgentErrorKind.Configuration, "minimal.thread_workspace_mismatch",
+        "stored Thread belongs to a different canonical workspace")
+}
+
 func minimalOperatorCapability(value: String): Capability {
     if (value == "" || value.contains("\u{0000}")) { throw IllegalArgumentException("grant must name a capability") }
     let separator = value.indexOf(":")
@@ -201,9 +206,7 @@ class MinimalHostRuntime {
     private func acquireThread(thread: String): Result<AgentThreadRuntime> {
         let actual = match (threadRuntimes.acquire(ThreadId(thread), workspaceRoot)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        if (actual.threadSnapshot().thread.workspaceId != workspaceRoot) {
-            return Result.Err(AgentError(AgentErrorKind.Configuration, "minimal.thread_workspace_mismatch",
-                "stored Thread belongs to a different canonical workspace")) }
+        if (!actual.belongsToWorkspace(workspaceRoot)) { return Result.Err(minimalWorkspaceMismatch()) }
         Result.Ok(actual)
     }
 
@@ -222,8 +225,15 @@ class MinimalHostRuntime {
                     ValueField("resource", textValue(capability.resource))]) }))]) }))]))
     }
 
+    private func invocationFailure(error: AgentError, thread: String, run: RunId, call: ToolCall): MinimalRuntimeReply {
+        // A generated request ID is not a Run. Publish it only if admission
+        // actually committed this Run for this Thread, including failed Runs.
+        let admitted = database.scalarInt("SELECT EXISTS(SELECT 1 FROM runs WHERE id=" +
+            sqliteText(run.value) + " AND thread_id=" + sqliteText(thread) + ")") != 0
+        minimalRuntimeFailure(error, thread: thread, run: if (admitted) { run.value } else { "" }, call: call.callId)
+    }
+
     func invoke(thread: String, name: String, arguments: AgentValue): MinimalRuntimeReply {
-        match (acquireThread(thread)) { case Result.Err(error) => return minimalRuntimeFailure(error, thread: thread); case Result.Ok(_) => () }
         let run = ids.nextRunId()
         let call = ToolCall(ids.nextInvocationId(), name, arguments)
         // Unknown names deliberately reach the same canonical rejection and
@@ -234,9 +244,9 @@ class MinimalHostRuntime {
                 deadlineMillis: agentUtcMillis() + options.timeoutMillis))
         try {
             match (result) {
-                case Result.Err(error) => minimalRuntimeFailure(error, thread: thread, run: run.value, call: call.callId)
+                case Result.Err(error) => invocationFailure(error, thread, run, call)
                 case Result.Ok(ToolInvocationResult.Denied(denial)) =>
-                    minimalRuntimeFailure(denial.reason, thread: thread, run: run.value, call: call.callId)
+                    invocationFailure(denial.reason, thread, run, call)
                 case Result.Ok(ToolInvocationResult.NeedsApproval(approval)) => MinimalRuntimeReply(2, objectValue([
                     ValueField("ok", boolValue(false)), ValueField("code", textValue("minimal.approval_required")),
                     ValueField("message", textValue("operation requires explicit approval through an interactive frontend")),
@@ -521,7 +531,8 @@ func createMinimalHostRuntime(settings: String, workspace: String, options: Mini
         match (host.ownRegistry(registry)) { case Result.Err(error) => throw IllegalStateException(error.describe()); case Result.Ok(_) => () }
         let services = HostJavaScriptPluginServiceRuntime(catalog, pipeline, operations, HostAskRuntime())
         let gateway = HostCanonicalToolGateway(database, catalog, pipeline, ids, threadRuntimes, operations,
-            root, { path => minimalToolContext(path) }, { name => host.readonlyDelegationTool(name) }, { _ => Result<Unit>.Ok(()) })
+            root, { path => minimalToolContext(path) }, { name => host.readonlyDelegationTool(name) }, { _ => Result<Unit>.Ok(()) },
+            workspaceMismatch: Some(minimalWorkspaceMismatch()))
         let runs: RunRepository = SqliteRunRepository(database)
         let model = ControlledModelPort(HostInstalledModelPort(host, settings, database, threadRuntimes, processes, artifacts),
             runs: Some(runs))
