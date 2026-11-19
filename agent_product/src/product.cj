@@ -1015,78 +1015,80 @@ public class ProductRuntime {
             case Some(value) => value
             case None => return pluginProcessError("plugin.not_found", "plugin is not installed")
         }
-        if (!record.enabled || record.descriptor.entryKind != PluginEntryKind.NativeExecutable) {
-            return pluginProcessError("plugin.service_unavailable", "an enabled native service plugin is required")
-        }
-        // Transport selection comes from the exact installed package's operator
-        // configuration. A package may request both capabilities; neither one
-        // selects a backend or substitutes for a current configuration grant.
-        let httpConfiguration: ?ProductPluginHttpConfiguration = match (loadPluginHttpConfiguration(settingsRoot,
-            productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)))) {
-            case Result.Ok(value) => Some(value)
-            case Result.Err(error) =>
-                if (error.code == "plugin.http_configuration_missing") { None }
-                else { return Result.Err(error) }
-        }
-        if (httpConfiguration.isSome()) {
-            let transport = httpConfiguration.getOrThrow().configuration.field("transport")
-            if (transport.isNone() || transport.getOrThrow().unifiedKind != ValueKind.Text || transport.getOrThrow().text != "http") {
-                return pluginProcessError("plugin.service_transport_unsupported", "HTTP service configuration must explicitly select transport http")
+        try {
+            if (!record.enabled || record.descriptor.entryKind != PluginEntryKind.NativeExecutable) {
+                return pluginProcessError("plugin.service_unavailable", "an enabled native service plugin is required")
             }
-            if (!record.descriptor.hasCapability("network.http")) {
-                return pluginProcessError("plugin.service_unavailable", "HTTP service requires its declared network.http capability")
+            // Transport selection comes from the exact installed package's operator
+            // configuration. A package may request both capabilities; neither one
+            // selects a backend or substitutes for a current configuration grant.
+            let httpConfiguration: ?ProductPluginHttpConfiguration = match (loadPluginHttpConfiguration(settingsRoot,
+                productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)))) {
+                case Result.Ok(value) => Some(value)
+                case Result.Err(error) =>
+                    if (error.code == "plugin.http_configuration_missing") { None }
+                    else { return Result.Err(error) }
             }
-        }
-        let channelConfiguration: ?ProductPluginLifecycleConfiguration = if (httpConfiguration.isNone()) {
-            let selected = match (loadPluginLifecycleConfiguration(settingsRoot,
-                productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)))) {
-                case Result.Err(error) => return Result.Err(error)
-                case Result.Ok(value) => value
-            }
-            let transport = selected.configuration.field("transport")
-            // Legacy generic channel configurations predate the selector but
-            // already carry an exact operator executable and finite service grant.
-            // An explicit selector must match that transport; never fall through
-            // from an unsupported or malformed HTTP configuration.
-            if (transport.isSome() && (transport.getOrThrow().unifiedKind != ValueKind.Text || !["stdio","managed_channel_owned"].contains(transport.getOrThrow().text))) {
-                return pluginProcessError("plugin.service_transport_unsupported", "channel service configuration must select stdio or managed_channel_owned")
-            }
-            if (!record.descriptor.hasCapability("process.channel")) {
-                return pluginProcessError("plugin.service_unavailable", "stdio service requires its declared process.channel capability")
-            }
-            Some(selected)
-        } else { None }
-        let startupCaller180 = agent_host_runtime.HostCallerCancellation(cancellation, callerCancellation180)
-        let started = try {
-            // Owner-mode frontends defer actual plugin mounts. Resolve the
-            // service generation only after the existing assembly is ready.
-            match (ensureExecutionReady(cancellation: Some(startupCaller180.token))) {
-                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
-            }
-            let generation = vnext.javascriptPlugins.instanceGeneration(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))
-            let manager = match (managedPluginServiceManager()) {
-                case Result.Err(error) => return Result.Err(error)
-                case Result.Ok(value) => value
-            }
-            let context = ToolInvocationContext(RunId("service-scope"), targetThread, productCapabilities(),
-                epoch: 1, cancellation: startupCaller180.token, toolContext: productToolContext(workspace.rootPath(), operatorOptions180: operatorOptions180), budget: budget)
-            let maintenance = ThreadId(ids.nextSessionId().value)
             if (httpConfiguration.isSome()) {
-                manager.startHttpProtocol(vnext, context, maintenance, httpConfiguration.getOrThrow(),
-                    serviceId, route, generation, approvalDecision, budget: budget)
-            } else if(channelConfiguration.getOrThrow().configuration.field("transport").isSome() &&
-                channelConfiguration.getOrThrow().configuration.field("transport").getOrThrow().text=="managed_channel_owned"){
-                manager.startOwnedChannelProtocol(vnext,context,maintenance,channelConfiguration.getOrThrow(),
-                    serviceId,route,generation,approvalDecision,budget:budget)
-            } else {
-                manager.startProtocol(vnext, context, maintenance, channelConfiguration.getOrThrow(),
-                    serviceId, route, generation, approvalDecision, budget: budget)
+                let transport = httpConfiguration.getOrThrow().configuration.field("transport")
+                if (transport.isNone() || transport.getOrThrow().unifiedKind != ValueKind.Text || transport.getOrThrow().text != "http") {
+                    return pluginProcessError("plugin.service_transport_unsupported", "HTTP service configuration must explicitly select transport http")
+                }
+                if (!record.descriptor.hasCapability("network.http")) {
+                    return pluginProcessError("plugin.service_unavailable", "HTTP service requires its declared network.http capability")
+                }
             }
-        } finally { startupCaller180.close() }
-        match (started) {
-            case Result.Err(error) => Result.Err(error)
-            case Result.Ok(value) => Result.Ok(value.outcome)
-        }
+            let channelConfiguration: ?ProductPluginLifecycleConfiguration = if (httpConfiguration.isNone()) {
+                let selected = match (loadPluginLifecycleConfiguration(settingsRoot,
+                    productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)))) {
+                    case Result.Err(error) => return Result.Err(error)
+                    case Result.Ok(value) => value
+                }
+                let transport = selected.configuration.field("transport")
+                // Legacy generic channel configurations predate the selector but
+                // already carry an exact operator executable and finite service grant.
+                // An explicit selector must match that transport; never fall through
+                // from an unsupported or malformed HTTP configuration.
+                if (transport.isSome() && (transport.getOrThrow().unifiedKind != ValueKind.Text || !["stdio","managed_channel_owned"].contains(transport.getOrThrow().text))) {
+                    return pluginProcessError("plugin.service_transport_unsupported", "channel service configuration must select stdio or managed_channel_owned")
+                }
+                if (!record.descriptor.hasCapability("process.channel")) {
+                    return pluginProcessError("plugin.service_unavailable", "stdio service requires its declared process.channel capability")
+                }
+                Some(selected)
+            } else { None }
+            let startupCaller180 = agent_host_runtime.HostCallerCancellation(cancellation, callerCancellation180)
+            let started = try {
+                // Owner-mode frontends defer actual plugin mounts. Resolve the
+                // service generation only after the existing assembly is ready.
+                match (ensureExecutionReady(cancellation: Some(startupCaller180.token))) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
+                }
+                let generation = vnext.javascriptPlugins.instanceGeneration(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))
+                let manager = match (managedPluginServiceManager()) {
+                    case Result.Err(error) => return Result.Err(error)
+                    case Result.Ok(value) => value
+                }
+                let context = ToolInvocationContext(RunId("service-scope"), targetThread, productCapabilities(),
+                    epoch: 1, cancellation: startupCaller180.token, toolContext: productToolContext(workspace.rootPath(), operatorOptions180: operatorOptions180), budget: budget)
+                let maintenance = ThreadId(ids.nextSessionId().value)
+                if (httpConfiguration.isSome()) {
+                    manager.startHttpProtocol(vnext, context, maintenance, httpConfiguration.getOrThrow(),
+                        serviceId, route, generation, approvalDecision, budget: budget)
+                } else if(channelConfiguration.getOrThrow().configuration.field("transport").isSome() &&
+                    channelConfiguration.getOrThrow().configuration.field("transport").getOrThrow().text=="managed_channel_owned"){
+                    manager.startOwnedChannelProtocol(vnext,context,maintenance,channelConfiguration.getOrThrow(),
+                        serviceId,route,generation,approvalDecision,budget:budget)
+                } else {
+                    manager.startProtocol(vnext, context, maintenance, channelConfiguration.getOrThrow(),
+                        serviceId, route, generation, approvalDecision, budget: budget)
+                }
+            } finally { startupCaller180.close() }
+            match (started) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(value) => Result.Ok(value.outcome)
+            }
+        } finally { record.close() }
     }
 
     public func refreshPluginService(targetThread: SessionId, namespace: String, serviceId: String,

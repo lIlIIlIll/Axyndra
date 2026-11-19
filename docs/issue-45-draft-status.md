@@ -4914,3 +4914,5 @@ E1842: Minimal, Coding and Full assembled with the revised Shell source where ap
 E1845/E1847: the corrected Shell invocation passed all 18 wire cases in each packaged distribution containing Shell. Four additional standalone release consumers passed. [Executable identities and scope](implementation/plan-execution-reliability.md#release-assemblies-from-the-verified-host-and-revised-shell).
 
 E1844: three model-selected Program Runs across two Threads completed with 21 canonical Receipts. The separate direct-control Run failed without an Operation, but its expected error-code assertion also failed. No complete Core pass. [Store reconciliation and remaining failure](implementation/plan-execution-reliability.md#three-model-selected-program-runs-and-a-separate-control-failure).
+
+E1848/E1849: the disabled-service refusal already enforced the installed record's state, but leaked the temporary Registry lookup. The fix returned its bytes and lease count to baseline after three refusals; the complete local acquisition mode passed. [Change, RED/GREEN and scope](implementation/plan-execution-reliability.md#returning-the-installed-record-after-a-service-start-lookup).

@@ -509,6 +509,15 @@ private func expectDisabledImportLookupReturned(product: ProductRuntime, record:
         let after = probe.retainedCustodyUsage113()
         expect(after[0] == before[0] && after[2] == before[2],
             "closing the returned record leaves no paid temporary scope lookup")
+        for (_ in 0..3) {
+            let refused = product.startPluginService(SessionId("disabled-acquisition-service"),
+                "axyndra:acquisition-git", "stdio", "session", approvalDecision: ApprovalDecision.Approve)
+            expect(refused.isError() && refused.error().getOrThrow().code == "plugin.service_unavailable",
+                "explicit startup approval cannot start a disabled installation")
+        }
+        let afterStarts = probe.retainedCustodyUsage113()
+        expect(afterStarts[0] == before[0] && afterStarts[2] == before[2],
+            "refused service starts must return every temporary installed-record lookup")
     } finally { probe.close() }
 }
 
