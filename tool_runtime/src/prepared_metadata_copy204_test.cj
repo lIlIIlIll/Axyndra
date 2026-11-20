@@ -43,6 +43,35 @@ private func consumeMetadataFixtureFrame204(consumer:PreparedMetadataConsumer204
 @Test
 class PreparedMetadataCopy204Tests {
     @TestCase
+    func separateReadersReturnOnlyTheirOwnPreparedData(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("reader-run"), SessionId("reader-session"), CapabilitySet())
+        let prepared = metadataFixture204(context, objectValue([]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let first = prepared.retainMetadataConsumer204().getOrThrow()
+        let second = prepared.retainMetadataConsumer204().getOrThrow()
+        @Expect(prepared.textEquals(PreparedMetadataText.CallId, "copy-call"))
+        owner.producerReturned204(); root.close()
+        var staleProducerRejected = false
+        try { let _ = prepared.textEquals(PreparedMetadataText.CallId, "copy-call") }
+        catch (_: IllegalStateException) { staleProducerRejected = true }
+        @Expect(staleProducerRejected)
+        @Expect(first.textEquals(PreparedMetadataText.CallId, "copy-call"))
+        @Expect(!first.textEquals(PreparedMetadataText.CallName, "other"))
+        first.returnConsumerFrame204()
+        var rejected = false
+        try { let _ = first.textEquals(PreparedMetadataText.PlanToolName, "copy-tool") }
+        catch (_: IllegalStateException) { rejected = true }
+        @Expect(rejected)
+        @Expect(second.textEquals(PreparedMetadataText.PlanToolName, "copy-tool"))
+        @Expect(second.textEquals(PreparedMetadataText.PlanBindingDigest, "copy-binding"))
+        @Expect(bank.usage()[1] > 0)
+        second.returnConsumerFrame204()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func independentCopyPreservesSourceAndLivesUntilActualConsumerReturns():Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged:16777216); let root = bank.acquire(131072)
         let core = MetadataCopyConsumer204(root)

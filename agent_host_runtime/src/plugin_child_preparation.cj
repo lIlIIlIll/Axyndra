@@ -343,11 +343,11 @@ func hostChildInvocationInput111(host: HostJavaScriptPluginHost, context: ToolIn
     prepared: PreparedToolInvocation, namespace: String, localTool: String, generation: UInt64): Result<AgentValue> {
     if (prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
         (!isFrozenPluginChildParent111(prepared.operationPlan) && !isFrozenPluginPreparedCompletion152(prepared.operationPlan)) ||
-        prepared.call.name != prepared.operationPlan.toolName ||
-        prepared.call.name != "plugin." + namespace + "." + localTool) {
+        !prepared.textEquals(PreparedMetadataText.CallName, prepared.operationPlan.toolName) ||
+        !prepared.textEquals(PreparedMetadataText.CallName, "plugin." + namespace + "." + localTool)) {
         return hostPluginResourceError("child.parent_invalid", "child-start requires its own actual frozen canonical parent") }
     let binding = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow()
-    if (httpIntentText(binding, "parent_call_id") != prepared.call.callId) {
+    if (!prepared.textEquals(PreparedMetadataText.CallId, httpIntentText(binding, "parent_call_id"))) {
         return hostPluginResourceError("child.parent_changed", "child-start binding names another canonical call") }
     let configuration = match (host.primitiveConfiguration111(namespace, localTool, generation)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(Some(value)) => value

@@ -2500,15 +2500,12 @@ class HostToolExecutionCancellationObservation {
     private let context: ToolInvocationContext
     private let prepared: PreparedToolInvocation
     private var evidence: ?ToolExecutionCancellationEvidence = None
-    private let closedTask204: Bool
-
-    init(context: ToolInvocationContext, prepared: PreparedToolInvocation, closedTask204!: Bool = false) {
-        this.context = context; this.prepared = prepared; this.closedTask204 = closedTask204
+    init(context: ToolInvocationContext, prepared: PreparedToolInvocation) {
+        this.context = context; this.prepared = prepared
     }
     func record(identity: JavaScriptHostInvocationIdentity, generation: HostJavaScriptPluginGeneration,
         child: process.CancellationToken, error: AgentError): Unit {
-        let sameCall = if (closedTask204) { prepared.withCall204({ call => identity.callId == call.callId }) }
-            else { identity.callId == prepared.call.callId }
+        let sameCall = prepared.textEquals(PreparedMetadataText.CallId, identity.callId)
         if (identity.threadId != context.sessionId.value || identity.runId != context.runId.value ||
             identity.epoch != context.epoch || identity.operationId != prepared.operationId.value || !sameCall) { return }
         evidence = generation.executionCancellationEvidence(context, prepared, child, error)
@@ -2637,8 +2634,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
     }
 
     public func executeObserved(context: ToolInvocationContext, prepared: PreparedToolInvocation): ToolExecutionOutcome {
-        let observation = HostToolExecutionCancellationObservation(context, prepared,
-            closedTask204: closedPlainDataOnly204 || hostWorkflowTaskDataSelected204(host, extensionId, toolName, instanceGeneration))
+        let observation = HostToolExecutionCancellationObservation(context, prepared)
         let result = executeActual(context, prepared, executionObservation: Some(observation))
         observation.outcome(result)
     }

@@ -59,6 +59,20 @@ class PreparedMetadataOwner204 {
                 case None => throw IllegalArgumentException("prepared DATA requires its actual Core consumer") }
         } finally { lock.unlock() }
     }
+    func textEquals(field: PreparedMetadataText, expected: String, producer!: ?PreparedToolInvocation = None): Bool {
+        lock.lock()
+        try {
+            if (returned) { throw IllegalStateException("prepared DATA has returned") }
+            let data = prepared.getOrThrow()
+            match (producer) {
+                case Some(frame) => if (producerReturned || !refEq(data, frame)) {
+                    throw IllegalStateException("prepared DATA producer has returned")
+                }
+                case None => () // The caller holds its counted reader lock.
+            }
+            data.textEqualsFrame(field, expected)
+        } finally { lock.unlock() }
+    }
     func call204(): ToolCall {
         lock.lock(); try {
             if (returned) { throw IllegalStateException("prepared DATA has returned") }
@@ -113,6 +127,7 @@ class PreparedMetadataOwner204 {
     }
 }
 
+public enum PreparedMetadataText { CallId | CallName | PlanToolName | PlanBindingDigest }
 // No Source/Operation authority. A loan's return alone never refunds the owner;
 // the concrete enclosing consumer separately acknowledges its whole frame.
 public class PreparedMetadataConsumer204 {
@@ -120,6 +135,18 @@ public class PreparedMetadataConsumer204 {
     private var owner: ?PreparedMetadataOwner204
     private var loans: Int64 = 0
     init(owner: PreparedMetadataOwner204) { this.owner = Some(owner) }
+    // Returns a scalar only. No raw Call, plan, String or arbitrary caller callback
+    // can escape this read. The handle lock orders reads against its actual return.
+    public func textEquals(field: PreparedMetadataText, expected: String): Bool {
+        lock.lock()
+        try {
+            let actual = match (owner) {
+                case Some(value) => value
+                case None => throw IllegalStateException("prepared DATA handle has returned")
+            }
+            actual.textEquals(field, expected)
+        } finally { lock.unlock() }
+    }
     public func withOperationPlan204<T>(body: (NormalizedOperationPlan) -> T): T {
         let actual = try { lock.lock(); let value = owner.getOrThrow()
             if (loans == Int64.Max) { throw IllegalStateException("prepared DATA loan count overflow") }

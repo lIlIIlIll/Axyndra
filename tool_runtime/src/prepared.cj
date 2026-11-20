@@ -110,6 +110,27 @@ public class PreparedToolInvocation {
     private var catalogConsumer204: ?ToolCatalogHostConsumer204 = None<ToolCatalogHostConsumer204>
     private var detachedMetadata204: ?PreparedMetadataOwner204 = None<PreparedMetadataOwner204>
     private var metadataReturned204 = false
+    func textEqualsFrame(field: PreparedMetadataText, expected: String): Bool {
+        match (field) {
+            case PreparedMetadataText.CallId => callData204.getOrThrow().callId == expected
+            case PreparedMetadataText.CallName => callData204.getOrThrow().name == expected
+            case PreparedMetadataText.PlanToolName => operationPlanData204.getOrThrow().toolName == expected
+            case PreparedMetadataText.PlanBindingDigest => operationPlanData204.getOrThrow().bindingDigest == expected
+        }
+    }
+    // No DATA leaves this synchronous comparison. A caller that needs to read
+    // after its producer returns must keep its own metadata consumer instead.
+    public func textEquals(field: PreparedMetadataText, expected: String): Bool {
+        match (detachedMetadata204) {
+            case Some(owner) => owner.textEquals(field, expected, producer: Some(this))
+            case None => match (catalogConsumer204) {
+                case Some(owner) => owner.preparedTextEquals(this, field, expected)
+                case None =>
+                    if (metadataReturned204) { throw IllegalStateException("prepared DATA has returned") }
+                    textEqualsFrame(field, expected)
+            }
+        }
+    }
     public func retainMetadataConsumer204(): ?PreparedMetadataConsumer204 {
         match (detachedMetadata204) { case Some(value) => Some(value.retain204()); case None => None<PreparedMetadataConsumer204> }
     }

@@ -138,6 +138,13 @@ public class ToolCatalogHostConsumer204 {
             if (returned || collecting || frames == 0) { throw IllegalStateException("prepared metadata has no actual private consumer") }
         } finally { lock.unlock() }
     }
+    func preparedTextEquals(prepared: PreparedToolInvocation, field: PreparedMetadataText, expected: String): Bool {
+        lock.lock()
+        try {
+            if (returned || collecting || frames == 0) { throw IllegalStateException("prepared metadata has no actual private consumer") }
+            prepared.textEqualsFrame(field, expected)
+        } finally { lock.unlock() }
+    }
     func retainPrepared204(prepared: PreparedToolInvocation): Unit {
         lock.lock()
         try {

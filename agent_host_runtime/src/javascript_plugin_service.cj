@@ -1503,7 +1503,7 @@ public class HostJavaScriptPluginServiceBroker {
         match (execTarget) { case Some(target) => match (target.validate(catalog, rootContext, prepared)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         if (isFrozenReadonlyDelegationParentPlan(invocationPlan204)) {
-            if(prepared.call.name==PLUGIN_FILE_PLAN_TOOL){
+            if (prepared.textEquals(PreparedMetadataText.CallName, PLUGIN_FILE_PLAN_TOOL)) {
                 if(!readonlyDelegationFilePlanProposalAllowed(invocationPlan204,prepared.operationPlan)){
                     return hostPluginResourceError("readonly_delegation.file_plan_denied","preview differs from its exact frozen operator Root")}
                 let descriptor=match(catalog.resolvedDescriptor(ToolCall(prepared.call.callId, prepared.call.name,
@@ -1536,7 +1536,7 @@ public class HostJavaScriptPluginServiceBroker {
                 return hostPluginResourceError("readonly_delegation.capability_denied", "child exceeds the actual Run ceiling") }
             return Result.Ok(())
         }
-        if (prepared.call.name == HOST_HTTP_STREAM_TOOL) {
+        if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_STREAM_TOOL)) {
             if (httpStreamBinding.isNone() || !httpStreamServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
                 return hostPluginResourceError("http.stream_intent_changed", "HTTP stream child exceeds its exact frozen parent")
             }
@@ -1553,7 +1553,7 @@ public class HostJavaScriptPluginServiceBroker {
             }
             return Result.Ok(())
         }
-        if (prepared.call.name == HOST_CHANNEL_WRITE_TOOL) {
+        if (prepared.textEquals(PreparedMetadataText.CallName, HOST_CHANNEL_WRITE_TOOL)) {
             if (channelBinding.isNone() || !channelServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
                 return hostPluginResourceError("channel.intent_changed", "channel child exceeds the exact frozen parent intent")
             }
@@ -1570,7 +1570,7 @@ public class HostJavaScriptPluginServiceBroker {
             }
             return Result.Ok(())
         }
-        if (prepared.call.name == HOST_READ_VIEW_TOOL) {
+        if (prepared.textEquals(PreparedMetadataText.CallName, HOST_READ_VIEW_TOOL)) {
             if (!readViewServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
                 return hostPluginResourceError("read_view.intent_changed", "resource child differs from its exact parent intent")
             }
@@ -1586,7 +1586,7 @@ public class HostJavaScriptPluginServiceBroker {
             }
             return Result.Ok(())
         }
-        if (prepared.call.name == HOST_HTTP_SERVICE_TOOL) {
+        if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_SERVICE_TOOL)) {
             if (!httpServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
                 return hostPluginResourceError("http.intent_changed", "HTTP child exceeds its exact frozen parent intent")
             }
