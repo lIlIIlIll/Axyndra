@@ -177,12 +177,15 @@ private func applyDistributionDefaultsFrame(product: ProductRuntime, directory: 
             } else {
                 let installed = match (product.importLocalPlugin(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)), PluginInstallScope.User)) {
                     case PluginRegistryResult.Ok(value) => value
-                    case PluginRegistryResult.Err(error) => return distributionError(error.code) }
-                if (productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.ContentDigest)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) || productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Version)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version))) {
-                    return distributionError("distribution.package_changed") }
-                if (entry.field("enabled").getOrThrow().asBool()) {
-                    enabledNamespaces.add(productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Namespace)))
-                }
+                    case PluginRegistryResult.Err(error) => try { return distributionError(error.code) } finally { error.close() } }
+                try {
+                    let namespace = httpIntentText(entry, "namespace")
+                    if (!installed.descriptor.textEquals(PluginDescriptorText.Namespace, namespace) ||
+                        !installed.descriptor.textEquals(PluginDescriptorText.ContentDigest, httpIntentText(entry, "package_digest")) ||
+                        !installed.descriptor.textEquals(PluginDescriptorText.Version, httpIntentText(entry, "version"))) {
+                        return distributionError("distribution.package_changed") }
+                    if (entry.field("enabled").getOrThrow().asBool()) { enabledNamespaces.add(namespace) }
+                } finally { installed.close() }
             }
         }
         if (!firstAssembly.isEmpty()) {
@@ -193,33 +196,25 @@ private func applyDistributionDefaultsFrame(product: ProductRuntime, directory: 
         }
         for (namespace in enabledNamespaces) {
             match (product.setPluginEnabled(namespace, true, PluginInstallScope.User)) {
-                case PluginRegistryResult.Err(error) => return distributionError(error.code)
-                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => try { return distributionError(error.code) } finally { error.close() }
+                case PluginRegistryResult.Ok(record) => record.close()
             }
         }
         match(workspaceDefault){case Some(value)=>
             match(seedDistributionWorkspace(product,value)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             case None=>()}
-        match (seedDistributionPolicies(product, policies)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (seedDistributionPolicies(product, policies, entries)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (readScopes) { case Some(value) =>
             match (seedDistributionReadScopes(product, value)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             case None => () }
         // Existing operator context is never replaced, including malformed
         // selections: the ordinary loader will retain its explicit diagnostic.
         if (template.isNone() || hasInitialContextConfiguration(product.settingsRoot)) { return Result.Ok(()) }
-        var selected: ?ProductPluginRecord = None
-        for (record in productRegistryRecords83(product.pluginSnapshots()) where productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) == selectedNamespace) {
-            if (selected.isNone() || distributionPluginScopeRank(record) > distributionPluginScopeRank(selected.getOrThrow())) { selected = Some(record) }
-        }
-        if (selected.isNone()) { return distributionError("distribution.provider_missing") }
-        let actual = selected.getOrThrow()
-        // Preserve the operator's effective record, including a disabled or
-        // independently updated provider. Binding that exact record selects
-        // the normal initial-context path; availability and typed contribution
-        // compatibility are checked at inference, without legacy fallback.
-        // A disabled optional provider must not disable host management.
         let value = template.getOrThrow()
-        value.put("namespace", textValue(productRegistryCopyText83(actual.descriptor.copyText(PluginDescriptorText.Namespace)))); value.put("package_digest", textValue(productRegistryCopyText83(actual.copyText(PluginRecordText.ContentLock))))
+        let digest = match (distributionContentLock(product, selectedNamespace, httpIntentText(value, "package_digest"))) {
+            case Some(text) => text; case None => return distributionError("distribution.provider_missing") }
+        // Bind the effective operator record, including a disabled or independently updated provider.
+        value.put("package_digest", textValue(digest))
         let encoded = stringifyUnifiedJson(value)
         if (encoded.size > 65536) { return distributionError("distribution.context_invalid") }
         // Validate with current registry facts before publishing the file. This
@@ -291,19 +286,21 @@ func bindInitialContextRootTemplates(value: AgentValue, settings: String, worksp
     Result.Ok(())
 }
 
-func seedDistributionPolicies(product: ProductRuntime, policies: AgentValue): Result<Unit> {
+private func seedDistributionPolicies(product: ProductRuntime, policies: AgentValue, entries: AgentValue): Result<Unit> {
     let destination = Path(product.settingsRoot).join("plugins/policies.json")
     // The entire operator file wins, including an explicitly absent binding.
     if (policies.fields.isEmpty() || exists(destination)) { return Result.Ok(()) }
     let bindings = ArrayList<ValueField>()
     for (policy in policies.fields) {
-        var chosen: ?ProductPluginRecord = None
-        for (record in productRegistryRecords83(product.pluginSnapshots()) where productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) == httpIntentText(policy.value, "namespace")) {
-            if (chosen.isNone() || distributionPluginScopeRank(record) > distributionPluginScopeRank(chosen.getOrThrow())) { chosen = Some(record) }
+        let namespace = httpIntentText(policy.value, "namespace")
+        var bundledDigest = ""
+        for (entry in entries.items where httpIntentText(entry, "namespace") == namespace) {
+            bundledDigest = httpIntentText(entry, "package_digest"); break
         }
-        let record = match (chosen) { case Some(value) => value; case None => return distributionError("distribution.policy_missing") }
-        let fields=ArrayList<ValueField>([ValueField("namespace",textValue(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))),
-            ValueField("provider",textValue(httpIntentText(policy.value,"provider"))),ValueField("package_digest",textValue(productRegistryCopyText83(record.copyText(PluginRecordText.ContentLock))))])
+        let digest = match (distributionContentLock(product, namespace, bundledDigest)) {
+            case Some(text) => text; case None => return distributionError("distribution.policy_missing") }
+        let fields=ArrayList<ValueField>([ValueField("namespace", textValue(namespace)),
+            ValueField("provider", textValue(httpIntentText(policy.value, "provider"))), ValueField("package_digest", textValue(digest))])
         if(policy.name=="workflow" && policy.value.field("plan_tool").isSome()){
             fields.add(ValueField("plan_tool",textValue(httpIntentText(policy.value,"plan_tool"))))}
         bindings.add(ValueField(policy.name,objectValue(fields.toArray())))
@@ -356,13 +353,11 @@ func seedDistributionReadScopes(product: ProductRuntime, value: AgentValue): Res
 func seedDistributionWorkspace(product: ProductRuntime, value: AgentValue): Result<Unit> {
     let destination=Path(product.settingsRoot).join("plugins/workspace-tools.json")
     if(exists(destination)){return Result.Ok(())}
-    var chosen: ?ProductPluginRecord=None
-    for(record in productRegistryRecords83(product.pluginSnapshots()) where productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))==httpIntentText(value,"namespace")){
-        if(chosen.isNone() || distributionPluginScopeRank(record)>distributionPluginScopeRank(chosen.getOrThrow())){chosen=Some(record)}
-    }
-    let record=match(chosen){case None=>return distributionError("distribution.workspace_missing");case Some(actual)=>actual}
+    let namespace = httpIntentText(value, "namespace")
+    let digest = match (distributionContentLock(product, namespace, httpIntentText(value, "package_digest"))) {
+        case Some(text) => text; case None => return distributionError("distribution.workspace_missing") }
     let encoded=stringifyUnifiedJson(objectValue([ValueField("schema",textValue("axyndra.workspace-tools/v1")),
-        ValueField("namespace",textValue(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))),ValueField("package_digest",textValue(productRegistryCopyText83(record.copyText(PluginRecordText.ContentLock))))]))
+        ValueField("namespace",textValue(namespace)), ValueField("package_digest",textValue(digest))]))
     if(encoded.size>16384){return distributionError("distribution.workspace_invalid")}
     if(!exists(destination.parent)){Directory.create(destination.parent,recursive:true)}
     let temporary=destination.toString()+".distribution-"+ProductIds().nextInvocationId()
@@ -383,6 +378,27 @@ private func distributionHasInstalledNamespace(product: ProductRuntime, namespac
             if (records.at(index).descriptor.textEquals(PluginDescriptorText.Namespace, namespace)) { return true }
         }
         false
+    } finally { records.close() }
+}
+
+// Select against a fresh snapshot at each original lookup. Only a content lock leaves;
+// if it equals the already bound manifest text, not even a Registry text copy is needed.
+private func distributionContentLock(product: ProductRuntime, namespace: String, bundledDigest: String): ?String {
+    let records = product.pluginSnapshots()
+    try {
+        var best: Int64 = -1
+        var rank: Int64 = -1
+        for (index in 0..records.size) {
+            let record = records.at(index)
+            if (record.descriptor.textEquals(PluginDescriptorText.Namespace, namespace)) {
+                let candidate = distributionPluginScopeRank(record)
+                if (candidate > rank) { rank = candidate; best = index }
+            }
+        }
+        if (best < 0) { return None<String> }
+        let selected = records.at(best)
+        if (selected.textEquals(PluginRecordText.ContentLock, bundledDigest)) { return Some(bundledDigest) }
+        Some(productRegistryCopyText83(selected.copyText(PluginRecordText.ContentLock)))
     } finally { records.close() }
 }
 

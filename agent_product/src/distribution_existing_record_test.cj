@@ -97,6 +97,82 @@ func distributionExistingNativeRecordContract(scope: PluginInstallScope,
 @Test
 class DistributionExistingNativeRecordTests {
     @TestCase
+    func seedSelectionReturnsRegistryCustodyAfterWritingEffectiveLock(): Unit {
+        let root = pluginContractTemp("distribution-selection-custody")
+        try {
+            let bundle = nativeDistributionTestBundle(root)
+            let manifest = parseUnifiedJson(String.fromUtf8(File.readFrom(bundle + "/distribution.json")))
+            let entry = manifest.field("plugins").getOrThrow().items[0]
+            let product = lifecycleTestRequire(openProduct(config: ProductConfig(workspaceRoot: root + "/workspace",
+                stateRoot: root + "/state", settingsRoot: root + "/settings", fixture: true, asyncEnabled: false)))
+            try {
+                let record = match (product.importLocalPlugin(bundle + "/source", PluginInstallScope.Workspace)) {
+                    case PluginRegistryResult.Ok(value) => value
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                try {
+                    let probe = record.descriptor.deriveCopiedDataPayment(1024)
+                    let path = root + "/settings/plugins/workspace-tools.json"
+                    try {
+                        let before = probe.retainedCustodyUsage113()
+                        for (_ in 0..2) {
+                            @Assert(seedDistributionWorkspace(product, entry).isOk())
+                            let lock = parseUnifiedJson(String.fromUtf8(File.readFrom(path)))
+                            @Expect(httpIntentText(lock, "namespace"), httpIntentText(entry, "namespace"))
+                            @Expect(httpIntentText(lock, "package_digest"), httpIntentText(entry, "package_digest"))
+                            @Expect(!record.enabled)
+                            let after = probe.retainedCustodyUsage113()
+                            @Expect(after[0], before[0]); @Expect(after[2], before[2])
+                            remove(path)
+                        }
+                    } finally { probe.close() }
+                } finally { record.close() }
+            } finally { product.close().value().getOrThrow() }
+        } finally { remove(root, recursive: true) }
+    }
+
+    @TestCase
+    func workspaceSelectionUsesEffectiveOperatorDigestRatherThanBundledDefault(): Unit {
+        let root = pluginContractTemp("distribution-updated-selection")
+        try {
+            let bundle = nativeDistributionTestBundle(root)
+            let manifest = parseUnifiedJson(String.fromUtf8(File.readFrom(bundle + "/distribution.json")))
+            let entry = manifest.field("plugins").getOrThrow().items[0]
+            let namespace = httpIntentText(entry, "namespace")
+            let original = httpIntentText(entry, "package_digest")
+            let source = bundle + "/source"
+            let product = lifecycleTestRequire(openProduct(config: ProductConfig(workspaceRoot: root + "/workspace",
+                stateRoot: root + "/state", settingsRoot: root + "/settings", fixture: true, asyncEnabled: false)))
+            try {
+                match (product.importLocalPlugin(source, PluginInstallScope.User)) {
+                    case PluginRegistryResult.Ok(record) => record.close()
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                File.writeTo(source + "/operator-note.txt", "workspace edition".toArray())
+                let changed = match (inspectPluginPackage(source)) {
+                    case PluginPackageResult.Ok(value) => value.contentDigest
+                    case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+                }
+                @Assert(changed != original)
+                match (product.importLocalPlugin(source, PluginInstallScope.Workspace)) {
+                    case PluginRegistryResult.Ok(record) => record.close()
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                let path = root + "/settings/plugins/workspace-tools.json"
+                @Assert(seedDistributionWorkspace(product, entry).isOk())
+                @Expect(httpIntentText(parseUnifiedJson(String.fromUtf8(File.readFrom(path))), "package_digest"), changed)
+                remove(path)
+                match (product.setPluginEnabled(namespace, false, PluginInstallScope.User)) {
+                    case PluginRegistryResult.Ok(record) => record.close()
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                @Assert(seedDistributionWorkspace(product, entry).isOk())
+                @Expect(httpIntentText(parseUnifiedJson(String.fromUtf8(File.readFrom(path))), "package_digest"), original)
+            } finally { product.close().value().getOrThrow() }
+        } finally { remove(root, recursive: true) }
+    }
+
+    @TestCase
     func explicitlyDisabledUserRecordIsPreserved(): Unit {
         distributionExistingNativeRecordContract(PluginInstallScope.User, false, true)
     }
