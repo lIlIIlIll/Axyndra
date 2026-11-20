@@ -88,6 +88,24 @@ execution. The supported Codex command-hook subset remains PreToolUse/PostToolUs
 exact-name or `*` matching, and finite command timeouts; it does not imply
 arbitrary Codex JavaScript, vendor apps, hosted execution, or MCP activation.
 
+## Migrate a host tool descriptor resolver
+
+Rebuild custom host descriptors and their callers together. The primary and additional capability, network policy, side-effect and approval metadata resolvers now take `agent_domain.ToolResolverInput` instead of `ToolCall`. Their return types are unchanged. This is a host source and binary interface change, not a change to the Native plugin wire SDK, manifest or stored plans.
+
+Read the input during the actual callback. Use `ToolResolverText.Name` and `CallId` to compare identities, or select an argument with a path of `ToolResolverStep.Field`, `Index` or `MemberAt`. An empty path selects the arguments root. Check `kind` for optional fields; `count` requires an array or object. For example, a descriptor that previously compared `call.arguments.field("mode")` to a string can use:
+
+```cangjie
+sideEffectResolver: Some({ input =>
+    let path = [ToolResolverStep.Field("mode")]
+    !input.hasKind(path, JsonKind.String) ||
+        !input.textEquals(ToolResolverText.Scalar(path), "read")
+})
+```
+
+`Scalar` preserves text and the original number spelling. `Key(path, index)` selects an object's member name. To retain text, use `copyText` or `readBytes` into a caller-owned buffer; `byteCount` and `readBytes` use byte offsets, not character indices. A saved input is invalid as soon as that callback returns or throws. Do not pass it into a worker. Returning from a resolver drops only its scoped reference: it neither authorizes execution nor acknowledges unrelated Prepared or result data. Roll back an incompatible host and its descriptor libraries together; no database migration is required.
+
+The pure Host helpers for Context Read, Read View, readonly delegation and the HTTP root also take the new input in `agent_domain`: replace the `host` prefix with `resolver` (for example, `hostContextReadCapabilities` becomes `resolverContextReadCapabilities`). For non-descriptor code that already owns a real `ToolCall`, use `withToolResolverInput(call, resolverContextReadCapabilities)`. Registration and invocation remain distinct; a missing invocation is not permission to synthesize a call or a grant.
+
 ## Migrate a derived Operation store
 
 The host-side `OperationRuntimePort.settleDerivedOperation` takes a fourth

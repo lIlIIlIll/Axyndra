@@ -166,10 +166,10 @@ public class HostOwnedPrimitiveConfiguration191 {
     func invocationCapability(localTool: String): Capability {
         withData191({ value => value.invocationCapability(localTool) })
     }
-    func resolvedInvocationCapability(localTool: String, arguments: AgentValue): Capability {
+    func resolvedInvocationCapability(localTool: String, arguments: ToolResolverInput): Capability {
         withData191({ value => value.resolvedInvocationCapability(localTool, arguments) })
     }
-    func resolvedAdditionalCapabilities(localTool: String, arguments: AgentValue): Array<Capability> {
+    func resolvedAdditionalCapabilities(localTool: String, arguments: ToolResolverInput): Array<Capability> {
         withData191({ value => value.resolvedAdditionalCapabilities(localTool, arguments) })
     }
     public func retainOwnedPrimitive191(): HostOwnedPrimitiveConfiguration191 {

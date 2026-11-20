@@ -60,13 +60,13 @@ public interface ToolArgumentValidator {
     func validate(call: ToolCall, definition: ModelToolDefinition): Result<Unit>
 }
 
-public type ToolCapabilityResolver = (ToolCall) -> Capability
-public type ToolAdditionalCapabilityResolver = (ToolCall) -> Array<Capability>
-public type ToolNetworkPolicyResolver = (ToolCall) -> Result<NetworkPolicy>
+public type ToolCapabilityResolver = (ToolResolverInput) -> Capability
+public type ToolAdditionalCapabilityResolver = (ToolResolverInput) -> Array<Capability>
+public type ToolNetworkPolicyResolver = (ToolResolverInput) -> Result<NetworkPolicy>
 
-public type ToolSideEffectResolver = (ToolCall) -> Bool
+public type ToolSideEffectResolver = (ToolResolverInput) -> Bool
 
-public type ToolApprovalMetadataResolver = (ToolCall) -> ToolApprovalMetadata
+public type ToolApprovalMetadataResolver = (ToolResolverInput) -> ToolApprovalMetadata
 public type ToolCanonicalArgumentsResolver = (
     ToolInvocationContext,
     ToolCall
@@ -271,7 +271,7 @@ public class ToolDescriptor {
             definition,
             resolvedCapability,
             sideEffecting: match (sideEffectResolver) {
-                case Some(resolve) => resolve(call)
+                case Some(resolve) => withToolResolverInput(call, resolve)
                 case None => sideEffecting
             },
             controlOnly: controlOnly,
@@ -288,7 +288,7 @@ public class ToolDescriptor {
             approvalMetadataValue: Some(match (approvalMetadataValue) {
                 case Some(value) => if (ownedSnapshot) { toolOwnedApprovalCopy(value) } else { value }
                 case None => match (approvalMetadataResolver) {
-                    case Some(resolve) => resolve(call)
+                    case Some(resolve) => withToolResolverInput(call, resolve)
                     case None => defaultToolApprovalMetadata(resolvedCapability)
                 }
             }),
@@ -391,14 +391,14 @@ public class ToolDescriptor {
     public func requiredCapabilities(call: ToolCall): Array<Capability> {
         let values = ArrayList<Capability>()
         addRequiredCapability(values, match (capabilityResolver) {
-            case Some(resolve) => resolve(call)
+            case Some(resolve) => withToolResolverInput(call, resolve)
             case None => capability
         })
         for (value in additionalCapabilities) {
             addRequiredCapability(values, value)
         }
         match (additionalCapabilityResolver) {
-            case Some(resolve) => for (value in resolve(call)) {
+            case Some(resolve) => for (value in withToolResolverInput(call, resolve)) {
                 addRequiredCapability(values, value)
             }
             case None => ()
@@ -418,7 +418,7 @@ public class ToolDescriptor {
 
     public func networkPolicy(call: ToolCall): Result<NetworkPolicy> {
         match (networkPolicyResolver) {
-            case Some(resolve) => resolve(call)
+            case Some(resolve) => withToolResolverInput(call, resolve)
             case None => networkPolicyForToolCall(call)
         }
     }
@@ -458,7 +458,7 @@ public class ToolDescriptor {
         match (approvalMetadataValue) {
             case Some(value) => if (ownedSnapshot) { toolOwnedApprovalCopy(value) } else { value }
             case None => match (approvalMetadataResolver) {
-                case Some(resolve) => resolve(call)
+                case Some(resolve) => withToolResolverInput(call, resolve)
                 case None => defaultToolApprovalMetadata(capability)
             }
         }

@@ -3000,11 +3000,11 @@ class PluginRuntimeContractTests {
             @Expect(pluginAcquisitionCapabilities(
                 remoteSpec.networkPolicy, workspace, remoteSpec.workspaceSource
             ).allows(CapabilityKind.WorkspaceRead, resource: workspace), false)
-            @Expect(pluginAcquisitionAdditionalCapabilities(ToolCall(
+            @Expect(withToolResolverInput(ToolCall(
                 "remote-acquisition", "plugin_acquisition", objectValue([
                     ValueField("workspace_read_root", textValue(""))
                 ])
-            )).isEmpty(), true)
+            ), pluginAcquisitionAdditionalCapabilities).isEmpty(), true)
             @Expect(match (verifyAcquiredSource(root + "/stage", packageRoot, remoteSpec)) {
                 case PluginImportResult.Err(error) =>
                     error.code == "plugin.acquisition_local_dependency_forbidden"
@@ -3030,11 +3030,11 @@ class PluginRuntimeContractTests {
             @Expect(pluginAcquisitionCapabilities(
                 localSpec.networkPolicy, workspace, localSpec.workspaceSource
             ).allows(CapabilityKind.WorkspaceRead, resource: workspace), true)
-            let plannedWorkspaceRead = pluginAcquisitionAdditionalCapabilities(ToolCall(
+            let plannedWorkspaceRead = withToolResolverInput(ToolCall(
                 "local-acquisition", "plugin_acquisition", objectValue([
                     ValueField("workspace_read_root", textValue(workspace))
                 ])
-            ))
+            ), pluginAcquisitionAdditionalCapabilities)
             @Expect(plannedWorkspaceRead.size, 1)
             @Expect(plannedWorkspaceRead[0].kind, CapabilityKind.WorkspaceRead)
             @Expect(plannedWorkspaceRead[0].resource, workspace)

@@ -5115,7 +5115,7 @@ func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessB
                 productFileApplicationAdditionalCapabilities(call, workspace)
             }),
             approvalMetadataResolver: Some({ call =>
-                productFilePlanApprovalMetadata(call.arguments, workspace.rootPath())
+                productFilePlanApprovalMetadata(call, workspace.rootPath())
             }),
             networkPolicyResolver: Some({ _ =>
                 Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))

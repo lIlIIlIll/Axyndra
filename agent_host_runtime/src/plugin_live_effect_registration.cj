@@ -23,15 +23,6 @@ public func hostPluginLiveEffectDescriptor(host:HostJavaScriptPluginHost,operati
         Capability(CapabilityKind.ExtensionInvoke),sideEffecting:true,hostServiceOnly:true,neverReplay:true,
         implementationVersion:HOST_PLUGIN_LIVE_EFFECT_FINGERPRINT,implementationFingerprint:HOST_PLUGIN_LIVE_EFFECT_FINGERPRINT,
         canonicalArgumentsResolver:Some({context,call=>hostPreparePluginLiveEffect(host,operations,context,call)}),
-        capabilityResolver:Some({call=>
-            // The canonicalizer has independently revalidated the physical
-            // path and current profile. This exact requirement is evaluated
-            // by the original policy engine; it is not a permission grant.
-            if(!pluginLivePolicyStreamingChildValueValid(call.arguments)){
-                throw IllegalArgumentException("strict live child arguments required")}
-            let effect=call.arguments.field("effect").getOrThrow()
-            if(httpIntentText(effect,"kind")=="row_journal.append"){
-                Capability(CapabilityKind.ExtensionInvoke,resource:httpIntentText(call.arguments.field("binding").getOrThrow(),"namespace"))
-            }else{Capability(CapabilityKind.WorkspaceWrite,resource:httpIntentText(effect,"canonical_path"))}}),
+        capabilityResolver:Some(resolverLiveEffectCapability),
         networkPolicyResolver:Some({_=>Result<NetworkPolicy>.Ok(NetworkPolicy(NetworkPolicyMode.Denied))}))
 }

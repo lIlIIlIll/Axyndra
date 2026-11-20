@@ -1494,27 +1494,21 @@ func applicationPlanRequiredBool(value: AgentValue, name: String): Result<Bool> 
     Result.Ok(field.asBool())
 }
 
-func productFilePlanOperationPaths(arguments: AgentValue): Array<String> {
-    let operations = match (arguments.field("operations")) {
-        case Some(value) => value
-        case None => return []
-    }
-    if (operations.unifiedKind != ValueKind.List) { return [] }
+func productFilePlanOperationPaths(input: ToolResolverInput): Array<String> {
     let paths = ArrayList<String>()
-    for (operation in operations.items) {
-        match (applicationPlanRequiredText(operation, "path")) {
-            case Result.Ok(path) => paths.add(path)
-            case Result.Err(_) => ()
-        }
+    let operations = [ToolResolverStep.Field("operations")]
+    for (index in 0..input.listSizeOrZero(operations)) {
+        let path = [ToolResolverStep.Field("operations"), ToolResolverStep.Index(index), ToolResolverStep.Field("path")]
+        if (input.hasKind(path, JsonKind.String)) { paths.add(input.copyText(ToolResolverText.Scalar(path))) }
     }
     paths.toArray()
 }
 
 func productFileApplicationPrimaryCapability(
-    call: ToolCall,
+    call: ToolResolverInput,
     workspace: LocalWorkspace
 ): Capability {
-    let paths = productFilePlanOperationPaths(call.arguments)
+    let paths = productFilePlanOperationPaths(call)
     if (paths.isEmpty()) {
         Capability(CapabilityKind.WorkspaceWrite, resource: workspace.rootPath())
     } else {
@@ -1523,21 +1517,21 @@ func productFileApplicationPrimaryCapability(
 }
 
 func productFileApplicationAdditionalCapabilities(
-    call: ToolCall,
+    call: ToolResolverInput,
     workspace: LocalWorkspace
 ): Array<Capability> {
     let capabilities = ArrayList<Capability>()
-    let paths = productFilePlanOperationPaths(call.arguments)
+    let paths = productFilePlanOperationPaths(call)
     for (index in 1..paths.size) {
         capabilities.add(workspace.writeCapability(paths[index]))
     }
     capabilities.toArray()
 }
 func productFileRecoveryPrimaryCapability(
-    call: ToolCall,
+    call: ToolResolverInput,
     workspace: LocalWorkspace
 ): Capability {
-    let paths = productFilePlanOperationPaths(call.arguments)
+    let paths = productFilePlanOperationPaths(call)
     if (paths.isEmpty()) {
         Capability(CapabilityKind.WorkspaceRead, resource: workspace.rootPath())
     } else {
@@ -1546,11 +1540,11 @@ func productFileRecoveryPrimaryCapability(
 }
 
 func productFileRecoveryAdditionalCapabilities(
-    call: ToolCall,
+    call: ToolResolverInput,
     workspace: LocalWorkspace
 ): Array<Capability> {
     let capabilities = ArrayList<Capability>()
-    let paths = productFilePlanOperationPaths(call.arguments)
+    let paths = productFilePlanOperationPaths(call)
     for (index in 1..paths.size) {
         capabilities.add(workspace.readCapability(paths[index]))
     }
@@ -1558,33 +1552,30 @@ func productFileRecoveryAdditionalCapabilities(
 }
 
 func productFilePlanApprovalMetadata(
-    arguments: AgentValue,
+    input: ToolResolverInput,
     workspaceRoot: String
 ): ToolApprovalMetadata {
     var level = ApprovalRiskLevel.Low
     let flags = ArrayList<String>()
     let reasons = ArrayList<String>()
-    let targets = match (arguments.field("approval_targets")) {
-        case Some(value) => value
-        case None => nullValue()
-    }
-    if (targets.unifiedKind != ValueKind.List || targets.items.isEmpty()) {
+    let size = input.listSizeOrZero([ToolResolverStep.Field("approval_targets")])
+    if (size == 0) {
         level = ApprovalRiskLevel.Critical
         flags.add("invalid_plan_summary")
         reasons.add("Application plan approval metadata is incomplete")
     } else {
-        for (target in targets.items) {
-            let targetRisk = match (applicationPlanRequiredText(target, "risk")) {
-                case Result.Ok(value) => productApplicationRiskLevel(value)
-                case Result.Err(_) => ApprovalRiskLevel.Critical
-            }
+        for (index in 0..size) {
+            let riskPath = [ToolResolverStep.Field("approval_targets"), ToolResolverStep.Index(index), ToolResolverStep.Field("risk")]
+            let targetRisk = if (input.hasKind(riskPath, JsonKind.String)) {
+                productApplicationRiskLevel(input.copyText(ToolResolverText.Scalar(riskPath)))
+            } else { ApprovalRiskLevel.Critical }
             if (productApplicationRiskRank(targetRisk) > productApplicationRiskRank(level)) {
                 level = targetRisk
             }
-            for (flag in productApplicationTextItems(target.field("flags"))) {
+            for (flag in productApplicationTextItems(input, index, "flags")) {
                 if (!flags.contains(flag)) { flags.add(flag) }
             }
-            for (reason in productApplicationTextItems(target.field("reasons"))) {
+            for (reason in productApplicationTextItems(input, index, "reasons")) {
                 if (!reasons.contains(reason)) { reasons.add(reason) }
             }
         }
@@ -1601,15 +1592,13 @@ func productFilePlanApprovalMetadata(
     )
 }
 
-func productApplicationTextItems(value: ?AgentValue): Array<String> {
-    let list = match (value) {
-        case Some(item) => item
-        case None => return []
-    }
-    if (list.unifiedKind != ValueKind.List) { return [] }
+func productApplicationTextItems(input: ToolResolverInput, target: Int64, field: String): Array<String> {
+    let path = [ToolResolverStep.Field("approval_targets"), ToolResolverStep.Index(target), ToolResolverStep.Field(field)]
     let values = ArrayList<String>()
-    for (item in list.items where item.unifiedKind == ValueKind.Text) {
-        values.add(item.text)
+    for (index in 0..input.listSizeOrZero(path)) {
+        let item = [ToolResolverStep.Field("approval_targets"), ToolResolverStep.Index(target),
+            ToolResolverStep.Field(field), ToolResolverStep.Index(index)]
+        if (input.hasKind(item, JsonKind.String)) { values.add(input.copyText(ToolResolverText.Scalar(item))) }
     }
     values.toArray()
 }

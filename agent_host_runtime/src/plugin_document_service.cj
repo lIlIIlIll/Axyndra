@@ -18,12 +18,8 @@ public func hostRegisterPluginDocumentService(catalog: ToolCatalog): Result<Unit
             ["schema", "binding", "intent"])), Capability(CapabilityKind.ExtensionInvoke),
         sideEffecting: true, neverReplay: true, hostServiceOnly: true,
         implementationVersion: HOST_PLUGIN_DOCUMENT_FINGERPRINT, implementationFingerprint: HOST_PLUGIN_DOCUMENT_FINGERPRINT,
-        capabilityResolver: Some({ call => Capability(CapabilityKind.ExtensionInvoke,
-            resource: httpIntentText(call.arguments.field("binding") ?? nullValue(), "namespace")) }),
-        sideEffectResolver: Some({ call => if(httpIntentText(call.arguments,"schema")==PLUGIN_DOCUMENT_ROW_JOURNAL_INTENT_SCHEMA){
-            match(parsePluginDocumentRowJournalIntent(call.arguments)){case Result.Ok(value)=>value.append;case Result.Err(_)=>true}
-        }else{match (parsePluginDocumentIntent(call.arguments)) {
-            case Result.Ok(value) => value.compareExchange; case Result.Err(_) => true }} }),
+        capabilityResolver: Some(resolverDocumentCapability),
+        sideEffectResolver: Some(resolverDocumentSideEffect),
         networkPolicyResolver: Some({ _ => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) })), HostPluginDocumentExecutor())
 }
 

@@ -102,7 +102,7 @@ class HostContextReadPathIdentityTests {
             let canonical = pathIdentityRequire(hostPrepareContextRead(f.host, context, call))
             @Expect(canonical.field("requires_approval").getOrThrow().asBool())
             @Expect(canonical.field("resources").getOrThrow().items[0].field("permission").getOrThrow().text != "workspace.read")
-            let plan = NormalizedOperationPlan(HOST_CONTEXT_READ_TOOL, canonical, hostContextReadCapabilities(ToolCall(call.callId, call.name, canonical)),
+            let plan = NormalizedOperationPlan(HOST_CONTEXT_READ_TOOL, canonical, withToolResolverInput(ToolCall(call.callId, call.name, canonical), resolverContextReadCapabilities),
                 OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, modelPolicySha256Text(canonicalAgentValue(canonical)),
                 toolVersion: HOST_CONTEXT_READ_IMPLEMENTATION, implementationFingerprint: HOST_CONTEXT_READ_IMPLEMENTATION)
             @Expect(DefaultCapabilityPolicy().evaluate(context, plan).requirement, PermissionRequirement.Confirm)

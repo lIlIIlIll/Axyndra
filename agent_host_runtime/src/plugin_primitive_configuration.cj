@@ -134,17 +134,17 @@ class HostPrimitiveConfiguration111 {
             if(callerAllows(localTool,capabilities,service:value.text)){return true} }
         false
     }
-    func resolvedInvocationCapability(localTool:String,arguments:AgentValue):Capability {
-        let service=pluginPrimitiveArgumentsService111(arguments)
-        if(!permitsService(localTool,service) || pluginPrimitiveInvocationName111(arguments)!=invocationName(localTool,service:service)) {
+    func resolvedInvocationCapability(localTool:String,arguments:ToolResolverInput):Capability {
+        let service=resolverPrimitiveService(arguments)
+        if(!permitsService(localTool,service) || !resolverPrimitivePermissionEquals(arguments, invocationName(localTool,service:service))) {
             return Capability(CapabilityKind.ExtensionInvoke,resource:namespace) }
         invocationCapability(localTool,service:service)
     }
-    func resolvedAdditionalCapabilities(localTool:String,arguments:AgentValue):Array<Capability> {
-        let service=pluginPrimitiveArgumentsService111(arguments)
-        if(!permitsService(localTool,service) || pluginPrimitiveInvocationName111(arguments)!=invocationName(localTool,service:service)) {
+    func resolvedAdditionalCapabilities(localTool:String,arguments:ToolResolverInput):Array<Capability> {
+        let service=resolverPrimitiveService(arguments)
+        if(!permitsService(localTool,service) || !resolverPrimitivePermissionEquals(arguments, invocationName(localTool,service:service))) {
             return [Capability(CapabilityKind.ExtensionInvoke,resource:namespace)] }
-        pluginPrimitiveAdditionalCapabilities111(arguments)
+        resolverPrimitiveAdditional(arguments)
     }
     // The installed original map, never Native result data, chooses this
     // permission for a no-effect completion. Caller capability is rechecked.

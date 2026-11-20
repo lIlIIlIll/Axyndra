@@ -1260,13 +1260,13 @@ func lspSpecSupports(spec: LegacyLspServerSpec, path: String): Bool {
 
 func lspNetworkPolicyFor(
     workspace: LocalWorkspace,
-    call: ToolCall
+    call: ToolResolverInput
 ): Result<NetworkPolicy> {
-    if (optionalString(call, "action", "") == "status") {
+    if (call.stringField("action") == "status") {
         return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
     }
     let specs = loadLspServerSpecs(workspace.rootPath())
-    let authored = optionalString(call, "file", "")
+    let authored = call.stringField("file")
     if (authored == "*") {
         for (spec in specs where !networkPolicyModeIsDenied(spec.networkPolicy.mode)) {
             return Result.Ok(spec.networkPolicy)
@@ -1285,9 +1285,9 @@ func lspNetworkPolicyFor(
 
 func lspAdditionalCapabilitiesFor(
     workspace: LocalWorkspace,
-    call: ToolCall
+    call: ToolResolverInput
 ): Array<Capability> {
-    if (optionalString(call, "action", "") == "status") { return [] }
+    if (call.stringField("action") == "status") { return [] }
     let required = ArrayList<Capability>()
     required.add(Capability(CapabilityKind.ProcessSpawn))
     match (lspNetworkPolicyFor(workspace, call)) {

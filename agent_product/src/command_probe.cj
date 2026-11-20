@@ -60,15 +60,12 @@ func processToolCanonicalArguments(call: ToolCall, workspace: LocalWorkspace): R
     Result.Ok(objectValue(fields.toArray()))
 }
 
-func commandProbeNetworkPolicy(call: ToolCall, shellNetworkMode: ShellNetworkMode): Result<NetworkPolicy> {
-    let policy = match (call.arguments.field("network")) {
-        case Some(value) => match (parseNetworkPolicy(value)) {
-            case Result.Ok(item) => item
-            case Result.Err(error) => return Result.Err(error)
-        }
-        case None => NetworkPolicy(NetworkPolicyMode.Denied)
-    }
-    if (optionalBoolean(call, "readonly_workspace", false) && !networkPolicyModeIsDenied(policy.mode)) {
+func commandProbeNetworkPolicy(call: ToolResolverInput, shellNetworkMode: ShellNetworkMode): Result<NetworkPolicy> {
+    let path = [ToolResolverStep.Field("network")]
+    let policy = if (call.kind(path).isSome()) {
+        match (resolverNetworkPolicy(call, path)) { case Result.Ok(item) => item; case Result.Err(error) => return Result.Err(error) }
+    } else { NetworkPolicy(NetworkPolicyMode.Denied) }
+    if (commandProbeReadonly(call) && !networkPolicyModeIsDenied(policy.mode)) {
         return probeInputError<NetworkPolicy>("readonly_workspace is supported only for offline probes")
     }
     if (shellNetworkMode == ShellNetworkMode.Proxy && networkPolicyModeIsHost(policy.mode)) {
@@ -94,44 +91,43 @@ func commandProbeNetworkPolicy(call: ToolCall, shellNetworkMode: ShellNetworkMod
     Result.Ok(policy)
 }
 
-func commandProbeTimeout(call: ToolCall): Result<Int64> {
+func commandProbeTimeout(call: ToolResolverInput): Result<Int64> {
     var seconds: Int64 = 60
-    match (call.arguments.field("timeout")) {
-        case Some(value) =>
-            if (value.unifiedKind != ValueKind.Number) {
-                return probeInputError<Int64>("timeout must be an integer number of seconds")
-            }
-            try { seconds = Int64.parse(value.asNumberText()) }
-            catch (_: Exception) { return probeInputError<Int64>("timeout must be an integer number of seconds") }
-        case None => ()
+    let path = [ToolResolverStep.Field("timeout")]
+    if (call.kind(path).isSome()) {
+        if (!call.hasKind(path, JsonKind.Number)) { return probeInputError<Int64>("timeout must be an integer number of seconds") }
+        try { seconds = Int64.parse(call.copyText(ToolResolverText.Scalar(path))) }
+        catch (_: Exception) { return probeInputError<Int64>("timeout must be an integer number of seconds") }
     }
     if (seconds < 1 || seconds > 600) { return probeInputError<Int64>("timeout must be 1 through 600 seconds") }
     Result.Ok(seconds)
 }
 
-func commandProbeArguments(call: ToolCall): Result<Array<String>> {
-    let value = match (call.arguments.field("argv")) {
-        case Some(item) => item
-        case None => return probeInputError<Array<String>>("argv must be a string list")
-    }
-    if (value.unifiedKind != ValueKind.List || value.items.size > 256) {
+func commandProbeArguments(call: ToolResolverInput): Result<Array<String>> {
+    let path = [ToolResolverStep.Field("argv")]
+    if (call.kind(path).isNone()) { return probeInputError<Array<String>>("argv must be a string list") }
+    if (!call.hasKind(path, JsonKind.Array) || call.count(path) > 256) {
         return probeInputError<Array<String>>("argv must be a string list of at most 256 items")
     }
     let arguments = ArrayList<String>()
-    for (item in value.items) {
-        if (item.unifiedKind != ValueKind.Text || item.text.contains("\u{0000}")) {
-            return probeInputError<Array<String>>("argv entries must be strings without NUL")
-        }
-        arguments.add(item.text)
+    for (i in 0..call.count(path)) {
+        let item = [ToolResolverStep.Field("argv"), ToolResolverStep.Index(i)]
+        if (!call.hasKind(item, JsonKind.String)) { return probeInputError<Array<String>>("argv entries must be strings without NUL") }
+        let text = call.copyText(ToolResolverText.Scalar(item))
+        if (text.contains("\u{0000}")) { return probeInputError<Array<String>>("argv entries must be strings without NUL") }
+        arguments.add(text)
     }
     Result.Ok(arguments.toArray())
 }
 
-func commandProbeExecutable(call: ToolCall, arguments: Array<String>, policy: NetworkPolicy): Result<String> {
-    let executable = match (requiredString(call, "executable")) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return Result.Err(error)
+func commandProbeExecutable(call: ToolResolverInput, arguments: Array<String>, policy: NetworkPolicy): Result<String> {
+    let fieldPath = [ToolResolverStep.Field("executable")]
+    if (!call.hasKind(fieldPath, JsonKind.String)) {
+        let message = if (call.kind(fieldPath).isNone()) { "required argument is missing" } else { "argument must be a string" }
+        return Result.Err(AgentError(AgentErrorKind.InvalidInput, "tool.invalid_argument", message,
+            fields: [ErrorField("tool", call.copyText(ToolResolverText.Name)), ErrorField("argument", "executable")]))
     }
+    let executable = call.copyText(ToolResolverText.Scalar(fieldPath))
     if (networkPolicyModeIsDenied(policy.mode)) {
         if (!Path(executable).isAbsolute() || executable.contains("\u{0000}")) {
             return probeInputError<String>("offline probes require an absolute executable path")
@@ -156,12 +152,20 @@ func commandProbeExecutable(call: ToolCall, arguments: Array<String>, policy: Ne
     Result.Ok(path)
 }
 
-func commandProbeSideEffecting(call: ToolCall): Bool {
-    if (optionalBoolean(call, "readonly_workspace", false)) { return false }
+func commandProbeReadonly(call: ToolResolverInput): Bool {
+    let path = [ToolResolverStep.Field("readonly_workspace")]
+    call.hasKind(path, JsonKind.Boolean) && call.boolean(path)
+}
+
+func commandProbeSideEffecting(call: ToolResolverInput): Bool {
+    if (commandProbeReadonly(call)) { return false }
     let arguments = match (commandProbeArguments(call)) {
         case Result.Ok(value) => value; case Result.Err(_) => return true
     }
-    let executable = optionalString(call, "executable", "")
+    commandProbeArgumentEffect(call.stringField("executable"), arguments)
+}
+
+func commandProbeArgumentEffect(executable: String, arguments: Array<String>): Bool {
     if ((executable == "curl" || executable == "/usr/bin/curl") &&
         validNetworkProbeArguments("curl", arguments)) { return false }
     (executable != "npm" && executable != "/usr/bin/npm") ||
@@ -290,20 +294,25 @@ func npmProbePrivatePathsOverlapWorkspace(workspaceRoot: String): Bool {
 }
 
 func commandProbeFallbackAllowed(
-    call: ToolCall, policy: NetworkPolicy, result: ProcessResult, writeRoots: Array<String>
+    name: String, arguments: Array<String>, sideEffecting: Bool, policy: NetworkPolicy, result: ProcessResult, writeRoots: Array<String>
 ): Bool {
     if (networkPolicyModeIsDenied(policy.mode) || !result.started ||
         (!result.timedOut && result.exitCode == 0)) { return false }
-    let name = optionalString(call, "executable", "")
-    let arguments = match (commandProbeArguments(call)) {
-        case Result.Ok(value) => value; case Result.Err(_) => return false
-    }
     let controlled = if (name == "npm" || name == "/usr/bin/npm") {
         validNetworkProbeArguments("npm", arguments)
     } else if (name == "curl" || name == "/usr/bin/curl") {
         validNetworkProbeArguments("curl", arguments)
     } else { false }
-    controlled && (!commandProbeSideEffecting(call) || !writeRoots.isEmpty())
+    controlled && (!sideEffecting || !writeRoots.isEmpty())
+}
+
+// Release the resolver input before issuing the native process request. Only
+// the executable, arguments and scalar classifications outlive this scope.
+private func commandProbeLaunchFields(input: ToolResolverInput, policy: NetworkPolicy): Result<(String, Array<String>, Int64, Bool)> {
+    let arguments = match (commandProbeArguments(input)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    let executable = match (commandProbeExecutable(input, arguments, policy)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    let seconds = match (commandProbeTimeout(input)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    Result.Ok((executable, arguments, seconds, !commandProbeReadonly(input) && commandProbeArgumentEffect(executable, arguments)))
 }
 
 func probeInputError<T>(message: String): Result<T> {
@@ -332,16 +341,8 @@ class CommandProbeTool <: ToolExecutor {
                 "probe.authorization_mode_denied", "command probes require their own canonical operation authorization"))
         }
         let call = ToolCall(originalCall.callId, originalCall.name, plan.canonicalArguments)
-        let arguments = match (commandProbeArguments(call)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
         let policy = plan.networkPolicy
-        let executable = match (commandProbeExecutable(call, arguments, policy)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let seconds = match (commandProbeTimeout(call)) {
+        let (executable, arguments, seconds, sideEffecting) = match (withToolResolverInput(call, { input => commandProbeLaunchFields(input, policy) })) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
         }
         let cwd = match (workspace.resolve(plan.cwd, allowDirectory: true)) {
@@ -355,7 +356,7 @@ class CommandProbeTool <: ToolExecutor {
         let result = match (operations.execute(context, prepared, {id => processes.executeProbe(ProcessRequest(
             executable, resourceOwner: Some(ProcessResourceOwner.Operation(id)), arguments: effectiveArguments, workingDirectory: cwd,
             timeoutMillis: seconds * 1000,
-            sandboxMode: if (commandProbeSideEffecting(call)) { ProcessSandboxMode.WorkspaceReadWrite }
+            sandboxMode: if (sideEffecting) { ProcessSandboxMode.WorkspaceReadWrite }
                 else { ProcessSandboxMode.WorkspaceReadOnly },
             networkPolicy: Some(policy), processLimits: context.budget.processLimits,
             approvedWriteRoots: plan.approvedWriteRoots
@@ -374,7 +375,7 @@ class CommandProbeTool <: ToolExecutor {
             ValueField("start_boundary", textValue("target_exec_acknowledgement")),
             ValueField("completed", boolValue(result.completed)),
             ValueField("target_stopped", boolValue(true)),
-            ValueField("fallback_allowed", boolValue(commandProbeFallbackAllowed(call, policy, result,
+            ValueField("fallback_allowed", boolValue(commandProbeFallbackAllowed(executable, arguments, sideEffecting, policy, result,
                 plan.approvedWriteRoots))),
             ValueField("launch_errno", integerValue(result.launchErrno)),
             ValueField("exit_code", integerValue(result.exitCode)),

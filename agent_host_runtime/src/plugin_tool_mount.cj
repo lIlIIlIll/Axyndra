@@ -241,12 +241,12 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                         serviceRuntime.getOrThrow().documentPreparationRead(hostManager, identity.namespace, toolData.name,
                             generation, documentImplementation, documentSchema, context, call) }) } else { None },
                     additionalCapabilities: if (primitiveSelected) { primitiveCapabilities } else if (dataOnly || readViewRequested) { [] } else if (delegationRequested) { [Capability(CapabilityKind.WorkspaceRead)] } else { additionalCapabilities.toArray() },
-                    capabilityResolver: if(primitiveSelected){Some({call=>primitiveSelection.getOrThrow().resolvedInvocationCapability(toolData.name,call.arguments)})}else{Option<ToolCapabilityResolver>.None},
-                    additionalCapabilityResolver: if(primitiveSelected){Some({call=>primitiveSelection.getOrThrow().resolvedAdditionalCapabilities(toolData.name,call.arguments)})}else if (readViewRequested) { Some({ call => hostPluginReadViewCapabilities(call) }) } else if (delegationRequested) { Some({ call => hostPluginReadonlyDelegationCapabilities(call) }) } else { None },
-                    approvalMetadataResolver: if (readViewRequested) { Some({ call => hostPluginReadViewApprovalMetadata(call) }) } else { None },
-                    sideEffectResolver: if(primitiveSelected){Some({call=>pluginPrimitiveArgumentsEffect152(call.arguments)!=OperationEffectClass.ReadOnly})}
+                    capabilityResolver: if(primitiveSelected){Some({call=>primitiveSelection.getOrThrow().resolvedInvocationCapability(toolData.name,call)})}else{Option<ToolCapabilityResolver>.None},
+                    additionalCapabilityResolver: if(primitiveSelected){Some({call=>primitiveSelection.getOrThrow().resolvedAdditionalCapabilities(toolData.name,call)})}else if (readViewRequested) { Some({ call => resolverPluginReadViewCapabilities(call) }) } else if (delegationRequested) { Some({ call => resolverPluginReadonlyDelegationCapabilities(call) }) } else { None },
+                    approvalMetadataResolver: if (readViewRequested) { Some({ call => resolverPluginReadViewApprovalMetadata(call) }) } else { None },
+                    sideEffectResolver: if(primitiveSelected){Some({call=>resolverPrimitiveEffect(call)!=OperationEffectClass.ReadOnly})}
                         else if(livePolicySelected){Some({call=>true})}
-                        else if (readViewRequested) { Some({ call => hostPluginReadViewSideEffect(call) }) }
+                        else if (readViewRequested) { Some({ call => resolverPluginReadViewSideEffect(call) }) }
                         else if(documentIntentEffect){Some({call=>hostPluginDocumentSideEffect(hostManager,identity.namespace,
                             identity.contentDigest,generation,toolData.name,documentImplementation,documentSchema,call)})} else { None },
                     implementationVersion: executorVersion,
@@ -260,7 +260,7 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                         hostManager.prepareReadViewOwned204(context, call, identity.namespace,
                             toolData.name, generation) }) } else { None },
                     networkPolicyResolver: Some({ call => if (httpRequested) {
-                        hostPluginHttpRootNetworkPolicy(call, identity.namespace, identity.contentDigest)
+                        resolverPluginHttpRootNetworkPolicy(call, identity.namespace, identity.contentDigest)
                     } else { Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) } })
                 ),
                 actualExecutor

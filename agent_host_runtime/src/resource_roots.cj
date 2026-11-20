@@ -28,20 +28,20 @@ public func hostRegisterResourceRoots(catalog: ToolCatalog, port: HostResourceRo
             Capability(if (write) { CapabilityKind.WorkspaceWrite } else { CapabilityKind.WorkspaceRead }),
             sideEffecting: write, neverReplay: true,
             implementationVersion: "resource-roots-v1", implementationFingerprint: "resource-roots-v1",
-            capabilityResolver: Some({ call => if (call.name == "export_artifact") {
-                port.exportCapability(httpIntentText(call.arguments, "destination"))
-            } else { Capability(if (call.name == "write_resource") { CapabilityKind.WorkspaceWrite } else { CapabilityKind.WorkspaceRead },
-                resource: httpIntentText(call.arguments, "reference")) } }),
-            approvalMetadataResolver: Some({ call => if (call.name == "export_artifact") {
-                port.exportMetadata(httpIntentText(call.arguments, "destination"), httpIntentText(call.arguments, "reference"))
-            } else { ToolApprovalMetadata(if (call.name == "write_resource") { "workspace.write" } else { "workspace.read" },
-                RiskAssessment(if (call.name == "write_resource") { ApprovalRiskLevel.High } else { ApprovalRiskLevel.Low },
-                    flags: if (call.name == "read_resource" && isHostArtifactReference(httpIntentText(call.arguments, "reference"))) {
+            capabilityResolver: Some({ call => if (call.textEquals(ToolResolverText.Name, "export_artifact")) {
+                port.exportCapability(call.stringField("destination"))
+            } else { Capability(if (call.textEquals(ToolResolverText.Name, "write_resource")) { CapabilityKind.WorkspaceWrite } else { CapabilityKind.WorkspaceRead },
+                resource: call.stringField("reference")) } }),
+            approvalMetadataResolver: Some({ call => if (call.textEquals(ToolResolverText.Name, "export_artifact")) {
+                port.exportMetadata(call.stringField("destination"), call.stringField("reference"))
+            } else { ToolApprovalMetadata(if (call.textEquals(ToolResolverText.Name, "write_resource")) { "workspace.write" } else { "workspace.read" },
+                RiskAssessment(if (call.textEquals(ToolResolverText.Name, "write_resource")) { ApprovalRiskLevel.High } else { ApprovalRiskLevel.Low },
+                    flags: if (call.textEquals(ToolResolverText.Name, "read_resource") && isHostArtifactReference(call.stringField("reference"))) {
                         ["artifact_read"]
                     } else { [] },
                     reasons: ["Access this exact resource through a separate canonical Root"]),
-                ApprovalGrantScope(if (call.name == "write_resource") { "workspace.write" } else { "workspace.read" },
-                    pathPrefix: httpIntentText(call.arguments, "reference"), toolName: call.name), sessionApprovalAllowed: false) } }),
+                ApprovalGrantScope(if (call.textEquals(ToolResolverText.Name, "write_resource")) { "workspace.write" } else { "workspace.read" },
+                    pathPrefix: call.stringField("reference"), toolName: call.copyText(ToolResolverText.Name)), sessionApprovalAllowed: false) } }),
             networkPolicyResolver: Some({ _ => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) })), HostResourceRootExecutor(port))
         match (result) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     }

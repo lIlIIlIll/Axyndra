@@ -63,91 +63,9 @@ public func hostPrepareContextRead(host: HostJavaScriptPluginHost, context: Tool
     Result.Ok(canonical)
 }
 
-public func hostContextReadCapabilities(call: ToolCall): Array<Capability> {
-    if (httpIntentText(call.arguments,"schema")==PLUGIN_PEER_READ111) {
-        let peer=Capability(CapabilityKind.PeerMessage)
-        if (httpIntentText(call.arguments,"invocation_capability")=="peer.message") { return [peer] }
-        return [peer,Capability(CapabilityKind.ExtensionInvoke,
-            resource:httpIntentText(call.arguments.field("binding").getOrThrow(),"namespace"))] }
-    let values = ArrayList<Capability>()
-    if(httpIntentText(call.arguments,"schema")==PLUGIN_DOCUMENT_CONTEXT_LATEST_JOURNAL_STREAM_READ_SCHEMA ||
-        httpIntentText(call.arguments,"schema")==PLUGIN_DOCUMENT_LATEST_JOURNAL_STREAM_READ_SCHEMA){
-        return [Capability(CapabilityKind.ExtensionInvoke,resource:httpIntentText(call.arguments.field("binding").getOrThrow(),"namespace"))]}
-    if(pluginDocumentContextWindowReadRequestValid(call.arguments)){
-        return [Capability(CapabilityKind.ExtensionInvoke,resource:httpIntentText(call.arguments.field("binding").getOrThrow(),"namespace"))]}
-    if(pluginDocumentRowJournalReadRequestValid(call.arguments)){
-        return [Capability(CapabilityKind.ExtensionInvoke,resource:httpIntentText(call.arguments.field("binding").getOrThrow(),"namespace"))]}
-    if (pluginDocumentReadRequestValid(call.arguments)) {
-        return [Capability(CapabilityKind.ExtensionInvoke,
-            resource: httpIntentText(call.arguments.field("binding").getOrThrow(), "namespace"))]
-    }
-    if (contextReadResourcePlanValid(call.arguments)) {
-        for (resource in call.arguments.field("resources").getOrThrow().items) {
-            values.add(Capability(CapabilityKind.WorkspaceRead, resource: httpIntentText(resource, "source")))
-            if (httpIntentText(resource, "kind") == "index") {
-                for (entry in resource.field("entries").getOrThrow().items) {
-                    let relative = httpIntentText(entry, "relative")
-                    values.add(Capability(CapabilityKind.WorkspaceRead, resource: if (relative == "") { httpIntentText(resource, "source") }
-                        else { Path(httpIntentText(resource, "source")).join(relative).toString() })) }
-            }
-            if (httpIntentText(resource, "kind") == "metadata") {
-                for (entry in resource.field("entries").getOrThrow().items) {
-                    values.add(Capability(CapabilityKind.WorkspaceRead,
-                        resource: Path(httpIntentText(resource, "source")).join(httpIntentText(entry, "name")).toString())) }
-            }
-            if (httpIntentText(resource, "kind") == "absence") {
-                values.add(Capability(CapabilityKind.WorkspaceRead, resource: httpIntentText(resource, "absence_parent"))) }
-        }
-    }
-    if (values.isEmpty()) { values.add(Capability(CapabilityKind.WorkspaceRead)) }
-    values.toArray()
-}
 
-public func hostContextReadApproval(call: ToolCall): ToolApprovalMetadata {
-    if(httpIntentText(call.arguments,"schema")==PLUGIN_DOCUMENT_CONTEXT_LATEST_JOURNAL_STREAM_READ_SCHEMA ||
-        httpIntentText(call.arguments,"schema")==PLUGIN_DOCUMENT_LATEST_JOURNAL_STREAM_READ_SCHEMA){
-        return ToolApprovalMetadata("extension.invoke",RiskAssessment(ApprovalRiskLevel.Medium,
-            flags:["exact_context_read"],reasons:["Read this explicitly configured structural journal through the actual typed Provider"]),
-            ApprovalGrantScope("extension.invoke",toolName:HOST_CONTEXT_READ_TOOL),sessionApprovalAllowed:false)}
-    if(pluginDocumentContextWindowReadRequestValid(call.arguments)){
-        return ToolApprovalMetadata("extension.invoke",RiskAssessment(ApprovalRiskLevel.Medium,
-            flags:["exact_context_read"],reasons:["Read this explicitly configured window for the actual context Provider"]),
-            ApprovalGrantScope("extension.invoke",toolName:HOST_CONTEXT_READ_TOOL),sessionApprovalAllowed:false)}
-    if(pluginDocumentRowJournalReadRequestValid(call.arguments)){
-        return ToolApprovalMetadata("extension.invoke",RiskAssessment(ApprovalRiskLevel.Medium,
-            flags:["exact_context_read"],reasons:["Read this explicitly configured journal window before preparing the pending Tool"]),
-            ApprovalGrantScope("extension.invoke",toolName:HOST_CONTEXT_READ_TOOL),sessionApprovalAllowed:false)}
-    if (pluginDocumentReadRequestValid(call.arguments)) {
-        return ToolApprovalMetadata("extension.invoke", RiskAssessment(ApprovalRiskLevel.Medium,
-            flags: ["exact_context_read"], reasons: ["Read these operator-authorized logical documents before preparing this Tool"]),
-            ApprovalGrantScope("extension.invoke", toolName: HOST_CONTEXT_READ_TOOL), sessionApprovalAllowed: false)
-    }
-    if (httpIntentText(call.arguments,"schema")==PLUGIN_PEER_READ111) {
-        return ToolApprovalMetadata("peer.message",RiskAssessment(ApprovalRiskLevel.Medium,
-            flags:["exact_context_read"],reasons:["Observe this actual same-root member before freezing its new invocation"]),
-            ApprovalGrantScope("peer.message",toolName:HOST_CONTEXT_READ_TOOL),sessionApprovalAllowed:false) }
-    var label = "workspace.read"; var risk = ApprovalRiskLevel.Medium
-    let reasons = ArrayList<String>(["Read these frozen resources into this Run before preparing the pending tool"])
-    if (contextReadResourcePlanValid(call.arguments)) {
-        for (resource in call.arguments.field("resources").getOrThrow().items) {
-            let permission = httpIntentText(resource, "permission")
-            if (risk != ApprovalRiskLevel.Critical && permission != "workspace.read") { label = permission }
-            if (permission == "sensitive-path.read") { label = permission; risk = ApprovalRiskLevel.Critical }
-            if (reasons.size < 10) { reasons.add(permission + ": " + httpIntentText(resource, "source")) }
-            if (["metadata", "index"].contains(httpIntentText(resource, "kind"))) {
-                for (entry in resource.field("entries").getOrThrow().items) {
-                    let classified = httpIntentText(entry, "permission")
-                    if (risk != ApprovalRiskLevel.Critical && classified != "workspace.read") { label = classified }
-                    if (classified == "sensitive-path.read") { label = classified; risk = ApprovalRiskLevel.Critical }
-                    if (classified != "workspace.read" && reasons.size < 10) {
-                        reasons.add(classified + ": " + Path(httpIntentText(resource, "source")).join((if (httpIntentText(resource, "kind") == "index") { httpIntentText(entry, "relative") } else { httpIntentText(entry, "name") })).toString()) }
-                }
-            }
-        }
-    }
-    ToolApprovalMetadata(label, RiskAssessment(risk, flags: ["exact_context_read"], reasons: reasons.toArray()),
-        ApprovalGrantScope(label, toolName: HOST_CONTEXT_READ_TOOL), sessionApprovalAllowed: false)
-}
+
+
 
 public func hostRegisterContextRead(catalog: ToolCatalog, host: HostJavaScriptPluginHost,
     operations: OperationRuntimePort, documentObserver!: ?PluginDocumentReadObserver = None,
@@ -172,9 +90,9 @@ public func hostRegisterContextRead(catalog: ToolCatalog, host: HostJavaScriptPl
         Capability(CapabilityKind.WorkspaceRead), hostServiceOnly: true, neverReplay: true,
         implementationVersion: HOST_CONTEXT_READ_IMPLEMENTATION, implementationFingerprint: HOST_CONTEXT_READ_IMPLEMENTATION,
         canonicalArgumentsResolver: Some({ context, call => hostPrepareContextRead(host, context, call) }),
-        capabilityResolver: Some({ call => hostContextReadCapabilities(call)[0] }),
-        additionalCapabilityResolver: Some({ call => hostContextReadCapabilities(call)[1..] }),
-        approvalMetadataResolver: Some({ call => hostContextReadApproval(call) }),
+        capabilityResolver: Some({ call => resolverContextReadCapabilities(call)[0] }),
+        additionalCapabilityResolver: Some({ call => resolverContextReadCapabilities(call)[1..] }),
+        approvalMetadataResolver: Some({ call => resolverContextReadApproval(call) }),
         networkPolicyResolver: Some({ _ => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) })), executor)
 }
 

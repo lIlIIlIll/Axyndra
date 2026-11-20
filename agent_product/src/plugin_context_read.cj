@@ -19,11 +19,11 @@ func prepareProductContextRead(host: ProductJavaScriptPluginHost, context: ToolI
 }
 
 func productContextReadCapabilities(call: ToolCall): Array<Capability> {
-    agent_host_runtime.hostContextReadCapabilities(call)
+    withToolResolverInput(call, resolverContextReadCapabilities)
 }
 
 func productContextReadApproval(call: ToolCall): ToolApprovalMetadata {
-    agent_host_runtime.hostContextReadApproval(call)
+    withToolResolverInput(call, resolverContextReadApproval)
 }
 
 func registerProductContextRead(catalog: ToolCatalog, host: ProductJavaScriptPluginHost,

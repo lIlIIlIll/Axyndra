@@ -59,8 +59,8 @@ public func hostRegisterPluginReadViewService(catalog: ToolCatalog, host: HostJa
             ["plugin", "generation", "package_digest", "configuration_digest", "contribution", "tool_payload_limits", "intent"])),
         Capability(CapabilityKind.WorkspaceRead), hostServiceOnly: true, neverReplay: true,
         implementationVersion: HOST_READ_VIEW_FINGERPRINT, implementationFingerprint: HOST_READ_VIEW_FINGERPRINT,
-        capabilityResolver: Some({ call => readViewRequiredCapabilities(call.arguments)[0] }),
-        additionalCapabilityResolver: Some({ call => let all = readViewRequiredCapabilities(call.arguments); all[1..] }),
+        capabilityResolver: Some({ call => resolverReadViewCapabilities(call)[0] }),
+        additionalCapabilityResolver: Some({ call => let all = resolverReadViewCapabilities(call); all[1..] }),
         networkPolicyResolver: Some({ _ => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) })),
         executor)
 }

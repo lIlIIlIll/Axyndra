@@ -638,9 +638,9 @@ public class HostPluginManagedService {
                 required[0], sideEffecting: !serviceGrantDeclaresReadOnly(grant.endpointBinding(), localName), neverReplay: true,
                 additionalCapabilityResolver: Some({ call =>
                     let values = ArrayList<Capability>(required[1..].clone())
-                    match (call.arguments.field("host_plan")) { case Some(plan) =>
-                        if (plan.field("managed_job").isSome()) { values.add(Capability(CapabilityKind.Delegate, resource: "managed-job")) }
-                        case None => () }
+                    if (call.kind([ToolResolverStep.Field("host_plan"), ToolResolverStep.Field("managed_job")]).isSome()) {
+                        values.add(Capability(CapabilityKind.Delegate, resource: "managed-job"))
+                    }
                     values.toArray()
                 }),
                 networkPolicyResolver: Some({ _ => resource.networkPolicy() }),

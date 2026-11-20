@@ -83,7 +83,7 @@ func registerEditTool(
             sideEffecting: true,
             capabilityResolver: {call => editCapabilityFor(workspace, call)},
             additionalCapabilityResolver: {call =>
-                hashlineApprovalPaths(writeArgumentText(call.arguments, "input"))
+                hashlineApprovalPaths(call.stringField("input"))
                     .map({path => workspace.writeCapability(path)})
             },
             approvalMetadataResolver: {call => editApprovalMetadataFor(workspace, call)}
@@ -109,7 +109,7 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
 
     public func resolveCapability(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ?ToolResolverInput
     ): Capability {
         if (requirement.name == "workspace.write") {
             return workspace.writeCapability(sdkInputText(input, "path"))
@@ -122,7 +122,7 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
 
     public func resolveNetworkPolicy(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ToolResolverInput
     ): Result<NetworkPolicy> {
         let _ = requirement
         let _ = input
@@ -131,15 +131,15 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
 
     public func approvalMetadata(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ToolResolverInput
     ): ToolApprovalMetadata {
         if (requirement.name == "workspace.write") {
             return workspace.writeApprovalMetadata(
-                sdkInputText(input, "path"),
-                sdkInputText(input, "content")
+                input.stringField("path"),
+                input.stringField("content")
             )
         }
-        defaultToolApprovalMetadata(resolveCapability(requirement, input))
+        defaultToolApprovalMetadata(resolveCapability(requirement, Some(input)))
     }
 
     public func execute(
@@ -170,11 +170,8 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
     }
 }
 
-func sdkInputText(value: AgentValue, name: String): String {
-    match (value.field(name)) {
-        case Some(field) => if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
-        case None => ""
-    }
+func sdkInputText(input: ?ToolResolverInput, name: String): String {
+    match (input) { case Some(value) => value.stringField(name); case None => "" }
 }
 
 func registerGlobTool(
@@ -715,14 +712,14 @@ func writeArgumentText(value: AgentValue, field: String): String {
     }
 }
 
-func readToolPath(call: ToolCall): String {
-    parseReadTarget(writeArgumentText(call.arguments, "path")).path
+func readToolPath(call: ToolResolverInput): String {
+    parseReadTarget(call.stringField("path")).path
 }
 
 func readCapabilityFor(
     workspace: LocalWorkspace,
     uriRouter: InternalUriRouter,
-    call: ToolCall
+    call: ToolResolverInput
 ): Capability {
     let destination = readExportDestination(call)
     if (destination != "") {
@@ -757,7 +754,7 @@ func approvalRiskRank(level: ApprovalRiskLevel): Int64 {
 func readRequiresApprovalFor(
     workspace: LocalWorkspace,
     uriRouter: InternalUriRouter,
-    call: ToolCall
+    call: ToolResolverInput
 ): Bool {
     if (readExportDestination(call) != "") {
         return true
@@ -769,7 +766,7 @@ func readRequiresApprovalFor(
 func readApprovalMetadataFor(
     workspace: LocalWorkspace,
     uriRouter: InternalUriRouter,
-    call: ToolCall
+    call: ToolResolverInput
 ): ToolApprovalMetadata {
     let destination = readExportDestination(call)
     if (destination != "") {
@@ -786,8 +783,8 @@ func readApprovalMetadataFor(
     workspace.readApprovalMetadata(path)
 }
 
-func readExportDestination(call: ToolCall): String {
-    writeArgumentText(call.arguments, "destination")
+func readExportDestination(call: ToolResolverInput): String {
+    call.stringField("destination")
 }
 
 func artifactExportApprovalMetadata(
@@ -835,16 +832,16 @@ func artifactExportApprovalMetadata(
     )
 }
 
-func editCapabilityFor(workspace: LocalWorkspace, call: ToolCall): Capability {
-    let paths = hashlineApprovalPaths(writeArgumentText(call.arguments, "input"))
+func editCapabilityFor(workspace: LocalWorkspace, call: ToolResolverInput): Capability {
+    let paths = hashlineApprovalPaths(call.stringField("input"))
     if (paths.isEmpty()) {
         return Capability(CapabilityKind.WorkspaceWrite)
     }
     workspace.writeCapability(paths[0])
 }
 
-func editApprovalMetadataFor(workspace: LocalWorkspace, call: ToolCall): ToolApprovalMetadata {
-    let paths = hashlineApprovalPaths(writeArgumentText(call.arguments, "input"))
+func editApprovalMetadataFor(workspace: LocalWorkspace, call: ToolResolverInput): ToolApprovalMetadata {
+    let paths = hashlineApprovalPaths(call.stringField("input"))
     if (paths.isEmpty()) {
         return ToolApprovalMetadata(
             "outside-workspace.write",
@@ -1635,7 +1632,7 @@ func sdkDescriptor(
     let networkRequirement = sdkNetworkRequirement(definition)
     ToolDescriptor(
         ModelToolDefinition(definition.name, definition.description, definition.inputSchema),
-        host.resolveCapability(first, objectValue([])),
+        host.resolveCapability(first, None),
         sideEffecting: definition.effect == ExtensionEffect.SideEffect,
         implementationVersion: version,
         implementationFingerprint: extensionId + ":" + version + ":" + definition.name,
@@ -1644,21 +1641,21 @@ func sdkDescriptor(
         } else {
             sharedToolConcurrency()
         },
-        capabilityResolver: {call => host.resolveCapability(first, call.arguments)},
+        capabilityResolver: {call => host.resolveCapability(first, Some(call))},
         additionalCapabilityResolver: {call =>
             let values = ArrayList<Capability>()
             for (requirement in additional) {
-                values.add(host.resolveCapability(requirement, call.arguments))
+                values.add(host.resolveCapability(requirement, Some(call)))
             }
             values.toArray()
         },
         networkPolicyResolver: {call =>
             match (networkRequirement) {
-                case Some(requirement) => host.resolveNetworkPolicy(requirement, call.arguments)
+                case Some(requirement) => host.resolveNetworkPolicy(requirement, call)
                 case None => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
             }
         },
-        approvalMetadataResolver: {call => host.approvalMetadata(first, call.arguments)}
+        approvalMetadataResolver: {call => host.approvalMetadata(first, call)}
     )
 }
 
@@ -1774,9 +1771,9 @@ class RuntimeOracleWriteHost <: ExtensionOperationHost {
     private let workspace: LocalWorkspace
     private let write: WriteTool
     init(workspace: LocalWorkspace,uris: InternalUriRouter){this.workspace=workspace;write=WriteTool(workspace,uris)}
-    public func resolveCapability(requirement: CapabilityRequirement,input: AgentValue): Capability{workspace.writeCapability(sdkInputText(input,"path"))}
-    public func approvalMetadata(requirement: CapabilityRequirement,input: AgentValue): ToolApprovalMetadata{workspace.writeApprovalMetadata(sdkInputText(input,"path"),sdkInputText(input,"content"))}
-    public func resolveNetworkPolicy(requirement: CapabilityRequirement,input: AgentValue): Result<NetworkPolicy>{Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))}
+    public func resolveCapability(requirement: CapabilityRequirement,input: ?ToolResolverInput): Capability{workspace.writeCapability(sdkInputText(input,"path"))}
+    public func approvalMetadata(requirement: CapabilityRequirement,input: ToolResolverInput): ToolApprovalMetadata{workspace.writeApprovalMetadata(input.stringField("path"),input.stringField("content"))}
+    public func resolveNetworkPolicy(requirement: CapabilityRequirement,input: ToolResolverInput): Result<NetworkPolicy>{Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))}
     public func execute(context: ToolInvocationContext,prepared: PreparedToolInvocation,intent: OperationIntent): Result<ExecutionResult>{
         if(match(intent){case OperationIntent.WorkspaceWrite(_)=>false;case _=>true}){return Result.Err(AgentError(AgentErrorKind.Configuration,"oracle.operation_invalid","historical writer has no other operation"))}
         match(write.execute(context,prepared)){case Result.Err(error)=>Result.Err(error);case Result.Ok(value)=>Result.Ok(ExecutionResult(value.output))}

@@ -153,11 +153,15 @@ class HostPluginLifecycleRefreshControl <: ToolExecutor {
     }
 
     private func lookup(call: ToolCall): Result<HostLifecycleRefreshAdmission> {
-        if (call.name != toolName) { return hostLifecycleLeaseError("plugin.lifecycle_refresh_admission_missing") }
+        withToolResolverInput(call, { input => lookup(input) })
+    }
+
+    private func lookup(call: ToolResolverInput): Result<HostLifecycleRefreshAdmission> {
+        if (!call.textEquals(ToolResolverText.Name, toolName)) { return hostLifecycleLeaseError("plugin.lifecycle_refresh_admission_missing") }
         lock.lock()
         try {
-            for (entry in admissions where entry.callId == call.callId &&
-                canonicalAgentValue(call.arguments) == canonicalAgentValue(entry.plan)) { return Result.Ok(entry) }
+            for (entry in admissions where call.textEquals(ToolResolverText.CallId, entry.callId) &&
+                call.argumentsMatchCanonical(canonicalAgentValue(entry.plan))) { return Result.Ok(entry) }
             hostLifecycleLeaseError("plugin.lifecycle_refresh_admission_missing")
         } finally { lock.unlock() }
     }

@@ -313,6 +313,31 @@ func hasDefinition(catalog: ToolCatalog, name: String): Bool {
     false
 }
 
+// This historical recording host used JsonNode.text: strings verbatim, all
+// other path values rendered as JSON. Only that field is read by the fixture.
+private func recordingPath(input: ToolResolverInput): String {
+    let path = [ToolResolverStep.Field("path")]
+    if (input.kind(path).isNone()) { return "" }
+    if (input.hasKind(path, JsonKind.String)) { return input.copyText(ToolResolverText.Scalar(path)) }
+    recordingJson(input, path)
+}
+
+private func recordingJson(input: ToolResolverInput, path: Array<ToolResolverStep>): String {
+    let child = { step: ToolResolverStep => Array<ToolResolverStep>(path.size + 1,
+        { i => if (i == path.size) { step } else { path[i] } }) }
+    match (input.kind(path).getOrThrow()) {
+        case JsonKind.Null => "null"
+        case JsonKind.Boolean => if (input.boolean(path)) { "true" } else { "false" }
+        case JsonKind.Number => input.copyText(ToolResolverText.Scalar(path))
+        case JsonKind.String => quoteUnifiedJson(input.copyText(ToolResolverText.Scalar(path)))
+        case JsonKind.Array => "[" + String.join(Array<String>(input.count(path),
+            { i => recordingJson(input, child(ToolResolverStep.Index(i))) }), delimiter: ",") + "]"
+        case JsonKind.Object => "{" + String.join(Array<String>(input.count(path), { i =>
+            quoteUnifiedJson(input.copyText(ToolResolverText.Key(path, i))) + ":" + recordingJson(input, child(ToolResolverStep.MemberAt(i)))
+        }), delimiter: ",") + "}"
+    }
+}
+
 class RecordingHost <: ExtensionOperationHost {
     var searchExecutions: Int64 = 0
     var writeExecutions: Int64 = 0
@@ -320,13 +345,10 @@ class RecordingHost <: ExtensionOperationHost {
 
     public func resolveCapability(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ?ToolResolverInput
     ): Capability {
         if (requirement.name == "workspace.write") {
-            let path = match (input.field("path")) {
-                case Some(value) => value.text
-                case None => ""
-            }
+            let path = match (input) { case Some(value) => recordingPath(value); case None => "" }
             Capability(CapabilityKind.WorkspaceWrite, resource: path)
         } else if (requirement.name == "network.http") {
             Capability(CapabilityKind.NetworkAccess)
@@ -337,9 +359,9 @@ class RecordingHost <: ExtensionOperationHost {
 
     public func approvalMetadata(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ToolResolverInput
     ): ToolApprovalMetadata {
-        defaultToolApprovalMetadata(resolveCapability(requirement, input))
+        defaultToolApprovalMetadata(resolveCapability(requirement, Some(input)))
     }
 
     public func execute(

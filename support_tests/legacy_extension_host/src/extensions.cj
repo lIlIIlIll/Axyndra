@@ -34,17 +34,17 @@ public interface TrustedAgentExtension {
 public interface ExtensionOperationHost {
     func resolveCapability(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ?ToolResolverInput
     ): Capability
 
     func approvalMetadata(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ToolResolverInput
     ): ToolApprovalMetadata
 
     func resolveNetworkPolicy(
         requirement: CapabilityRequirement,
-        input: AgentValue
+        input: ToolResolverInput
     ): Result<NetworkPolicy> {
         let _ = input
         if (requirement.name == "network.http") {
@@ -411,7 +411,7 @@ func sdkDescriptor(
     let networkRequirement = sdkNetworkRequirement(definition)
     ToolDescriptor(
         ModelToolDefinition(definition.name, definition.description, definition.inputSchema),
-        host.resolveCapability(first, objectValue([])),
+        host.resolveCapability(first, None),
         sideEffecting: definition.effect == ExtensionEffect.SideEffect,
         implementationVersion: version,
         implementationFingerprint: extensionId + ":" + version + ":" + definition.name,
@@ -420,21 +420,21 @@ func sdkDescriptor(
         } else {
             sharedToolConcurrency()
         },
-        capabilityResolver: {call => host.resolveCapability(first, call.arguments)},
+        capabilityResolver: {call => host.resolveCapability(first, Some(call))},
         additionalCapabilityResolver: {call =>
             let values = ArrayList<Capability>()
             for (requirement in additional) {
-                values.add(host.resolveCapability(requirement, call.arguments))
+                values.add(host.resolveCapability(requirement, Some(call)))
             }
             values.toArray()
         },
         networkPolicyResolver: {call =>
             match (networkRequirement) {
-                case Some(requirement) => host.resolveNetworkPolicy(requirement, call.arguments)
+                case Some(requirement) => host.resolveNetworkPolicy(requirement, call)
                 case None => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
             }
         },
-        approvalMetadataResolver: {call => host.approvalMetadata(first, call.arguments)}
+        approvalMetadataResolver: {call => host.approvalMetadata(first, call)}
     )
 }
 
@@ -520,16 +520,16 @@ func extensionCandidateNames(entries: ArrayList<ToolCatalogRegistration>): Array
 // operations; declaring an SDK OperationIntent cannot select a local algorithm.
 public class UnprovidedExtensionOperationHost <: ExtensionOperationHost {
     public init() {}
-    public func resolveCapability(requirement: CapabilityRequirement, input: AgentValue): Capability {
+    public func resolveCapability(requirement: CapabilityRequirement, input: ?ToolResolverInput): Capability {
         let _ = requirement; let _ = input
         Capability(CapabilityKind.ExtensionInvoke)
     }
-    public func approvalMetadata(requirement: CapabilityRequirement, input: AgentValue): ToolApprovalMetadata {
+    public func approvalMetadata(requirement: CapabilityRequirement, input: ToolResolverInput): ToolApprovalMetadata {
         let _ = requirement; let _ = input
         ToolApprovalMetadata("extension.invoke", RiskAssessment(ApprovalRiskLevel.High),
             ApprovalGrantScope("extension.invoke"), writeSummary: None, sessionApprovalAllowed: false)
     }
-    public func resolveNetworkPolicy(requirement: CapabilityRequirement, input: AgentValue): Result<NetworkPolicy> {
+    public func resolveNetworkPolicy(requirement: CapabilityRequirement, input: ToolResolverInput): Result<NetworkPolicy> {
         let _ = requirement; let _ = input
         Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
     }

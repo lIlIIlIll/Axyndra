@@ -9,24 +9,18 @@ import std.sync.*
 import yjson.*
 import yjson_support.*
 
-func pluginAcquisitionAdditionalCapabilities(call: ToolCall): Array<Capability> {
-    match (call.arguments.field("workspace_read_root")) {
-        case Some(value) => if (value.unifiedKind == ValueKind.Text && value.text != "") {
-            [Capability(CapabilityKind.WorkspaceRead, resource: value.text)]
-        } else { [] }
-        case None => []
-    }
+func pluginAcquisitionAdditionalCapabilities(call: ToolResolverInput): Array<Capability> {
+    let path = [ToolResolverStep.Field("workspace_read_root")]
+    if (!call.hasKind(path, JsonKind.String) || call.textEquals(ToolResolverText.Scalar(path), "")) { return [] }
+    [Capability(CapabilityKind.WorkspaceRead, resource: call.copyText(ToolResolverText.Scalar(path)))]
 }
 
-func pluginMaintenanceNetworkPolicy(mode: ShellNetworkMode, call: ToolCall): Result<NetworkPolicy> {
-    let declared = match (call.arguments.field("network")) {
-        case Some(value) => value
-        case None => return Result.Err(AgentError(
-            AgentErrorKind.InvalidInput, "plugin.acquisition_network_required",
-            "plugin acquisition requires an explicit network policy"
-        ))
-    }
-    let policy = match (parseNetworkPolicy(declared)) {
+func pluginMaintenanceNetworkPolicy(mode: ShellNetworkMode, call: ToolResolverInput): Result<NetworkPolicy> {
+    let path = [ToolResolverStep.Field("network")]
+    if (call.kind(path).isNone()) { return Result.Err(AgentError(
+        AgentErrorKind.InvalidInput, "plugin.acquisition_network_required",
+        "plugin acquisition requires an explicit network policy")) }
+    let policy = match (resolverNetworkPolicy(call, path)) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }

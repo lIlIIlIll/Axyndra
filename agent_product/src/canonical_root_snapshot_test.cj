@@ -34,7 +34,7 @@ class CanonicalRootSnapshotProbe <: ToolExecutor {
 }
 
 func canonicalRootSnapshotDescriptor(name: String, version: String,
-    network!: ?(ToolCall) -> Result<NetworkPolicy> = None): ToolDescriptor {
+    network!: ?(ToolResolverInput) -> Result<NetworkPolicy> = None): ToolDescriptor {
     ToolDescriptor(ModelToolDefinition(name, "Actual gateway snapshot fixture",
         objectValue([ValueField("type", textValue("object")), ValueField("properties", objectValue([]))])),
         Capability(CapabilityKind.WorkspaceRead), sideEffecting: false,
@@ -210,7 +210,7 @@ class ProductCanonicalRootSnapshotTests {
             let replacement = CanonicalRootSnapshotProbe("published-v2")
             let republished = AtomicBool(false)
             fixture.product.registerTool(canonicalRootSnapshotDescriptor("fixture_snapshot_pin", "pinned-v1",
-                network: Some({ _: ToolCall =>
+                network: Some({ _: ToolResolverInput =>
                     if (!republished.load()) {
                         // Classification must never run this business resolver before
                         // the actual owning Run has been created and persisted.

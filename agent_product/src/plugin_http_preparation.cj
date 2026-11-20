@@ -27,5 +27,5 @@ func preparePluginHttpInvocation(
 }
 
 func pluginHttpRootNetworkPolicy(call: ToolCall, namespace: String, packageDigest: String): Result<NetworkPolicy> {
-    agent_host_runtime.hostPluginHttpRootNetworkPolicy(call, namespace, packageDigest)
+    withToolResolverInput(call, { input => resolverPluginHttpRootNetworkPolicy(input, namespace, packageDigest) })
 }

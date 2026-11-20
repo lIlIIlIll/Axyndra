@@ -295,6 +295,7 @@
     "tool_runtime/src/canonical_arguments_owner204_test.cj",
     "tool_runtime/src/catalog_publication_executor_identity_test.cj",
     "tool_runtime/src/catalog_resolver_invocation204_test.cj",
+    "tool_runtime/src/descriptor_resolver_input_test.cj",
     "tool_runtime/src/live_policy_child_rejection_error_test.cj",
     "tool_runtime/src/nested_tool_frames_test.cj",
     "tool_runtime/src/optional_preparation_read_test.cj",

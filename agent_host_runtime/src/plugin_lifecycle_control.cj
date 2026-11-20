@@ -219,14 +219,17 @@ public class HostPluginLifecycleControl <: ToolExecutor {
     }
 
     private func lookup(call: ToolCall): Result<HostPluginLifecycleAdmission> {
-        if (call.name != HOST_PLUGIN_LIFECYCLE_TOOL) {
+        withToolResolverInput(call, { input => lookup(input) })
+    }
+
+    private func lookup(call: ToolResolverInput): Result<HostPluginLifecycleAdmission> {
+        if (!call.textEquals(ToolResolverText.Name, HOST_PLUGIN_LIFECYCLE_TOOL)) {
             return hostLifecycleError("plugin.lifecycle_admission_missing", "host lifecycle admission was not found")
         }
-        let encoded = canonicalAgentValue(call.arguments)
         lock.lock()
         try {
-            for (admission in admissions where admission.callId == call.callId &&
-                canonicalAgentValue(admission.grant.launchPlan) == encoded) { return Result.Ok(admission) }
+            for (admission in admissions where call.textEquals(ToolResolverText.CallId, admission.callId) &&
+                call.argumentsMatchCanonical(canonicalAgentValue(admission.grant.launchPlan))) { return Result.Ok(admission) }
             hostLifecycleError("plugin.lifecycle_admission_missing", "host lifecycle admission was not found or its exact plan changed")
         } finally { lock.unlock() }
     }

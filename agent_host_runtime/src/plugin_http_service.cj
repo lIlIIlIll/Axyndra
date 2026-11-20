@@ -26,22 +26,14 @@ public func hostRegisterPluginHttpService(catalog: ToolCatalog, host: HostJavaSc
                 case Result.Ok(policy) => networkEgressResource(policy.egress[0])
                 case Result.Err(_) => "invalid-http-intent"
             }) }),
-        sideEffectResolver: Some({ call => match (call.arguments.field("intent")) {
-            case Some(intent) => match (intent.field("request")) {
-                case Some(request) => httpIntentText(request, "method") != "GET"
-                case None => true
-            }
-            case None => true
-        } }),
+        sideEffectResolver: Some({ call => !resolverHttpMethodIsGet(call) }),
         networkPolicyResolver: Some({ call => hostPluginHttpChildPolicy(call) })
     ), HostPluginHttpServiceExecutor(host, operations, settingsRoot, caBundle))
 }
 
-func hostPluginHttpChildPolicy(call: ToolCall): Result<NetworkPolicy> {
-    match (call.arguments.field("intent")) {
-        case Some(intent) => httpIntentPolicy(intent)
-        case None => hostPluginResourceError("http.intent_missing", "HTTP child omitted its bound intent")
-    }
+func hostPluginHttpChildPolicy(call: ToolResolverInput): Result<NetworkPolicy> {
+    if (call.kind([ToolResolverStep.Field("intent")]).isNone()) { return hostPluginResourceError("http.intent_missing", "HTTP child omitted its bound intent") }
+    resolverHttpIntentPolicy(call)
 }
 
 class HostPluginHttpServiceExecutor <: ToolExecutor {

@@ -245,13 +245,13 @@ func ownedCatalogResolverContract(): Unit {
         ModelToolDefinition("plugin.resolver.echo", "resolver fixture", objectValue([])),
         Capability(CapabilityKind.WorkspaceRead), neverReplay: true,
         implementationVersion: "resolver-v1", implementationFingerprint: "host-resolver-v1",
-        capabilityResolver: Some({ _call: ToolCall => Capability(CapabilityKind.WorkspaceRead, resource: "resolved") }),
+        capabilityResolver: Some({ _call: ToolResolverInput => Capability(CapabilityKind.WorkspaceRead, resource: "resolved") }),
         additionalCapabilities: [Capability(CapabilityKind.ExtensionInvoke, resource: "static")],
-        additionalCapabilityResolver: Some({ _call: ToolCall => [Capability(CapabilityKind.NetworkAccess, resource: "dynamic")] }),
-        sideEffectResolver: Some({ _call: ToolCall => true }),
-        approvalMetadataResolver: Some({ _call: ToolCall => ToolApprovalMetadata("owned-resolver",
+        additionalCapabilityResolver: Some({ _call: ToolResolverInput => [Capability(CapabilityKind.NetworkAccess, resource: "dynamic")] }),
+        sideEffectResolver: Some({ _call: ToolResolverInput => true }),
+        approvalMetadataResolver: Some({ _call: ToolResolverInput => ToolApprovalMetadata("owned-resolver",
             RiskAssessment(ApprovalRiskLevel.High), ApprovalGrantScope("owned", toolName: "plugin.resolver.echo")) }),
-        networkPolicyResolver: Some({ call: ToolCall => if (call.callId == "network-rejection") {
+        networkPolicyResolver: Some({ call: ToolResolverInput => if (call.textEquals(ToolResolverText.CallId, "network-rejection")) {
             Result.Err(AgentError(AgentErrorKind.PermissionDenied, "fixture.network_denied", "resolver retained"))
         } else { Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) } }),
         canonicalArgumentsResolver: Some({ _context: ToolInvocationContext, _call: ToolCall =>

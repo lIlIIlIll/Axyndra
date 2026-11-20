@@ -121,20 +121,7 @@ func hostPrepareReadonlyDelegationDataFrame204(host: HostJavaScriptPluginHost, s
 
 // Called after the Host canonicalizer has frozen its exact operator targets.
 // Each child QName is an independent requirement of this parent, not a grant.
-public func hostPluginReadonlyDelegationCapabilities(call: ToolCall): Array<Capability> {
-    let host = match (call.arguments.field("host_plan")) { case Some(value) => value; case None => return [] }
-    let entries = match (host.field("tools")) { case Some(value) => value; case None => return [] }
-    if (httpIntentText(host, "version") != HOST_READONLY_DELEGATION_VERSION ||
-        call.name != "plugin." + httpIntentText(host, "plugin") + "." + httpIntentText(host, "contribution") ||
-        entries.unifiedKind != ValueKind.List || entries.items.size > 32) { return [] }
-    let caps = ArrayList<Capability>(); let seen = HashSet<String>()
-    for (entry in entries.items) {
-        let name = httpIntentText(entry, "name")
-        if (!name.startsWith("plugin.") || name == call.name || seen.contains(name)) { return [] }
-        seen.add(name); caps.add(Capability(CapabilityKind.ExtensionInvoke, resource: name))
-    }
-    caps.toArray()
-}
+
 
 public func hostValidatePluginReadonlyDelegation(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,

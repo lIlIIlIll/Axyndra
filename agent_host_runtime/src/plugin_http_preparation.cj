@@ -75,39 +75,3 @@ public func hostPreparePluginHttpInvocation(
         ]))
     ]))
 }
-
-public func hostPluginHttpRootNetworkPolicy(call: ToolCall, namespace: String, packageDigest: String): Result<NetworkPolicy> {
-    // ToolPipeline checks a caller's input before canonicalization. Raw input
-    // grants nothing; canonicalization always wraps and recomputes it, even if
-    // the caller happens to use the same field names as this host envelope.
-    if (!httpIntentExactFields(call.arguments, ["input", "configuration", "host_plan"])) {
-        return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
-    }
-    let host = call.arguments.field("host_plan").getOrThrow()
-    if (httpIntentText(host, "version") != HOST_HTTP_INTENT_VERSION ||
-        httpIntentText(host, "plugin") != namespace || httpIntentText(host, "package_digest") != packageDigest) {
-        return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
-    }
-    let intents = match (host.field("intents")) {
-        case Some(value) => value
-        case None => return hostPluginResourceError("http.parent_invalid", "HTTP preparation omitted its intents")
-    }
-    if (intents.unifiedKind != ValueKind.List || intents.items.size > 4) {
-        return hostPluginResourceError("http.parent_invalid", "HTTP preparation has invalid intents")
-    }
-    let rules = ArrayList<NetworkEgressRule>()
-    for (intent in intents.items) {
-        match (httpServiceChildArguments(call.arguments, httpIntentText(intent, "id"))) {
-            case Result.Err(error) => return Result.Err(error)
-            case Result.Ok(_) => ()
-        }
-        let policy = match (httpIntentPolicy(intent)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        rules.add(policy.egress[0])
-    }
-    if (rules.isEmpty()) { Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) } else {
-        normalizeNetworkPolicy(NetworkPolicyMode.Mediated, egress: rules.toArray())
-    }
-}

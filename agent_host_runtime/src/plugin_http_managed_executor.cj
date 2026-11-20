@@ -22,13 +22,7 @@ class HostManagedHttpExecutor <: ToolExecutor {
                     case Result.Ok(policy) => networkEgressResource(policy.egress[0])
                     case Result.Err(_) => "invalid-http-stream-intent"
                 }) }),
-            sideEffectResolver: Some({ call => match (call.arguments.field("intent")) {
-                case Some(intent) => match (intent.field("request")) {
-                    case Some(request) => httpIntentText(request, "method") != "GET"
-                    case None => true
-                }
-                case None => true
-            } }),
+            sideEffectResolver: Some({ call => !resolverHttpMethodIsGet(call) }),
             networkPolicyResolver: Some({ call => hostManagedHttpChildPolicy(call) }),
             canonicalArgumentsResolver: Some({ _, call =>
                 if (!httpIntentExactFields(call.arguments, ["binding", "intent"])) {
@@ -54,9 +48,7 @@ class HostManagedHttpExecutor <: ToolExecutor {
     public func cancel(_: RunId): Result<Unit> { Result.Ok(()) }
 }
 
-func hostManagedHttpChildPolicy(call: ToolCall): Result<NetworkPolicy> {
-    match (call.arguments.field("intent")) {
-        case Some(intent) => httpStreamIntentPolicy(intent, binding: call.arguments.field("binding"))
-        case None => hostLifecycleLeaseError("http.stream_intent_missing")
-    }
+func hostManagedHttpChildPolicy(call: ToolResolverInput): Result<NetworkPolicy> {
+    if (call.kind([ToolResolverStep.Field("intent")]).isNone()) { return hostLifecycleLeaseError("http.stream_intent_missing") }
+    resolverHttpStreamPolicy(call)
 }

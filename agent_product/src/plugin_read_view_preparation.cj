@@ -42,13 +42,13 @@ func preparePluginReadViewInvocation(host: ProductJavaScriptPluginHost, settings
 }
 
 func pluginReadViewSideEffect(call: ToolCall): Bool {
-    agent_host_runtime.hostPluginReadViewSideEffect(call)
+    withToolResolverInput(call, resolverPluginReadViewSideEffect)
 }
 
 func pluginReadViewCapabilities(call: ToolCall): Array<Capability> {
-    agent_host_runtime.hostPluginReadViewCapabilities(call)
+    withToolResolverInput(call, resolverPluginReadViewCapabilities)
 }
 
 func pluginReadViewApprovalMetadata(call: ToolCall): ToolApprovalMetadata {
-    agent_host_runtime.hostPluginReadViewApprovalMetadata(call)
+    withToolResolverInput(call, resolverPluginReadViewApprovalMetadata)
 }

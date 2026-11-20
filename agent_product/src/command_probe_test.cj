@@ -424,17 +424,18 @@ class CommandProbeContracts {
                 let descriptor = catalog.resolvedDescriptor(call).getOrThrow()
                 @Expect(!descriptor.sideEffecting)
                 @Expect(normalizedToolOperationPlan(context, call, descriptor).effectClass == OperationEffectClass.ReadOnly)
-                @Expect(commandProbeFallbackAllowed(call, policy, ProcessResult(137, timedOut: true), []))
-                @Expect(!commandProbeFallbackAllowed(call, NetworkPolicy(NetworkPolicyMode.Denied), ProcessResult(7), []))
+                @Expect(commandProbeFallbackAllowed(name, arguments, descriptor.sideEffecting, policy, ProcessResult(137, timedOut: true), []))
+                @Expect(!commandProbeFallbackAllowed(name, arguments, descriptor.sideEffecting, NetworkPolicy(NetworkPolicyMode.Denied), ProcessResult(7), []))
             }
             let installArguments = ["install", "--ignore-scripts", "--no-save", "--no-audit", "--no-fund", "three@0.180.0"]
             let installCall = ToolCall("install-failed", "command_probe", objectValue([
                 ValueField("executable", textValue("npm")),
                 ValueField("argv", listValue(Array<AgentValue>(installArguments.size, {index => textValue(installArguments[index])}))),
                 ValueField("network", networkPolicyCanonicalValue(policy))]))
-            @Expect(commandProbeSideEffecting(installCall))
-            @Expect(!commandProbeFallbackAllowed(installCall, policy, ProcessResult(137, timedOut: true), []))
-            @Expect(commandProbeFallbackAllowed(installCall, policy, ProcessResult(137, timedOut: true), [root]))
+            let installEffect = catalog.resolvedDescriptor(installCall).getOrThrow().sideEffecting
+            @Expect(installEffect)
+            @Expect(!commandProbeFallbackAllowed("npm", installArguments, installEffect, policy, ProcessResult(137, timedOut: true), []))
+            @Expect(commandProbeFallbackAllowed("npm", installArguments, installEffect, policy, ProcessResult(137, timedOut: true), [root]))
         } finally { let _ = processes.close(); removeIfExists(Path(root), recursive: true) }
     }
 

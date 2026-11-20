@@ -992,10 +992,9 @@ public func hostRegisterPluginChildService111(catalog: ToolCatalog, host: HostJa
             hostSchemaProperty("intent", "object"), hostSchemaProperty("invocation_capability", "string")], ["schema", "binding", "intent"])),
         Capability(CapabilityKind.ExtensionInvoke), sideEffecting: true, neverReplay: true, hostServiceOnly: true,
         implementationVersion: HOST_PLUGIN_CHILD_FINGERPRINT111, implementationFingerprint: HOST_PLUGIN_CHILD_FINGERPRINT111,
-        capabilityResolver: Some({ call => pluginPrimitiveInvocationCapability111(call.arguments,
-            httpIntentText(call.arguments.field("binding") ?? nullValue(), "namespace")) }),
-        additionalCapabilityResolver: Some({ call => pluginPrimitiveAdditionalCapabilities111(call.arguments) }),
-        sideEffectResolver: Some({ call => pluginPrimitiveEffect111(pluginPrimitiveArgumentsService111(call.arguments))!=OperationEffectClass.ReadOnly }),
+        capabilityResolver: Some({ call => resolverPrimitiveChildCapability(call) }),
+        additionalCapabilityResolver: Some({ call => resolverPrimitiveAdditional(call) }),
+        sideEffectResolver: Some({ call => resolverPrimitiveChildEffect(call)!=OperationEffectClass.ReadOnly }),
         networkPolicyResolver: Some({ _ => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) })),
         HostPluginChildExecutor111(host, operations, backend))
 }

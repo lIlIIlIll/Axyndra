@@ -38,19 +38,15 @@ class HostManagedChannelWriter <: ToolExecutor {
             Capability(CapabilityKind.ProcessSpawn), sideEffecting: true, hostServiceOnly: true, neverReplay: true,
             implementationVersion: HOST_CHANNEL_WRITE_FINGERPRINT,
             implementationFingerprint: HOST_CHANNEL_WRITE_FINGERPRINT,
-            additionalCapabilityResolver: Some({ call => match (call.arguments.field("binding")) {
-                case None => []
-                case Some(binding) => match (channelServiceRequiredCapabilities(binding)) {
-                    case Result.Ok(value) => value; case Result.Err(_) => []
-                }
-            } }),
-            networkPolicyResolver: Some({ call => match (call.arguments.field("binding")) {
-                case Some(binding) => match (binding.field("network")) {
-                    case Some(policy) => parseNetworkPolicy(policy)
-                    case None => hostLifecycleLeaseError("channel.binding_invalid")
-                }
-                case None => hostLifecycleLeaseError("channel.binding_invalid")
-            } }),
+            additionalCapabilityResolver: Some({ call =>
+                if (call.kind([ToolResolverStep.Field("binding")]).isNone()) { return [] }
+                match (resolverChannelCapabilities(call)) { case Result.Ok(value) => value; case Result.Err(_) => [] }
+            }),
+            networkPolicyResolver: Some({ call =>
+                let path = [ToolResolverStep.Field("binding"), ToolResolverStep.Field("network")]
+                if (call.kind(path).isNone()) { return hostLifecycleLeaseError("channel.binding_invalid") }
+                resolverNetworkPolicy(call, path)
+            }),
             canonicalArgumentsResolver: Some({ _, call =>
                 if (!httpIntentExactFields(call.arguments, ["binding", "intent"])) {
                     return hostLifecycleLeaseError("channel.arguments_invalid")

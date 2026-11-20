@@ -37,14 +37,16 @@ class HostManagedChannelRetainedEffectExecutor <: ToolExecutor & ManagedChannelO
             Capability(CapabilityKind.ProcessSpawn),sideEffecting:true,hostServiceOnly:true,neverReplay:true,
             implementationVersion:HOST_MANAGED_CHANNEL_EFFECT_FINGERPRINT,
             implementationFingerprint:HOST_MANAGED_CHANNEL_EFFECT_FINGERPRINT,
-            additionalCapabilityResolver:Some({call=>
-                let binding=match(call.arguments.field("binding")){case Some(value)=>value;case None=>return []}
-                let required=match(managedChannelRuntimeRequiredCapabilities(binding)){case Result.Err(_)=>return [];case Result.Ok(value)=>value}
-                required[1..]
+            additionalCapabilityResolver:Some({ call =>
+                if (call.kind([ToolResolverStep.Field("binding")]).isNone()) { return [] }
+                match (resolverChannelCapabilities(call, managed: true)) {
+                    case Result.Err(_) => []; case Result.Ok(required) => required[1..] }
             }),
-            networkPolicyResolver:Some({call=>match(call.arguments.field("binding")){
-                case None=>managedChannelDriverError<NetworkPolicy>("managed_channel.child_binding_missing")
-                case Some(binding)=>parseNetworkPolicy(binding.field("network").getOrThrow())}}),
+            networkPolicyResolver:Some({ call =>
+                if (call.kind([ToolResolverStep.Field("binding")]).isNone()) {
+                    return managedChannelDriverError<NetworkPolicy>("managed_channel.child_binding_missing") }
+                resolverNetworkPolicy(call, [ToolResolverStep.Field("binding"), ToolResolverStep.Field("network")])
+            }),
             canonicalArgumentsResolver:Some({_,call=>
                 if(!managedChannelRuntimeChildValueValid(call.arguments)){
                     return managedChannelDriverError<AgentValue>("managed_channel.child_plan_invalid")}

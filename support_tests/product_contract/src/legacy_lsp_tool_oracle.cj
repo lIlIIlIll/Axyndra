@@ -2818,16 +2818,16 @@ func schemaEnumProperty(
     )
 }
 
-func lspCapabilityFor(call: ToolCall): Capability {
-    if (lspReadOnlyAction(optionalString(call, "action", ""))) {
+func lspCapabilityFor(call: ToolResolverInput): Capability {
+    if (lspReadOnlyAction(call.stringField("action"))) {
         Capability(CapabilityKind.WorkspaceRead)
     } else {
         Capability(CapabilityKind.WorkspaceWrite)
     }
 }
 
-func lspSideEffecting(call: ToolCall): Bool {
-    !lspReadOnlyAction(optionalString(call, "action", ""))
+func lspSideEffecting(call: ToolResolverInput): Bool {
+    !lspReadOnlyAction(call.stringField("action"))
 }
 
 func lspReadOnlyAction(action: String): Bool {

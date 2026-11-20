@@ -134,11 +134,15 @@ class HostHttpLifecycleControl <: ToolExecutor {
         finally { admission.resource.finishStartupExecution() }
     }
     private func lookup(call: ToolCall): Result<HostHttpLifecycleAdmission> {
-        if (call.name != HOST_PLUGIN_HTTP_LIFECYCLE_TOOL) { return hostLifecycleLeaseError("plugin.http_service_admission_missing") }
+        withToolResolverInput(call, { input => lookup(input) })
+    }
+
+    private func lookup(call: ToolResolverInput): Result<HostHttpLifecycleAdmission> {
+        if (!call.textEquals(ToolResolverText.Name, HOST_PLUGIN_HTTP_LIFECYCLE_TOOL)) { return hostLifecycleLeaseError("plugin.http_service_admission_missing") }
         lock.lock()
         try {
-            for (entry in admissions where entry.callId == call.callId &&
-                canonicalAgentValue(entry.resource.startupArguments) == canonicalAgentValue(call.arguments)) { return Result.Ok(entry) }
+            for (entry in admissions where call.textEquals(ToolResolverText.CallId, entry.callId) &&
+                call.argumentsMatchCanonical(canonicalAgentValue(entry.resource.startupArguments))) { return Result.Ok(entry) }
             hostLifecycleLeaseError("plugin.http_service_admission_missing")
         } finally { lock.unlock() }
     }
