@@ -115,7 +115,7 @@ func toolCatalogDigest(value: String): Bool {
 }
 
 func toolCatalogSameIdentity(left: ToolDescriptor, right: ToolDescriptor): Bool {
-    left.definition.name == right.definition.name && left.implementationVersion == right.implementationVersion &&
+    left.nameForData204() == right.nameForData204() && left.implementationVersion == right.implementationVersion &&
         left.implementationFingerprint == right.implementationFingerprint && left.schemaDigest == right.schemaDigest
 }
 

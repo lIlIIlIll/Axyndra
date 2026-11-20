@@ -689,7 +689,7 @@ public class ToolCatalog {
             var index: Int64 = 0
             for (item in registrations where item.active && !item.revoked && toolRegistrationVisible(item, threadId) &&
                 !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly) {
-                if (index >= expected.size || item.descriptor.definition.name != expected[index]) { return false }
+                if (index >= expected.size || item.descriptor.nameForData204() != expected[index]) { return false }
                 index++
             }
             index == expected.size
@@ -914,7 +914,7 @@ public class ToolCatalog {
         lock.lock()
         try {
             if (dataClosed159) { return toolCatalogError("tool.catalog_closed", "catalog data was retired") }
-            for (item in registrations where item.active && !item.revoked && item.descriptor.definition.name == descriptor.definition.name) {
+            for (item in registrations where item.active && !item.revoked && item.descriptor.nameForData204() == descriptor.nameForData204()) {
                 return Result.Err(
                     AgentError(
                         AgentErrorKind.Configuration,
@@ -963,7 +963,7 @@ public class ToolCatalog {
             for (entry in snapshot.entries where entry.availableAtSnapshot && entry.planReviewSafe) {
                 for (item in registrations where !item.revoked && item.descriptor.planReviewSafe && item.descriptor.supervisedExecutionSafe &&
                     !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly && toolRegistrationVisible(item, Some(thread))) {
-                    if (item.descriptor.definition.name == entry.name && item.descriptor.implementationVersion == entry.executorVersion &&
+                    if (item.descriptor.nameForData204() == entry.name && item.descriptor.implementationVersion == entry.executorVersion &&
                         item.descriptor.implementationFingerprint == entry.implementationFingerprint && item.descriptor.schemaDigest == entry.schemaDigest) {
                         names.add(String.fromUtf8(entry.name.toArray())); break
                     }
@@ -981,7 +981,7 @@ public class ToolCatalog {
         try {
             for (index in 0..registrations.size) {
                 let item = registrations[index]
-                if (!item.active || item.revoked || item.descriptor.definition.name != name) { continue }
+                if (!item.active || item.revoked || item.descriptor.nameForData204() != name) { continue }
                 if (item.descriptor.supervisedExecutionSafe) { return Result.Ok(()) }
                 if (!item.activeExecutions.isEmpty()) {
                     return planExecutionError("plan.tool_contract_in_use", "cannot change a running tool execution contract")
@@ -1076,7 +1076,7 @@ public class ToolCatalog {
                 ))
             }
             for (existing in staged where
-                existing.descriptor.definition.name == descriptor.definition.name) {
+                existing.descriptor.nameForData204() == descriptor.nameForData204()) {
                 return Result.Err(AgentError(
                     AgentErrorKind.Configuration,
                     "tool.duplicate",
@@ -1096,7 +1096,7 @@ public class ToolCatalog {
             for (candidate in staged) {
                 let name = candidate.descriptor.definition.name
                 for (item in registrations where
-                    item.active && !item.revoked && item.descriptor.definition.name == name) {
+                    item.active && !item.revoked && item.descriptor.nameForData204() == name) {
                     return Result.Err(AgentError(
                         AgentErrorKind.Configuration,
                         "tool.duplicate",
@@ -1270,7 +1270,7 @@ public class ToolCatalog {
                     }
                     if (old.active && !old.revoked && !sameOwner &&
                         toolCatalogScopesOverlap(toolRegistrationThread(old), owner.threadId) &&
-                        old.descriptor.definition.name == candidate.descriptor.definition.name) {
+                        old.descriptor.nameForData204() == candidate.descriptor.nameForData204()) {
                         return toolCatalogError("tool.owner_name_conflict", "another owner already publishes this tool name")
                     }
                 }
@@ -1416,7 +1416,7 @@ public class ToolCatalog {
         recordRawCatalogAlias159()
         lock.lock()
         try {
-            for (item in registrations where item.active && !item.revoked && item.descriptor.definition.name == name && toolRegistrationVisible(item, threadId)) {
+            for (item in registrations where item.active && !item.revoked && item.descriptor.nameForData204() == name && toolRegistrationVisible(item, threadId)) {
                 return Some(item)
             }
             None
@@ -1434,7 +1434,7 @@ public class ToolCatalog {
         try {
             var selected: ?ToolRegistration = None
             var selectedIsActive = false
-            for (item in registrations where item.descriptor.definition.name == name && !item.revoked && toolRegistrationVisible(item, threadId)) {
+            for (item in registrations where item.descriptor.nameForData204() == name && !item.revoked && toolRegistrationVisible(item, threadId)) {
                 if (item.active) {
                     selected = Some(item)
                     selectedIsActive = true
@@ -1470,7 +1470,7 @@ public class ToolCatalog {
         }
         lock.lock()
         try {
-            for (item in registrations where item.descriptor.definition.name == name && !item.revoked && toolRegistrationVisible(item, snapshot.threadId)) {
+            for (item in registrations where item.descriptor.nameForData204() == name && !item.revoked && toolRegistrationVisible(item, snapshot.threadId)) {
                 if (item.descriptor.implementationVersion == identity.executorVersion &&
                     item.descriptor.implementationFingerprint == identity.implementationFingerprint &&
                     item.descriptor.schemaDigest == identity.schemaDigest) {
@@ -1491,7 +1491,7 @@ public class ToolCatalog {
         if (!snapshot.permitsThread159(threadId)) { return None<ToolRegistration> }
         lock.lock()
         try {
-            for (item in registrations where item.descriptor.definition.name == name && !item.revoked) {
+            for (item in registrations where item.descriptor.nameForData204() == name && !item.revoked) {
                 if (snapshot.matchesRegistration159(name, item.descriptor.implementationVersion,
                     item.descriptor.implementationFingerprint, item.descriptor.schemaDigest, toolRegistrationThread(item))) {
                     return Some(item)
@@ -1505,7 +1505,7 @@ public class ToolCatalog {
         if (!scope.belongsToCatalog204(this)) { throw IllegalStateException("Catalog registration has no active private consumer") }
         lock.lock()
         try {
-            for (item in registrations where item.active && !item.revoked && item.descriptor.definition.name == name && toolRegistrationVisible(item, threadId)) {
+            for (item in registrations where item.active && !item.revoked && item.descriptor.nameForData204() == name && toolRegistrationVisible(item, threadId)) {
                 return Some(item)
             }
             None
@@ -1520,7 +1520,7 @@ public class ToolCatalog {
         try {
             var selected: ?ToolRegistration = None
             var selectedIsActive = false
-            for (item in registrations where item.descriptor.definition.name == name && !item.revoked && toolRegistrationVisible(item, threadId)) {
+            for (item in registrations where item.descriptor.nameForData204() == name && !item.revoked && toolRegistrationVisible(item, threadId)) {
                 if (item.active) {
                     selected = Some(item)
                     selectedIsActive = true
@@ -1539,7 +1539,7 @@ public class ToolCatalog {
         if (!snapshot.permitsThread159(threadId)) { return None<ToolRegistration> }
         lock.lock()
         try {
-            for (item in registrations where item.descriptor.definition.name == name && !item.revoked) {
+            for (item in registrations where item.descriptor.nameForData204() == name && !item.revoked) {
                 if (snapshot.matchesRegistration159(name, item.descriptor.implementationVersion,
                     item.descriptor.implementationFingerprint, item.descriptor.schemaDigest, toolRegistrationThread(item))) {
                     return Some(item)
@@ -1610,7 +1610,7 @@ public class ToolCatalog {
         lock.lock()
         try {
             for (actual in registrations where actual.active && !actual.revoked &&
-                actual.descriptor.definition.name == name && toolRegistrationVisible(actual, threadId)) {
+                actual.descriptor.nameForData204() == name && toolRegistrationVisible(actual, threadId)) {
                 return match (actual.executor as Object) {
                     case None => false
                     case Some(left) => match (expected as Object) {
@@ -1629,7 +1629,7 @@ public class ToolCatalog {
         lock.lock()
         try {
             for (actual in registrations where actual.active && !actual.revoked &&
-                actual.descriptor.definition.name == name && toolRegistrationVisible(actual, threadId)) {
+                actual.descriptor.nameForData204() == name && toolRegistrationVisible(actual, threadId)) {
                 return !actual.descriptor.controlOnly && !actual.descriptor.hostServiceOnly
             }
             false
@@ -1644,7 +1644,7 @@ public class ToolCatalog {
         lock.lock(); try {
             if (dataClosed159) { return false }
             for (actual in registrations where actual.active && !actual.revoked &&
-                actual.descriptor.definition.name == name && toolRegistrationVisible(actual, threadId)) {
+                actual.descriptor.nameForData204() == name && toolRegistrationVisible(actual, threadId)) {
                 return actual.descriptor.hostServiceOnly && actual.descriptor.implementationFingerprint == fingerprint
             }
             false
@@ -2003,9 +2003,9 @@ public class ToolCatalog {
         lock.lock()
         try {
             for (item in registrations where item.owner.isSome() && item.active &&
-                item.descriptor.definition.name == name && toolCatalogSameThread(toolRegistrationThread(item), threadId)) { return false }
+                item.descriptor.nameForData204() == name && toolCatalogSameThread(toolRegistrationThread(item), threadId)) { return false }
             var changed = false
-            for (item in registrations where item.descriptor.definition.name == name && toolCatalogSameThread(toolRegistrationThread(item), threadId) && item.active) {
+            for (item in registrations where item.descriptor.nameForData204() == name && toolCatalogSameThread(toolRegistrationThread(item), threadId) && item.active) {
                 item.active = false
                 changed = true
             }
@@ -2023,7 +2023,7 @@ public class ToolCatalog {
         var found = false
         lock.lock()
         try {
-            for (item in registrations where item.descriptor.definition.name == name && toolCatalogSameThread(toolRegistrationThread(item), threadId)) {
+            for (item in registrations where item.descriptor.nameForData204() == name && toolCatalogSameThread(toolRegistrationThread(item), threadId)) {
                 match (item.owner) {
                     case Some(value) => owned.add(value); found = true; continue
                     case None => ()
@@ -2109,10 +2109,10 @@ public class ToolCatalog {
         lock.lock()
         try {
             for (item in registrations where item.owner.isSome() &&
-                item.descriptor.definition.name == name && toolCatalogSameThread(toolRegistrationThread(item), threadId)) { return false }
+                item.descriptor.nameForData204() == name && toolCatalogSameThread(toolRegistrationThread(item), threadId)) { return false }
             var selected: ?ToolRegistration = None
             var found = false
-            for (item in registrations where item.descriptor.definition.name == name && toolCatalogSameThread(toolRegistrationThread(item), threadId) && !item.revoked) {
+            for (item in registrations where item.descriptor.nameForData204() == name && toolCatalogSameThread(toolRegistrationThread(item), threadId) && !item.revoked) {
                 found = true
                 if (active) { selected = Some(item) }
                 item.active = false
