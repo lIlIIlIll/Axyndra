@@ -194,7 +194,7 @@ class HostRegistryMountDescriptor159Tests {
 private func registryCatalogIdentityCopyFrame159(owner: HostRegistryMountDescriptor159): HostRegistryCatalogIdentity159 {
     hostRegistryCatalogIdentity159(owner, owner.mountDescriptor159())
 }
-private func registryCatalogDeclarationFrame159(data: HostRegistryCatalogIdentity159): Bool {
+private func registryCatalogDeclarationFrame159(data: HostRegistryCatalogIdentity159, catalog: ToolCatalog): Bool {
     let input = JavaScriptToolDescriptor("catalog159", description: "private schema 借用",
         inputSchemaJson: "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}")
     data.reserveTool159(input, "fixture-executor-159")
@@ -208,7 +208,6 @@ private func registryCatalogDeclarationFrame159(data: HostRegistryCatalogIdentit
         capabilityResolver: Some({ _ => Capability(CapabilityKind.ExtensionInvoke, resource: data.namespace) }))
     // The independent existing streaming implementation must preserve the
     // constructor's original full recursive canonical schema identity.
-    let catalog = ToolCatalog()
     let empty = catalog.registerBatch([], dataPayment: Some(data))
     empty.isOk() && actual.schemaDigest == canonicalAgentValueSha256(schema) &&
         actual.implementationFingerprint == "fixture159:retained"
@@ -242,12 +241,14 @@ private func registryCatalogActualUnpublishedFrame159(): Unit {
                     try { data.beginCatalogConstruction159() }
                     catch (_: LogicalJsonPayloadError) { duplicate = true }
                     @Expect(duplicate)
-                    @Expect(registryCatalogDeclarationFrame159(data))
+                    let catalog = ToolCatalog()
+                    @Expect(registryCatalogDeclarationFrame159(data, catalog))
                     @Expect(probe.retainedCustodyUsage113()[0] > copied[0])
-                    // Actual schema/descriptor/callback helper returned Bool;
-                    // no borrowed schema or identity was returned/published.
+                    // No declaration was published. The empty Catalog still owns its snapshot source.
+                    @Expect(!catalog.retireCatalogData159())
                     data.returnedCatalogConstruction159()
                     owner.returnedMountFrame159()
+                    @Expect(catalog.retireCatalogData159())
                     let returned = probe.retainedCustodyUsage113()
                     @Expect(returned[0], before[0])
                     @Expect(returned[2], before[2])
@@ -291,14 +292,13 @@ class HostRegistryCatalogUnpublished159Tests {
 }
 
 private func registryCatalogStagingCallFrame159(data: HostRegistryCatalogIdentity159,
-    probe: LogicalJsonOwnerReservation): Bool {
+    probe: LogicalJsonOwnerReservation, catalog: ToolCatalog): Bool {
     let before = probe.retainedCustodyUsage113()
-    let catalog = ToolCatalog()
     let answer = catalog.registerBatch([], dataPayment: Some(data))
     let marked = probe.retainedCustodyUsage113()
-    // Real ToolCatalog helper returned, but this outer private construction
-    // frame has not returned. A marker must not release its real child early.
-    answer.isOk() && marked[2] == before[2] + 1 && marked[0] > before[0]
+    // Both the temporary registration and the Catalog snapshot source are live.
+    // Returning the private staging helper must not retire either one early.
+    answer.isOk() && marked[2] == before[2] + 2 && marked[0] > before[0]
 }
 private func registryCatalogStagingActualFrame159(): Unit {
     let root = Directory.createTemp("/tmp").toString()
@@ -323,9 +323,16 @@ private func registryCatalogStagingActualFrame159(): Unit {
                     }
                     let data = registryCatalogIdentityCopyFrame159(owner)
                     data.beginCatalogConstruction159()
-                    @Expect(registryCatalogStagingCallFrame159(data, probe))
+                    let catalog = ToolCatalog()
+                    @Expect(registryCatalogStagingCallFrame159(data, probe, catalog))
+                    @Expect(!catalog.retireCatalogData159())
+                    let staged = probe.retainedCustodyUsage113()
                     data.returnedCatalogConstruction159()
+                    let published = probe.retainedCustodyUsage113()
+                    @Expect(published[2] + 1, staged[2])
+                    @Expect(published[0] < staged[0])
                     owner.returnedMountFrame159()
+                    @Expect(catalog.retireCatalogData159())
                     let after = probe.retainedCustodyUsage113()
                     @Expect(after[0], before[0])
                     @Expect(after[2], before[2])
