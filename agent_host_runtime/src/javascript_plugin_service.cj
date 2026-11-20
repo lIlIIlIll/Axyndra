@@ -1497,109 +1497,100 @@ public class HostJavaScriptPluginServiceBroker {
         }
     }
 
+    private func childCapabilitiesCurrent(prepared: PreparedToolInvocation): Bool {
+        prepared.withOperationPlan204({ child =>
+            for (required in child.requiredCapabilities where !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
+                return false
+            }
+            true
+        })
+    }
+
     private func validateChildPlan(prepared: PreparedToolInvocation,
         execTarget: ?HostPluginReadOnlyExecTarget): Result<Unit> {
         match (execTarget) { case Some(target) => match (target.validate(catalog, rootContext, prepared)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         if (isFrozenReadonlyDelegationParentPlan(invocationPlan204)) {
-            if (prepared.textEquals(PreparedMetadataText.CallName, PLUGIN_FILE_PLAN_TOOL)) {
-                if(!readonlyDelegationFilePlanProposalAllowed(invocationPlan204,prepared.operationPlan)){
-                    return hostPluginResourceError("readonly_delegation.file_plan_denied","preview differs from its exact frozen operator Root")}
-                let descriptor=match(catalog.resolvedDescriptor(ToolCall(prepared.call.callId, prepared.call.name,
-                    prepared.operationPlan.canonicalArguments), threadId:Some(ThreadId(rootContext.sessionId.value)))){
-                    case Some(value)=>value;case None=>return hostPluginResourceError("readonly_delegation.target_missing","preview primitive is absent")}
-                if(!descriptor.hostServiceOnly || descriptor.controlOnly || descriptor.sideEffecting ||
-                    descriptor.implementationVersion!=prepared.operationPlan.implementation.toolVersion ||
-                    descriptor.implementationFingerprint!=prepared.operationPlan.implementation.implementationFingerprint ||
-                    descriptor.schemaDigest!=prepared.operationPlan.implementation.schemaDigest){
-                    return hostPluginResourceError("readonly_delegation.target_changed","preview lost its current host-only identity")}
-                for(cap in prepared.operationPlan.requiredCapabilities where
-                    !rootContext.capabilities.allows(cap.kind,resource:cap.resource)){
-                    return hostPluginResourceError("readonly_delegation.capability_denied","preview exceeds the current Run ceiling")}
-                return Result.Ok(())
+            let preview = prepared.textEquals(PreparedMetadataText.CallName, PLUGIN_FILE_PLAN_TOOL)
+            let allowed = prepared.withOperationPlan204({ child =>
+                if (preview) { readonlyDelegationFilePlanProposalAllowed(invocationPlan204, child) }
+                else { readonlyDelegationChildAllowed(invocationPlan204, child) }
+            })
+            if (!allowed) {
+                if (preview) { return hostPluginResourceError("readonly_delegation.file_plan_denied", "preview differs from its exact frozen operator Root") }
+                return hostPluginResourceError("readonly_delegation.child_denied", "child differs from the exact frozen readonly contribution")
             }
-            if (!readonlyDelegationChildAllowed(invocationPlan204, prepared.operationPlan)) {
-                return hostPluginResourceError("readonly_delegation.child_denied", "child differs from the exact frozen readonly contribution") }
-            // Display-call arguments precede canonicalization. Effect resolvers
-            // must inspect this exact validated frozen child plan, just as the
-            // Pipeline did, while identity and capability checks stay unchanged.
-            let descriptor = match (catalog.resolvedDescriptor(ToolCall(prepared.call.callId, prepared.call.name,
-                prepared.operationPlan.canonicalArguments), threadId: Some(ThreadId(rootContext.sessionId.value)))) {
-                case Some(value) => value; case None => return hostPluginResourceError("readonly_delegation.target_missing", "target is no longer registered") }
-            if (descriptor.hostServiceOnly || descriptor.controlOnly || descriptor.sideEffecting ||
-                descriptor.implementationVersion != prepared.operationPlan.implementation.toolVersion ||
-                descriptor.implementationFingerprint != prepared.operationPlan.implementation.implementationFingerprint ||
-                descriptor.schemaDigest != prepared.operationPlan.implementation.schemaDigest) {
-                return hostPluginResourceError("readonly_delegation.target_changed", "target lost its exact installed readonly identity") }
-            for (cap in prepared.operationPlan.requiredCapabilities where !rootContext.capabilities.allows(cap.kind, resource: cap.resource)) {
-                return hostPluginResourceError("readonly_delegation.capability_denied", "child exceeds the actual Run ceiling") }
+            let exact = match (prepared.frozenReadonlyDescriptorMatches(catalog, ThreadId(rootContext.sessionId.value), hostServiceOnly: preview)) {
+                case Some(value) => value
+                case None => return hostPluginResourceError("readonly_delegation.target_missing",
+                    if (preview) { "preview primitive is absent" } else { "target is no longer registered" })
+            }
+            if (!exact) { return hostPluginResourceError("readonly_delegation.target_changed",
+                if (preview) { "preview lost its current host-only identity" } else { "target lost its exact installed readonly identity" }) }
+            if (!childCapabilitiesCurrent(prepared)) { return hostPluginResourceError("readonly_delegation.capability_denied",
+                if (preview) { "preview exceeds the current Run ceiling" } else { "child exceeds the actual Run ceiling" }) }
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_STREAM_TOOL)) {
-            if (httpStreamBinding.isNone() || !httpStreamServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
+            if (httpStreamBinding.isNone() || !prepared.withOperationPlan204({ child => httpStreamServiceChildAllowed(invocationPlan204, child) })) {
                 return hostPluginResourceError("http.stream_intent_changed", "HTTP stream child exceeds its exact frozen parent")
             }
-            let descriptor = match (catalog.resolvedDescriptor(prepared.call, threadId: Some(ThreadId(rootContext.sessionId.value)))) {
+            let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_HTTP_STREAM_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
                 case Some(value) => value
                 case None => return hostPluginResourceError("http.stream_service_missing", "HTTP stream service is no longer registered")
             }
-            if (!descriptor.hostServiceOnly || descriptor.implementationFingerprint != HOST_HTTP_STREAM_FINGERPRINT) {
+            if (!exact) {
                 return hostPluginResourceError("http.stream_service_changed", "HTTP stream lost its host-only execution boundary")
             }
-            for (required in prepared.operationPlan.requiredCapabilities where
-                !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
+            if (!childCapabilitiesCurrent(prepared)) {
                 return hostPluginResourceError("http.stream_capability_exceeded", "HTTP stream child exceeds current Run authority")
             }
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_CHANNEL_WRITE_TOOL)) {
-            if (channelBinding.isNone() || !channelServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
+            if (channelBinding.isNone() || !prepared.withOperationPlan204({ child => channelServiceChildAllowed(invocationPlan204, child) })) {
                 return hostPluginResourceError("channel.intent_changed", "channel child exceeds the exact frozen parent intent")
             }
-            let descriptor = match (catalog.resolvedDescriptor(prepared.call, threadId: Some(ThreadId(rootContext.sessionId.value)))) {
+            let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_CHANNEL_WRITE_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
                 case Some(value) => value
                 case None => return hostPluginResourceError("channel.service_missing", "channel host service is no longer registered")
             }
-            if (!descriptor.hostServiceOnly || descriptor.implementationFingerprint != HOST_CHANNEL_WRITE_FINGERPRINT) {
+            if (!exact) {
                 return hostPluginResourceError("channel.service_changed", "channel writer lost its host-only execution boundary")
             }
-            for (required in prepared.operationPlan.requiredCapabilities where
-                !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
+            if (!childCapabilitiesCurrent(prepared)) {
                 return hostPluginResourceError("channel.capability_exceeded", "channel child exceeds current Run authority")
             }
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_READ_VIEW_TOOL)) {
-            if (!readViewServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
+            if (!prepared.withOperationPlan204({ child => readViewServiceChildAllowed(invocationPlan204, child) })) {
                 return hostPluginResourceError("read_view.intent_changed", "resource child differs from its exact parent intent")
             }
-            let descriptor = match (catalog.resolvedDescriptor(prepared.call, threadId: Some(ThreadId(rootContext.sessionId.value)))) {
+            let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_READ_VIEW_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
                 case Some(value) => value; case None => return hostPluginResourceError("read_view.service_missing", "read-view host primitive is unavailable")
             }
-            if (!descriptor.hostServiceOnly || descriptor.implementationFingerprint != HOST_READ_VIEW_FINGERPRINT) {
+            if (!exact) {
                 return hostPluginResourceError("read_view.service_changed", "read-view primitive lost its exact host implementation")
             }
-            for (required in prepared.operationPlan.requiredCapabilities where
-                !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
+            if (!childCapabilitiesCurrent(prepared)) {
                 return hostPluginResourceError("read_view.capability_denied", "resource child exceeds the current Run ceiling")
             }
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_SERVICE_TOOL)) {
-            if (!httpServiceChildAllowed(invocationPlan204, prepared.operationPlan)) {
+            if (!prepared.withOperationPlan204({ child => httpServiceChildAllowed(invocationPlan204, child) })) {
                 return hostPluginResourceError("http.intent_changed", "HTTP child exceeds its exact frozen parent intent")
             }
-            let descriptor = match (catalog.resolvedDescriptor(prepared.call, threadId: Some(ThreadId(rootContext.sessionId.value)))) {
+            let exact = match (prepared.resolvedHostServiceMatches(catalog, "host-http-intent-v1", ThreadId(rootContext.sessionId.value))) {
                 case Some(value) => value
                 case None => return hostPluginResourceError("http.service_missing", "HTTP host service is no longer registered")
             }
-            if (!descriptor.hostServiceOnly || descriptor.implementationFingerprint != "host-http-intent-v1") {
+            if (!exact) {
                 return hostPluginResourceError("http.service_changed", "HTTP service lost its host-only implementation boundary")
             }
-            for (required in prepared.operationPlan.requiredCapabilities) {
-                if (!rootContext.capabilities.allows(required.kind, resource: required.resource)) {
-                    return hostPluginResourceError("http.capability_exceeded", "HTTP child exceeds the current Run authority")
-                }
+            if (!childCapabilitiesCurrent(prepared)) {
+                return hostPluginResourceError("http.capability_exceeded", "HTTP child exceeds the current Run authority")
             }
             return Result.Ok(())
         }

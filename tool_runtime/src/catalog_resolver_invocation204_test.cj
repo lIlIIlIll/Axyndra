@@ -137,6 +137,79 @@ class CatalogResolverInvocation204Tests {
         @Expect(fixture.counts.canonicalCalls, 1)
         @Expect(fixture.consumer.scope.getOrThrow().returnWholeCoreFrame204(), true)
     }
+
+    @TestCase
+    func serviceComparisonResolvesDisplayArgumentsWithoutExportingPreparedData(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072); let paid = root.deriveRetainedLease()
+        let catalog = ToolCatalog(); let captured = ArrayList<ToolResolverInput>()
+        let descriptor = ToolDescriptor(ModelToolDefinition("probe", "probe", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead), hostServiceOnly: true, implementationFingerprint: "probe-fp",
+            sideEffectResolver: Some({ input =>
+                captured.add(input)
+                if (!input.textEquals(ToolResolverText.Scalar([ToolResolverStep.Field("arg")]), "display")) {
+                    throw IllegalStateException("resolved the wrong arguments") }
+                false
+            }))
+        @Assert(catalog.register(descriptor, ResolverExecutor204()).isOk())
+        let context = ToolInvocationContext(RunId("service-run"), SessionId("service-thread"), CapabilitySet())
+        let call = ToolCall("id", "probe", objectValue([ValueField("arg", textValue("display"))]))
+        let plan = NormalizedOperationPlan("probe", objectValue([ValueField("arg", textValue("frozen"))]), [],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "service-binding")
+        let prepared = PreparedToolInvocation(OperationId("service-operation"), call, exclusiveToolConcurrency(),
+            PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        let owner = PreparedMetadataOwner204(paid, ResolverDataConsumer204(root)); owner.installFrame204(prepared)
+        let thread = ThreadId(context.sessionId.value)
+        @Expect(prepared.resolvedHostServiceMatches(catalog, "probe-fp", thread).getOrThrow())
+        @Expect(!prepared.resolvedHostServiceMatches(catalog, "other", thread).getOrThrow())
+        @Expect(captured.size, 2)
+        for (input in captured) {
+            var closed = false
+            try { let _ = input.kind([]) } catch (_: IllegalStateException) { closed = true }
+            @Expect(closed)
+        }
+        @Expect(catalog.revoke("probe"))
+        @Expect(prepared.resolvedHostServiceMatches(catalog, "probe-fp", thread).isNone())
+        owner.producerReturned204(); root.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+    @TestCase
+    func frozenReadonlyComparisonChecksEffectKindAndCompleteInstalledIdentity(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let catalog = ToolCatalog(); let reads = ArrayList<ToolResolverInput>()
+        let descriptor = ToolDescriptor(ModelToolDefinition("preview", "preview", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead), hostServiceOnly: true, implementationVersion: "v2",
+            implementationFingerprint: "preview-fp", sideEffectResolver: Some({ input =>
+                reads.add(input); !input.textEquals(ToolResolverText.Scalar([ToolResolverStep.Field("op")]), "read")
+            }))
+        @Assert(catalog.register(descriptor, ResolverExecutor204()).isOk())
+        let ctx = ToolInvocationContext(RunId("run"), SessionId("thread"), CapabilitySet())
+        let thread = ThreadId(ctx.sessionId.value)
+        let display = ToolCall("call", "preview", objectValue([ValueField("op", textValue("write"))]))
+        for (index in 0..6) {
+            let plan = NormalizedOperationPlan("preview", objectValue([ValueField("op", textValue(if (index == 1) { "write" } else { "read" }))]),
+                [], OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "binding",
+                toolVersion: if (index == 2) { "stale" } else { "v2" },
+                implementationFingerprint: if (index == 3) { "stale" } else { "preview-fp" },
+                schemaDigest: if (index == 4) { "stale" } else { descriptor.schemaDigest })
+            let prepared = PreparedToolInvocation(OperationId("operation"), display, exclusiveToolConcurrency(),
+                PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, ctx))
+            let owner = PreparedMetadataOwner204(root.deriveRetainedLease(), ResolverDataConsumer204(root)); owner.installFrame204(prepared)
+            @Expect(prepared.frozenReadonlyDescriptorMatches(catalog, thread, hostServiceOnly: index != 5).getOrThrow(), index == 0)
+            if (index == 5) {
+                @Assert(catalog.revoke("preview"))
+                @Expect(prepared.frozenReadonlyDescriptorMatches(catalog, thread, hostServiceOnly: true).isNone())
+            }
+            owner.producerReturned204()
+        }
+        @Expect(reads.size, 6)
+        for (input in reads) {
+            var revoked = false
+            try { let _ = input.kind([]) } catch (_: IllegalStateException) { revoked = true }; @Expect(revoked)
+        }
+        root.close(); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
 }
 
 private func privateApprovalPrepared1201(fixture: ResolverInvocationFixture204): PreparedToolInvocation {

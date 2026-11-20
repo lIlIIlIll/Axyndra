@@ -77,6 +77,10 @@ public class PreparedInvocationSource {
     }
 }
 
+// These checks intentionally resolve different calls: service fingerprints use
+// display arguments; delegated read-only execution uses the frozen arguments.
+private enum PreparedDescriptorCheck { DisplayService(String) | FrozenReadonly(Bool) }
+
 // This is the durable hand-off between preparation/approval and execution.
 // Batch coordinators can collect these values, finish every approval decision,
 // calculate conflict-free waves, and only then call the executor.
@@ -129,6 +133,53 @@ public class PreparedToolInvocation {
                     if (metadataReturned204) { throw IllegalStateException("prepared DATA has returned") }
                     textEqualsFrame(field, expected)
             }
+        }
+    }
+    // Resolve the actual display call. None means the registration is absent.
+    public func resolvedHostServiceMatches(catalog: ToolCatalog, fingerprint: String, threadId: ThreadId): ?Bool {
+        compareResolvedDescriptor(catalog, threadId, PreparedDescriptorCheck.DisplayService(fingerprint))
+    }
+    // Use the frozen arguments, not the display arguments, for effect resolution.
+    // Both ordinary targets and host-only previews must still match the plan.
+    public func frozenReadonlyDescriptorMatches(catalog: ToolCatalog, threadId: ThreadId, hostServiceOnly!: Bool): ?Bool {
+        compareResolvedDescriptor(catalog, threadId, PreparedDescriptorCheck.FrozenReadonly(hostServiceOnly))
+    }
+    private func compareResolvedDescriptor(catalog: ToolCatalog, threadId: ThreadId, check: PreparedDescriptorCheck): ?Bool {
+        match (detachedMetadata204) {
+            case Some(owner) =>
+                let reader = owner.retain204(this)
+                try { resolvedDescriptorFrame(catalog, threadId, check) }
+                catch (error: Exception) { owner.holdUnknown204(); throw error }
+                finally { reader.returnConsumerFrame204() }
+            case None =>
+                requireMetadataBorrow204()
+                match (catalogConsumer204) {
+                    case Some(owner) =>
+                        let frame = owner.beginFrame204()
+                        try { resolvedDescriptorFrame(catalog, threadId, check) }
+                        catch (error: Exception) { owner.holdUnknown204(); throw error }
+                        finally { frame.returnedWholeAction204() }
+                    case None => resolvedDescriptorFrame(catalog, threadId, check)
+                }
+        }
+    }
+    private func resolvedDescriptorFrame(catalog: ToolCatalog, threadId: ThreadId, check: PreparedDescriptorCheck): ?Bool {
+        let display = callData204.getOrThrow()
+        let call = match (check) {
+            case PreparedDescriptorCheck.DisplayService(_) => display
+            case PreparedDescriptorCheck.FrozenReadonly(_) => ToolCall(display.callId, display.name, operationPlanData204.getOrThrow().canonicalArguments)
+        }
+        let actual = match (catalog.resolvedDescriptor(call, threadId: Some(threadId))) {
+            case Some(value) => value
+            case None => return None<Bool>
+        }
+        match (check) {
+            case PreparedDescriptorCheck.DisplayService(fingerprint) => Some(actual.hostServiceOnly && actual.implementationFingerprint == fingerprint)
+            case PreparedDescriptorCheck.FrozenReadonly(hostOnly) =>
+                let identity = operationPlanData204.getOrThrow().implementation
+                Some(actual.hostServiceOnly == hostOnly && !actual.controlOnly && !actual.sideEffecting &&
+                    actual.implementationVersion == identity.toolVersion &&
+                    actual.implementationFingerprint == identity.implementationFingerprint && actual.schemaDigest == identity.schemaDigest)
         }
     }
     // Only the scalar comparator crosses into the port. Revoke it before the
