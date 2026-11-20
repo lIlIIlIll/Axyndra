@@ -8,7 +8,7 @@ import yjson.*
 
 func hostPrepareReadonlyDelegationOwned204(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
-    call: ToolCall): Result<ToolCanonicalArgumentsOwner204> {
+    name: String, arguments: AgentValue): Result<ToolCanonicalArgumentsOwner204> {
     match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     let descriptor = match (host.servicePackage(namespace, generation)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
@@ -16,27 +16,27 @@ func hostPrepareReadonlyDelegationOwned204(host: HostJavaScriptPluginHost, setti
     let owner = try { ToolCanonicalArgumentsOwner204(paid) }
         catch (error: Exception) { paid.close(); throw error }
     try {
-        buildOwnedReadonlyDelegationFrame204(host, settingsRoot, namespace, contribution, generation, context, call, owner)
+        buildOwnedReadonlyDelegationFrame204(host, settingsRoot, namespace, contribution, generation, context, name, arguments, owner)
         owner.producerFrameReturned204()
         Result.Ok(owner)
     } catch (error: Exception) { owner.holdUnknownConsumer204(); throw error }
 }
 private func buildOwnedReadonlyDelegationFrame204(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
-    call: ToolCall, owner: ToolCanonicalArgumentsOwner204): Unit {
-    match (hostPrepareReadonlyCatalog204(host, settingsRoot, namespace, contribution, generation, context, call, Some(owner))) {
+    name: String, arguments: AgentValue, owner: ToolCanonicalArgumentsOwner204): Unit {
+    match (hostPrepareReadonlyCatalog204(host, settingsRoot, namespace, contribution, generation, context, name, arguments, Some(owner))) {
         case Result.Err(error) => owner.installProducerError204(error); case Result.Ok(_) => () }
 }
 func hostPrepareReadonlyCatalog204(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
-    call: ToolCall, owner: ?ToolCanonicalArgumentsOwner204): Result<AgentValue> {
+    name: String, arguments: AgentValue, owner: ?ToolCanonicalArgumentsOwner204): Result<AgentValue> {
     match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     let shared = context.forkOwnedToolSetSnapshot159()
     try {
         let identity = match (shared) { case Some(value) => Some(value.copyIdentity159())
             case None => None<OwnedToolSnapshotIdentity159> }
         let result = readonlyCatalogCopyFrame204(host, settingsRoot, namespace, contribution, generation, context,
-            call, owner, shared, context.legacyToolSetSnapshot159, identity)
+            name, arguments, owner, shared, context.legacyToolSetSnapshot159, identity)
         match (identity) { case Some(value) =>
             // A compatibility Raw result keeps only its own ID copy paid;
             // no historical export of the original schema graph occurred.
@@ -48,14 +48,14 @@ func hostPrepareReadonlyCatalog204(host: HostJavaScriptPluginHost, settingsRoot:
 }
 private func readonlyCatalogCopyFrame204(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
-    call: ToolCall, owner: ?ToolCanonicalArgumentsOwner204, shared: ?SharedToolSetSnapshot159,
+    name: String, arguments: AgentValue, owner: ?ToolCanonicalArgumentsOwner204, shared: ?SharedToolSetSnapshot159,
     legacy: ?ToolSetSnapshot, identity: ?OwnedToolSnapshotIdentity159): Result<AgentValue> {
     let raw = match (identity) {
         case Some(value) => value.withText159<Result<AgentValue>>({ text =>
             hostPrepareReadonlyDelegationDataFrame204(host, settingsRoot, namespace, contribution, generation,
-                context, call, shared, legacy, Some(text)) })
+                context, name, arguments, shared, legacy, Some(text)) })
         case None => hostPrepareReadonlyDelegationDataFrame204(host, settingsRoot, namespace, contribution, generation,
-            context, call, shared, legacy, match (legacy) { case Some(value) => Some(value.id); case None => None<String> }) }
+            context, name, arguments, shared, legacy, match (legacy) { case Some(value) => Some(value.id); case None => None<String> }) }
     match (owner) {
         case Some(output) =>
             match (raw) {

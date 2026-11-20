@@ -46,7 +46,7 @@ public class HostPluginServiceIdentity {
     public func readonlyDelegationArguments(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         arguments: AgentValue): Result<ToolCall> {
         let contribution = httpIntentText(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow(), "contribution")
-        match (host.delegationInput(context, prepared, namespace, contribution, generation)) {
+        match (host.checkReadonlyDelegation(context, prepared, namespace, contribution, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         if (!httpIntentExactFields(arguments, ["tool", "input"]) || arguments.field("input").getOrThrow().unifiedKind != ValueKind.Object) {
             return hostPluginResourceError("readonly_delegation.arguments_invalid", "readonly service selects one frozen alias and object input") }

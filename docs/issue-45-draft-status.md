@@ -5064,3 +5064,5 @@ E2167: the `a7f86fd86b` Coding package missed the first local request deadline a
 E2181/E2185: child dispatch derives both identifiers from a scoped reader, without exporting the parent call. Tool passed 82/82; Host passed 12 selected cases out of 279. The original Native Task persistence contract passed both root restores and the corrupt-snapshot refusal. This establishes that child path only, not complete Prepared migration or Core capacity.
 
 E2186 removed the raw call from Task history admission and prepaid the independent UTF-8 ID copy through the encoder's full lifetime. On this source the original Task contract passed both root restores and corrupt-snapshot rejection, without forced cleanup. Other Prepared call and plan users remain.
+
+E2192: two check-only read-only delegation paths no longer request the raw display call. Native Program budget and cancel/recovery passed; full Core still failed at the read-view output reservation. [Source, original gate results and detached SQLite evidence](implementation/plan-execution-reliability.md#e2192-verify-read-only-delegation-without-exporting-its-display-call). Draft; no new release or whole-module credit.

@@ -463,12 +463,16 @@ public open class HostJavaScriptPluginHost {
     }
     func prepareReadonlyDelegationOwned204(context: ToolInvocationContext, call: ToolCall,
         namespace: String, tool: String, generation: UInt64): Result<ToolCanonicalArgumentsOwner204> {
-        hostPrepareReadonlyDelegationOwned204(this, settingsRoot, namespace, tool, generation, context, call)
+        hostPrepareReadonlyDelegationOwned204(this, settingsRoot, namespace, tool, generation, context, call.name, call.arguments)
     }
 
     public func delegationInput(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
         hostValidatePluginReadonlyDelegation(this, settingsRoot, namespace, tool, generation, context, prepared)
+    }
+    func checkReadonlyDelegation(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        namespace: String, tool: String, generation: UInt64): Result<Unit> {
+        hostCheckPluginReadonlyDelegation(this, settingsRoot, namespace, tool, generation, context, prepared)
     }
     // Classifies an actual current inspected contribution; this is not a grant.
     public func toolExecutionProfile(namespace: String, tool: String,

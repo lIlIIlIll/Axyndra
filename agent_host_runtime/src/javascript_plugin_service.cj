@@ -1302,9 +1302,8 @@ public class HostJavaScriptPluginServiceBroker {
                 invocationPlan204.requiredCapabilities.any({cap=>!rootContext.capabilities.allows(cap.kind,resource:cap.resource)})){
                 return hostPluginResourceError("readonly_delegation.capability_denied","preview exceeds the actual Root ceiling")}
             let actual=identity.getOrThrow()
-            return match(actual.host.delegationInput(rootContext,rootPrepared,actual.namespace,
-                httpIntentText(frozen,"contribution"),actual.generation)){
-                case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>Result.Ok(())}
+            return actual.host.checkReadonlyDelegation(rootContext, rootPrepared, actual.namespace,
+                httpIntentText(frozen, "contribution"), actual.generation)
         }
         if (service == "tool.readonly") {
             if (identity.isNone() || channelBinding.isSome() || httpStreamBinding.isSome() ||
