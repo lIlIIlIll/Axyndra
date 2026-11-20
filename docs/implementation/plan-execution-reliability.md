@@ -11548,3 +11548,25 @@ Distribution seeding now closes each owned snapshot after selecting the effectiv
 E2132: eight Native Product cases passed on `3dc86986b9e77595b20427f15add65804d133c7500690ac9440fe0f995219a65` (1,105 naturally enumerated). The changed-digest case imported two real packages and checked the persisted Workspace lock, then disabled User and checked that its lock won. This is independent of the larger sealed-fixture probe, which did not reach its post-seed assertions in either arm. E2135 rebuilt the affected Product and App production roots. E2137 assembled Coding from App `ebabfcc2d79fe4947d616d264e38b9c5433cf3d36cd23fef375003d0b2bf26ac`; packaged ELF `2d73876cd5598e47d37bd0d8861f8aef0cd2b618a27c1b740dce50104a9455ba` passed assembly, Skills/Program/Shell wire, clean environment and setup. Evidence: `localseedred2127`, `localseedgreen2128`, `distributioncustodyfinal2132`, `distributioncustodycoding2137`.
 
 On the **preceding** `3405693335` Product ELF, E2129 passed 421/423 additional cases. Together with 20 earlier passes on that image: 441 passed, two failed, 660 previously deferred and not rerun (1,103 total). Both new failures faulted in `MapleRuntime::CheckAndPush`. The exact mapped runtime and its four static GC-phase caller paths support GC deferral; no dynamic caller stack was recovered. The same distinction applies to both private sealed-fixture probes. These classifications give no pass credit. Core capacity, the five-second first model request and complete release acceptance remain open.
+
+### Final distribution image: Product partition and first-request boundary (E2139, E2142–E2144)
+
+On `9053902911`, the E2132 Product image had 1,105 natural cases. Its eight earlier passes and E2139's 435 distinct remaining eligible cases used the same ELF. E2139 passed 432 and failed three: `PluginHttpTransportTests.stricterParentProcessLimitsFailBeforeAnyHttpEffect`, `ProductPluginLifecycleManagerTests.sameThreadConfiguredServicesWithEqualLocalToolNamesRemainIndependent`, and `PluginRuntimeContractTests.piExtensionApiHostDeniesDirectSystemAccess`. All three faulted at `MapleRuntime::CheckAndPush+0xc1` (PC `0x637f21`). The matched runtime's static callers are GC-phase paths; no dynamic caller was recovered. They are failed samples within the GC deferral, not passes. Total: **440 passed, three failed, 662 previously deferred and not run**. Exact cases and per-log hashes: `distributioneligible2139/qualified.json`.
+
+E2142 failed the original first local provider request at 5,002.753 ms. Nine plugins were installed, neither HTTP handler received a request, and the second profile was not invoked. A read-only detached SQLite snapshot passed `quick_check`; the three original file hashes remained unchanged. From Run start, the context read completed at +530 ms, the model attempt started at +1,642 ms and dispatch was claimed at +1,799 ms. The attempt was cancelled at +2,103 ms and the Run ended at +2,112 ms. A durable claim is not provider receipt. There were zero approvals and no unreaped owned process. See `distributioncold2142/detached/{receipt,dispatch-phase}.json`.
+
+E2143 passed Minimal's three selected gates (empty distribution, packaged ELF `af8d9fd90c1cad0bc151b0721daeb1f39cbf516a7dcf01085e43ca6154a19358`). E2144 passed Full's seven, including the Eval wire check (17 bundled plugins, ELF `2d73876cd5598e47d37bd0d8861f8aef0cd2b618a27c1b740dce50104a9455ba`). The Coding/Full ELF is identical; each package's own manifest, provenance and entrypoints were checked. This does not clear the first-request deadline or the Core capacity refusal.
+
+E2148 exercised ten real PTY flows on the E2135 App and installed Full fixtures: three streaming protocols, cancellation and Ctrl-C, HTTP error, timeout, incomplete EOF, invalid UTF-8 and MCP. All ten passed (`distributionpty2148/summary.json`). E2149 ran the unchanged performance harness with separate fresh homes under the fixed SDK. Both arms passed the seven absolute gates. P95 results:
+
+| Measurement | PR base | `9053902911` |
+|---|---:|---:|
+| Extension cold start (ms) | 61.292 | 60.152 |
+| First call (ms) | 2.648 | 0.475 |
+| Steady IPC (ms) | 3.361 | 0.230 |
+| Worker peak RSS (bytes) | 29,265,920 | 20,754,432 |
+| Cancellation including 100 ms trigger (ms) | 127.126 | 126.404 |
+| `/help` (ms) | 144.643 | 419.845 |
+| `/plugins inspect` (ms) | 133.869 | 437.939 |
+
+Both CLI commands remained slower than base. Samples and package identities: `distributionmatched2149/{baseline,candidate}/summary.json`. Separately, the private paired Registry row candidate built and passed six Coding gates but failed its original first local request at 5,002.788 ms with zero HTTP arrivals (E2145–E2146); it was not promoted. E2150's private ordinary-child comparison preserved the Core budget positive but not the unsplit Core: both reserved grep/read-view Receipts still recorded `read_view.output_capacity`. Both SQLite copies passed integrity checks and all six original file hashes stayed unchanged. No projected metadata was credited as returned simply because a scope or process finished.
