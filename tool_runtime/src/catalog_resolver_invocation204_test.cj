@@ -189,7 +189,7 @@ class PrivateApprovalMetadataMove1201Tests {
         @Expect(scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).isNone())
         let after = fixture.root.retainedCustodyUsage113()
         @Expect(after[0], before[0]); @Expect(after[2], before[2])
-        @Expect(consumer.withCall204({ call => call.name == "resolver.data" }), true)
+        @Expect(consumer.withCallInput({ input => input.textEquals(ToolResolverText.Name, "resolver.data") }), true)
         consumer.returnConsumerFrame204()
         let next = scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).getOrThrow()
         @Expect(next.withOperationPlan204({ plan =>

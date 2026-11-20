@@ -110,6 +110,29 @@ class PreparedMetadataCopy204Tests {
     }
 
     @TestCase
+    func canonicalCallViewUsesFrozenArgumentsAndClosesAfterTheReaderReturns(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("frozen-run"), SessionId("frozen-session"), CapabilitySet())
+        let call = ToolCall("call-id", "tool", objectValue([ValueField("path", textValue("display"))]))
+        let plan = NormalizedOperationPlan("tool", objectValue([ValueField("path", textValue("approved"))]), [],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "binding")
+        let prepared = PreparedToolInvocation(OperationId("operation"), call, exclusiveToolConcurrency(),
+            PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        @Expect(prepared.withCallInput({ input => input.stringField("path") }), "display")
+        let saved = prepared.withCanonicalCallInput({ input =>
+            owner.producerReturned204(); root.close()
+            @Expect(bank.usage()[1] > 0)
+            @Expect(input.textEquals(ToolResolverText.CallId, "call-id"))
+            @Expect(input.stringField("path"), "approved")
+            input
+        })
+        var closed = false
+        try { let _ = saved.stringField("path") } catch (_: IllegalStateException) { closed = true }
+        @Expect(closed)
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+    @TestCase
     func actualRawPlanExportKeepsOnlyIndependentMetadataCopyHeld():Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged:16777216); let root = bank.acquire(131072)
         let core = MetadataCopyConsumer204(root)
@@ -119,6 +142,41 @@ class PreparedMetadataCopy204Tests {
         let exported = prepared.operationPlan
         owner.producerReturned204(); root.close()
         @Expect(exported.bindingDigest,"copy-binding"); @Expect(bank.usage()[1] > 0,true)
+    }
+    @TestCase
+    func returnedCallViewsCannotKeepDataOrAcknowledgeAnotherReader(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("view-run"), SessionId("view-session"), CapabilitySet())
+        let prepared = metadataFixture204(context, objectValue([ValueField("value", textValue("selected"))]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        let saved = prepared.withCallInput({ input =>
+            @Expect(input.textEquals(ToolResolverText.Name, "copy-tool"))
+            input
+        })
+        var producerViewClosed = false
+        try { let _ = saved.count([]) } catch (_: IllegalStateException) { producerViewClosed = true }
+        @Expect(producerViewClosed)
+        owner.producerReturned204(); root.close()
+        let retained = [None<ToolResolverInput>]
+        let prematureReturnRejected = [false]
+        var callbackFailed = false
+        try {
+            reader.withCallInput<Unit>({ input =>
+                retained[0] = Some(input)
+                @Expect(input.stringField("value"), "selected")
+                try { reader.returnConsumerFrame204() } catch (_: IllegalStateException) { prematureReturnRejected[0] = true }
+                throw IllegalArgumentException("failed call observer")
+            })
+        } catch (_: IllegalArgumentException) { callbackFailed = true }
+        @Expect(prematureReturnRejected[0] && callbackFailed)
+        var failedViewClosed = false
+        try { let _ = retained[0].getOrThrow().count([]) } catch (_: IllegalStateException) { failedViewClosed = true }
+        @Expect(failedViewClosed)
+        @Expect(reader.withCallInput({ input => input.copyText(ToolResolverText.CallId) }), "copy-call")
+        @Expect(bank.usage()[1] > 0)
+        reader.returnConsumerFrame204()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
     }
     @TestCase
     func callOnlyPublicExportKeepsItsIndependentBackingHeld():Unit {

@@ -63,10 +63,10 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
             executeFilePlanFrame204(context, prepared, plan, call) })
     }
     private func executeFilePlanFrame204(context: ToolInvocationContext,
-        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolCall): Result<ToolResult> {
+        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolResolverInput): Result<ToolResult> {
         if (prepared.source.kind != PreparedInvocationSourceKind.Derived ||
             prepared.source.parentOperationId.isNone() || prepared.source.operationRoot.isNone() ||
-            call.name != PLUGIN_FILE_PLAN_TOOL ||
+            !call.textEquals(ToolResolverText.Name, PLUGIN_FILE_PLAN_TOOL) ||
             plan.effectClass != OperationEffectClass.ReadOnly ||
             !networkPolicyModeIsDenied(plan.networkPolicy.mode)) {
             return pluginProcessError("application_plan.source_invalid", "file.plan.propose requires an admitted read-only plugin child Operation")
@@ -139,7 +139,7 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
                     // Preserve every typed error field and the Program service's
                     // existing error-code projection for its actual failed child.
                     output.put("error_code", textValue(error.code))
-                    return Result.Ok(ToolResult(call.callId, output, isError: true))
+                    return Result.Ok(ToolResult(call.copyText(ToolResolverText.CallId), output, isError: true))
             }
             // Immutable internal artifacts may remain after cancellation, but a
             // cancelled/revoked invocation never publishes a successful result or
@@ -152,7 +152,7 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(current) => current.close()
             }
-            Result.Ok(ToolResult(call.callId, summary))
+            Result.Ok(ToolResult(call.copyText(ToolResolverText.CallId), summary))
         } finally { descriptor.close() }
     }
 }

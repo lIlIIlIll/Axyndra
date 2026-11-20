@@ -135,6 +135,26 @@ returns or throws, even a saved handle can no longer match. Existing Receipts
 are not rewritten and earlier raw Prepared exports are not retroactively
 released. The wider Prepared call/plan API migration remains open.
 
+## Read a prepared call without exporting its arguments
+
+Host executors can use `prepared.withCallInput` for the display call. Use
+`prepared.withCanonicalCallInput` for execution: it supplies the call ID and
+name from the original call, but the arguments from the frozen operation plan.
+For example, `prepared.withCanonicalCallInput({ input => input.stringField("path") })`
+copies a text field. Neither view grants permission to execute. A saved view
+rejects reads after the callback returns or throws.
+
+For a counted metadata consumer, replace `reader.withCall204` with
+`reader.withCallInput`. Use `textEquals` for comparisons and `copyText` only
+when the recipient needs its own string. The raw-call callback on the reader
+no longer compiles; recompile host extensions against the updated Tool API.
+Returning a scoped view does **not** return the reader. Call
+`reader.returnConsumerFrame204()` only when that reader's real consumers have
+finished, including a published result's payload acknowledgement if it still
+owns the reader. One reader cannot acknowledge another. Earlier raw exports
+remain charged; the rest of the Prepared call/plan migration is still open.
+Neither the plugin wire protocol nor the database format changes.
+
 ## Persisted state and inspection
 
 The current SQLite format is **schema v29**. It is independent of the Native

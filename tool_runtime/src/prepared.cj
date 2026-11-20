@@ -136,7 +136,7 @@ public class PreparedToolInvocation {
     public func withReceiptBinding<T>(recordDigest: Bool, body: (DerivedReceiptBinding) -> T): T {
         match (detachedMetadata204) {
             case Some(owner) =>
-                let reader = owner.retain204()
+                let reader = owner.retain204(this)
                 try { withDerivedReceiptBinding(operationId, operationPlanData204.getOrThrow().bindingDigest, recordDigest, body) }
                 finally { reader.returnConsumerFrame204() }
             case None =>
@@ -151,7 +151,37 @@ public class PreparedToolInvocation {
         }
     }
     public func retainMetadataConsumer204(): ?PreparedMetadataConsumer204 {
-        match (detachedMetadata204) { case Some(value) => Some(value.retain204()); case None => None<PreparedMetadataConsumer204> }
+        match (detachedMetadata204) { case Some(value) => Some(value.retain204(this)); case None => None<PreparedMetadataConsumer204> }
+    }
+    // Only the projection crosses the callback boundary. Returning this temporary
+    // read does not close any separately retained consumer or prior raw export.
+    public func withCallInput<T>(body: (ToolResolverInput) -> T): T {
+        withCallProjection204(false, body)
+    }
+    // Execution reads only the original frozen arguments, never display arguments.
+    public func withCanonicalCallInput<T>(body: (ToolResolverInput) -> T): T {
+        withCallProjection204(true, body)
+    }
+    private func withCallProjection204<T>(canonical: Bool, body: (ToolResolverInput) -> T): T {
+        match (detachedMetadata204) {
+            case Some(owner) =>
+                let reader = owner.retain204(this)
+                try { projectCallFrame204(canonical, body) } finally { reader.returnConsumerFrame204() }
+            case None =>
+                requireMetadataBorrow204()
+                match (catalogConsumer204) {
+                    case Some(owner) =>
+                        let frame = owner.beginFrame204()
+                        try { projectCallFrame204(canonical, body) } finally { frame.returnedWholeAction204() }
+                    case None => projectCallFrame204(canonical, body)
+                }
+        }
+    }
+    private func projectCallFrame204<T>(canonical: Bool, body: (ToolResolverInput) -> T): T {
+        let call = callData204.getOrThrow()
+        if (canonical) { return withToolResolverInput(ToolCall(call.callId, call.name,
+            operationPlanData204.getOrThrow().canonicalArguments), body) }
+        withToolResolverInput(call, body)
     }
     public func withCall204<T>(body: (ToolCall) -> T): T {
         if (metadataReturned204) { throw IllegalStateException("prepared DATA has returned") }

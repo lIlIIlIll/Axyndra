@@ -7,13 +7,16 @@ import tool_runtime.*
 // The original invocation and Source stay untouched. Its independently paid
 // metadata consumer follows the real result to the original canonical ACK.
 func productFilePlanResultMetadata204(prepared: PreparedToolInvocation,
-    action: (NormalizedOperationPlan, ToolCall) -> Result<ToolResult>): Result<ToolResult> {
+    action: (NormalizedOperationPlan, ToolResolverInput) -> Result<ToolResult>): Result<ToolResult> {
     let consumer = match (prepared.retainMetadataConsumer204()) {
         case Some(value) => value
-        // Legacy Raw exports keep their original conservative retention.
-        case None => return action(prepared.operationPlan, prepared.call) }
+        // The uncounted plan retains its original conservative export.
+        case None =>
+            let plan = prepared.operationPlan
+            return prepared.withCallInput({ input => action(plan, input) })
+    }
     let result = consumer.withOperationPlan204({ plan =>
-        consumer.withCall204({ call => action(plan, call) }) })
+        consumer.withCallInput({ input => action(plan, input) }) })
     match (result) {
         // A typed error is not proof its external consumers returned.
         case Result.Err(error) => Result.Err(error)

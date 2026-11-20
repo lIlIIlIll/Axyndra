@@ -37,17 +37,21 @@ private func hostPlainDataOnlyPayment204(host: HostJavaScriptPluginHost, namespa
     finally { descriptor.close() }
 }
 func hostCopyPlainDataOnlyInput204(host: HostJavaScriptPluginHost, namespace: String, generation: UInt64,
-    identity: String, value: AgentValue): Result<HostPlainDataOnlyInput204> {
+    prepared: PreparedToolInvocation, value: AgentValue): Result<HostPlainDataOnlyInput204> {
     let payment = match (hostPlainDataOnlyPayment204(host, namespace, generation)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
     let copy = try { HostPaidValueProjection151(payment) } catch (error: Exception) { payment.close(); throw error }
-    try { Result.Ok(hostPlainDataOnlyInputCopyFrame204(copy, identity, value)) }
+    try { Result.Ok(hostPlainDataOnlyInputCopyFrame204(copy, prepared, value)) }
     catch (error: Exception) { copy.closeUnpublished151(); throw error }
 }
-private func hostPlainDataOnlyInputCopyFrame204(copy: HostPaidValueProjection151, identity: String,
+private func hostPlainDataOnlyInputCopyFrame204(copy: HostPaidValueProjection151, prepared: PreparedToolInvocation,
     value: AgentValue): HostPlainDataOnlyInput204 {
-    copy.fundAdditional151(identity.size * 6 + 8192, 8)
-    let copied = String.fromUtf8(identity.toArray())
+    let copied = prepared.withCallInput({ input =>
+        let bytes = input.byteCount(ToolResolverText.CallId)
+        if (bytes > (Int64.Max - 8192) / 6) { throw LogicalJsonPayloadError("plugin call identity invoice overflow") }
+        copy.fundAdditional151(bytes * 6 + 8192, 8)
+        input.copyText(ToolResolverText.CallId)
+    })
     copy.retainValue151(1, value); copy.projectValue151(1)
     HostPlainDataOnlyInput204(copy, copied)
 }

@@ -308,11 +308,12 @@ func commandProbeFallbackAllowed(
 
 // Release the resolver input before issuing the native process request. Only
 // the executable, arguments and scalar classifications outlive this scope.
-private func commandProbeLaunchFields(input: ToolResolverInput, policy: NetworkPolicy): Result<(String, Array<String>, Int64, Bool)> {
+private func commandProbeLaunchFields(input: ToolResolverInput, policy: NetworkPolicy): Result<(String, Array<String>, Int64, Bool, String)> {
     let arguments = match (commandProbeArguments(input)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
     let executable = match (commandProbeExecutable(input, arguments, policy)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
     let seconds = match (commandProbeTimeout(input)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-    Result.Ok((executable, arguments, seconds, !commandProbeReadonly(input) && commandProbeArgumentEffect(executable, arguments)))
+    Result.Ok((executable, arguments, seconds, !commandProbeReadonly(input) && commandProbeArgumentEffect(executable, arguments),
+        input.copyText(ToolResolverText.CallId)))
 }
 
 func probeInputError<T>(message: String): Result<T> {
@@ -329,20 +330,19 @@ class CommandProbeTool <: ToolExecutor {
         this.operations = processOperations(processes, "command-probe")
     }
     public func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
-        prepared.withCall204({ originalCall => prepared.withOperationPlan204({ plan =>
-            prepared.withApproval204({ approval => executePlanFrame204(context, prepared, originalCall, plan, approval) })
-        }) })
+        prepared.withOperationPlan204({ plan =>
+            prepared.withApproval204({ approval => executePlanFrame204(context, prepared, plan, approval) })
+        })
     }
 
     private func executePlanFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        originalCall: ToolCall, plan: NormalizedOperationPlan, approval: ?ApprovalRequest): Result<ToolResult> {
+        plan: NormalizedOperationPlan, approval: ?ApprovalRequest): Result<ToolResult> {
         if (!commandProbeAuthorizationAllowed(prepared.authorization)) {
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
                 "probe.authorization_mode_denied", "command probes require their own canonical operation authorization"))
         }
-        let call = ToolCall(originalCall.callId, originalCall.name, plan.canonicalArguments)
         let policy = plan.networkPolicy
-        let (executable, arguments, seconds, sideEffecting) = match (withToolResolverInput(call, { input => commandProbeLaunchFields(input, policy) })) {
+        let (executable, arguments, seconds, sideEffecting, callId) = match (prepared.withCanonicalCallInput({ input => commandProbeLaunchFields(input, policy) })) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
         }
         let cwd = match (workspace.resolve(plan.cwd, allowDirectory: true)) {
@@ -364,7 +364,7 @@ class CommandProbeTool <: ToolExecutor {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        Result.Ok(ToolResult(commandProbeResultString204(call.callId), objectValue([
+        Result.Ok(ToolResult(callId, objectValue([
             ValueField("command", textValue(commandProbeResultString204(executable))),
             ValueField("argv", listValue(Array<AgentValue>(effectiveArguments.size,
                 {index => textValue(commandProbeResultString204(effectiveArguments[index]))}))),

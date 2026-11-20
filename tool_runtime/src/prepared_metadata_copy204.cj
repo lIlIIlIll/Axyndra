@@ -41,9 +41,9 @@ class PreparedMetadataOwner204 {
             match (value.borrowApprovalFrame204()) { case Some(item) => Some(copyApprovalData204(item)); case None => None })
         prepared = Some(value)
     }
-    func retain204(): PreparedMetadataConsumer204 {
+    func retain204(producer: PreparedToolInvocation): PreparedMetadataConsumer204 {
         lock.lock(); try {
-            if (returned || producerReturned || consumers == Int64.Max) { throw IllegalStateException("prepared DATA producer has returned") }
+            if (returned || producerReturned || !refEq(prepared.getOrThrow(), producer) || consumers == Int64.Max) { throw IllegalStateException("prepared DATA producer has returned") }
             if (consumerHeaders > (Int64.Max - 131072) / 1024 - 1) { throw LogicalJsonPayloadError("prepared consumer invoice overflow") }
             payment.ensureRetainedPeak(retainedInvoice204 + (consumerHeaders + 1) * 1024)
             let consumer = PreparedMetadataConsumer204(this)
@@ -156,13 +156,13 @@ public class PreparedMetadataConsumer204 {
         catch (error: Exception) { actual.holdUnknown204(); throw error }
         finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
     }
-    public func withCall204<T>(body: (ToolCall) -> T): T {
+    public func withCallInput<T>(body: (ToolResolverInput) -> T): T {
         let actual = try { lock.lock(); let value = owner.getOrThrow()
             if (loans == Int64.Max) { throw IllegalStateException("prepared DATA loan count overflow") }
             loans++; value
         } finally { lock.unlock() }
-        try { body(actual.call204()) }
-        catch (error: Exception) { actual.holdUnknown204(); throw error }
+        // The view is invalidated before lowering the loan count, even on unwind.
+        try { withToolResolverInput(actual.call204(), body) }
         finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
     }
     public func returnConsumerFrame204(): Unit {

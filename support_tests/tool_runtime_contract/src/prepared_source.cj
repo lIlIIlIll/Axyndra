@@ -33,6 +33,15 @@ func runPreparedSourceContract(): Unit {
     )
     let childCall = ToolCall("source-child", "source_read", objectValue([]))
     let direct = sourceReady(pipeline.prepare(context, childCall))
+    let savedInput = direct.withCanonicalCallInput({ input =>
+        expect(input.textEquals(ToolResolverText.Name, "source_read") &&
+            input.textEquals(ToolResolverText.CallId, "source-child") && input.count([]) == 0,
+            "external executor reads only its prepared identity and canonical arguments")
+        input
+    })
+    var closed = false
+    try { let _ = savedInput.count([]) } catch (_: IllegalStateException) { closed = true }
+    expect(closed, "external executor cannot retain its frozen input after the callback")
     expect(direct.source.kind == PreparedInvocationSourceKind.Direct &&
         direct.committedToolCall.isNone() && !context.trustedControl,
         "direct preparation labels host origin without a model or control grant")

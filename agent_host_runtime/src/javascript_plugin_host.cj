@@ -503,15 +503,19 @@ public open class HostJavaScriptPluginHost {
     }
     public func prepareDataOnlyTool(context: ToolInvocationContext, call: ToolCall,
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
+        dataOnlyArguments(context, call.name == "plugin." + namespace + "." + tool, call.arguments, namespace, tool, generation)
+    }
+    private func dataOnlyArguments(context: ToolInvocationContext, nameMatches: Bool, arguments: AgentValue,
+        namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
         match (toolExecutionProfile(namespace, tool, generation)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(profile) => if (profile != PluginToolExecutionProfile.DataOnly) {
                 return hostPluginResourceError("plugin.tool_profile_changed", "Tool no longer has its frozen data-only restriction") }
         }
-        if (context.epoch < 1 || call.name != "plugin." + namespace + "." + tool ||
-            call.arguments.field(CONTEXT_READ_INPUT_FIELD).isSome() || call.arguments.field("host_plan").isSome()) {
+        if (context.epoch < 1 || !nameMatches ||
+            arguments.field(CONTEXT_READ_INPUT_FIELD).isSome() || arguments.field("host_plan").isSome()) {
             return hostPluginResourceError("plugin.data_tool_input_invalid", "data-only Tools cannot supply a context fact or Host plan") }
-        Result.Ok(call.arguments)
+        Result.Ok(arguments)
     }
     public func ordinaryToolInput(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
@@ -530,8 +534,8 @@ public open class HostJavaScriptPluginHost {
                 !plan.networkPolicy.egress.isEmpty() || !plan.networkPolicy.publish.isEmpty() ||
                 !plan.resolvedHosts.isEmpty() || !plan.contextReadFacts.isEmpty()) {
                 return hostPluginResourceError("plugin.tool_profile_changed", "data-only Tool lost its exact current contribution and restricted plan") }
-            return prepareDataOnlyTool(context, ToolCall(prepared.call.callId, prepared.call.name,
-                plan.canonicalArguments), namespace, tool, generation)
+            return dataOnlyArguments(context, prepared.textEquals(PreparedMetadataText.CallName, "plugin." + namespace + "." + tool),
+                plan.canonicalArguments, namespace, tool, generation)
         }
         let primitive = match (primitiveSelected191(namespace, tool, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -543,7 +547,7 @@ public open class HostJavaScriptPluginHost {
     // Borrowed DATA only. The exact original data-only profile predicates
     // are consumed completely; no canonical arguments escape this frame.
     func ordinaryPlainDataOnlyFrame204(context: ToolInvocationContext, plan: NormalizedOperationPlan,
-        call: ToolCall, namespace: String, tool: String, generation: UInt64): Result<Unit> {
+        prepared: PreparedToolInvocation, namespace: String, tool: String, generation: UInt64): Result<Unit> {
         let descriptor = match (servicePackageData81(namespace, generation)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         let profile = match (toolExecutionProfile(namespace, tool, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -559,7 +563,8 @@ public open class HostJavaScriptPluginHost {
             !plan.networkPolicy.egress.isEmpty() || !plan.networkPolicy.publish.isEmpty() ||
             !plan.resolvedHosts.isEmpty() || !plan.contextReadFacts.isEmpty()) {
             return hostPluginResourceError("plugin.tool_profile_changed", "data-only Tool lost its exact current contribution and restricted plan") }
-        match (prepareDataOnlyTool(context, ToolCall(call.callId, call.name, plan.canonicalArguments), namespace, tool, generation)) {
+        match (dataOnlyArguments(context, prepared.textEquals(PreparedMetadataText.CallName, "plugin." + namespace + "." + tool),
+            plan.canonicalArguments, namespace, tool, generation)) {
             case Result.Err(error) => Result.Err(error); case Result.Ok(_) => Result.Ok(()) }
     }
     func plainDataOnlyReadViewFrame204(plan: NormalizedOperationPlan, namespace: String,
@@ -2657,8 +2662,8 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         // Native/timer helper. A typed Err alone never acknowledges this loan.
         let metadata = prepared.retainMetadataConsumer204()
         let frame = HostPlainDataOnlyFrame204()
-        let result = prepared.withOperationPlan204({ plan => prepared.withCall204({ call =>
-            executePlainDataOnlyInputFrame204(context, prepared, observation, plan, call, frame) }) })
+        let result = prepared.withOperationPlan204({ plan =>
+            executePlainDataOnlyInputFrame204(context, prepared, observation, plan, frame) })
         if (!frame.nativeAttempted || (frame.nativeReturned && frame.nativeSucceeded && frame.observerReturned && frame.awaitReturned)) {
             let input = frame.detachReturnedInput204()
             match (input) { case Some(value) => value.closeUnpublished151(); case None => () }
@@ -2667,7 +2672,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         result
     }
     private func executePlainDataOnlyInputFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan,
         frame: HostPlainDataOnlyFrame204): Result<ToolResult> {
         if (isPluginLivePolicyParentPlan(plan)) {
             return hostPluginResourceError("plugin.live_owned_entry_required", "live Parent requires the actual typed owned Pipeline entry") }
@@ -2677,33 +2682,33 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
             "extension.cancelled", "JavaScript plugin invocation was cancelled")) }
         if (context.epoch < 1) { return Result.Err(AgentError(AgentErrorKind.Protocol,
             "extension.invocation_identity_invalid", "JavaScript plugin invocation requires the active run epoch")) }
-        match (host.ordinaryPlainDataOnlyFrame204(context, plan, call, extensionId, toolName, instanceGeneration)) {
+        match (host.ordinaryPlainDataOnlyFrame204(context, plan, prepared, extensionId, toolName, instanceGeneration)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (host.plainDataOnlyReadViewFrame204(plan, extensionId, toolName, instanceGeneration)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         // The validated plain input has no host_plan/context fact. Therefore
         // the original input-attachment predicate is exactly false here.
-        let input = match (hostCopyPlainDataOnlyInput204(host, extensionId, instanceGeneration, call.callId, plan.canonicalArguments)) {
+        let input = match (hostCopyPlainDataOnlyInput204(host, extensionId, instanceGeneration, prepared, plan.canonicalArguments)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         frame.input = Some(input)
         let result = [None<Result<ToolResult>>]
         input.payment.withValue151({ arguments => result[0] = Some(executePlainDataOnlyNativeFrame204(
-            context, prepared, observation, plan, call, arguments, input.identity, frame)) })
+            context, prepared, observation, plan, arguments, input.identity, frame)) })
         result[0].getOrThrow()
     }
     private func executePlainDataOnlyNativeFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan,
         arguments: AgentValue, copiedIdentity: String, frame: HostPlainDataOnlyFrame204): Result<ToolResult> {
         let observer = HostJavaScriptPluginInvocationObserver(context, prepared, None<HostJavaScriptPluginServiceBroker>)
         let identity = JavaScriptHostInvocationIdentity(threadId: context.sessionId.value, runId: context.runId.value,
             epoch: context.epoch, operationId: prepared.operationId.value, callId: copiedIdentity)
-        let result = executePlainDataOnlyObservedFrame204(context, prepared, observation, plan, call,
+        let result = executePlainDataOnlyObservedFrame204(context, prepared, observation, plan,
             arguments, identity, observer, frame)
         frame.observerReturned = observer.returnOwnedInvocationFrame159().isOk()
         result
     }
     private func executePlainDataOnlyObservedFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        observation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan,
         arguments: AgentValue, identity: JavaScriptHostInvocationIdentity,
         observer: HostJavaScriptPluginInvocationObserver, frame: HostPlainDataOnlyFrame204): Result<ToolResult> {
         match (observer.prepareOwnedAwait166()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -2729,7 +2734,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
                         return Result.Err(error)
                     case Result.Ok(_) => () }
                 let value = match (outcome) { case Result.Err(error) => return Result.Err(error); case Result.Ok(actual) => actual }
-                match (host.ordinaryPlainDataOnlyFrame204(context, plan, call, extensionId, toolName, instanceGeneration)) {
+                match (host.ordinaryPlainDataOnlyFrame204(context, plan, prepared, extensionId, toolName, instanceGeneration)) {
                     case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                 let copied = match (hostCopyPlainDataOnlyResult204(host, extensionId, instanceGeneration,
                     identity.callId, value.value, value.isError)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(actual) => actual }

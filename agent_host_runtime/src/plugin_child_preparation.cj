@@ -366,19 +366,13 @@ func hostChildInvocationInput111(host: HostJavaScriptPluginHost, context: ToolIn
 func hostChildInvocationPlanFrame204(host: HostJavaScriptPluginHost, context: ToolInvocationContext,
     prepared: PreparedToolInvocation, namespace: String, localTool: String, generation: UInt64,
     plan: NormalizedOperationPlan): Result<Unit> {
-    prepared.withCall204({ call => hostChildInvocationCallPlanFrame204(host, context, prepared,
-        call, namespace, localTool, generation, plan) })
-}
-private func hostChildInvocationCallPlanFrame204(host: HostJavaScriptPluginHost, context: ToolInvocationContext,
-    prepared: PreparedToolInvocation, call: ToolCall, namespace: String, localTool: String, generation: UInt64,
-    plan: NormalizedOperationPlan): Result<Unit> {
     if (prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
         (!isFrozenPluginChildParent111(plan) && !isFrozenPluginPreparedCompletion152(plan)) ||
-        call.name != plan.toolName ||
-        call.name != "plugin." + namespace + "." + localTool) {
+        !prepared.textEquals(PreparedMetadataText.CallName, plan.toolName) ||
+        !prepared.textEquals(PreparedMetadataText.CallName, "plugin." + namespace + "." + localTool)) {
         return hostPluginResourceError("child.parent_invalid", "child-start requires its own actual frozen canonical parent") }
     let binding = plan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow()
-    if (httpIntentText(binding, "parent_call_id") != call.callId) {
+    if (!prepared.textEquals(PreparedMetadataText.CallId, httpIntentText(binding, "parent_call_id"))) {
         return hostPluginResourceError("child.parent_changed", "child-start binding names another canonical call") }
     let configuration = match (host.primitiveConfiguration111(namespace, localTool, generation)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(Some(value)) => value
