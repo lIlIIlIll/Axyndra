@@ -2270,17 +2270,19 @@ func runBrokerOriginalCases96(
 
 func runProductCoreAndRecoveryContract96(root: String, workspace: String, alphaSource: String,
     onlyProgramBudget!: Bool = false): Int64 {
-        let stateRoot = root + "/state"
-        let product = openProduct(config: ProductConfig(
-            settingsRoot: root + "/settings",
-            stateRoot: stateRoot,
-            workspaceRoot: workspace,
-            fixture: true,
-            asyncEnabled: false,
-            compactionOverride: Some(ProductCompactionSettings(
-                keepRecentMessages: 2
-            ))
-        )).value().getOrThrow()
+    let stateRoot = root + "/state"
+    let product = openProduct(config: ProductConfig(
+        settingsRoot: root + "/settings",
+        stateRoot: stateRoot,
+        workspaceRoot: workspace,
+        fixture: true,
+        asyncEnabled: false,
+        compactionOverride: Some(ProductCompactionSettings(
+            keepRecentMessages: 2
+        ))
+    )).value().getOrThrow()
+    var closeAttempted = false
+    try {
         let programBinding = NativeProgramContractBinding(product)
         let programSource =
             "const search = await tools.grep({\"pattern\":\"SymbolAnchor\",\"path\":\"src\",\"count\":true});\n" +
@@ -2293,7 +2295,9 @@ func runProductCoreAndRecoveryContract96(root: String, workspace: String, alphaS
         if (onlyProgramBudget) {
             let database = SqliteDatabase(stateRoot + "/state.db")
             try { runProgramBudgetContracts(product, programBinding, programSource, workspace, alphaSource, database) }
-            finally { database.close(); product.close().value().getOrThrow() }
+            finally { database.close() }
+            closeAttempted = true
+            product.close().value().getOrThrow()
             println("Native Program budget, durable refusal and both request DATA returns passed")
             return 0
         }
@@ -2730,83 +2734,96 @@ func runProductCoreAndRecoveryContract96(root: String, workspace: String, alphaS
             !partialProgramRunId.startsWith("error:"),
             "partial Program execution has a durable root Run; actual=" + partialProgramRunId)
         let denialDatabase = SqliteDatabase(stateRoot + "/state.db")
-        runProgramBudgetContracts(product, programBinding, programSource, workspace, alphaSource, denialDatabase)
+        try {
+            runProgramBudgetContracts(product, programBinding, programSource, workspace, alphaSource, denialDatabase)
 
-
-        for (scenario in [
-            ProductProgramDenialCase(
-                "write",
-                "return await tools.write({\"path\":\"src/alpha.cj\",\"content\":\"modified\"});"
-            ),
-            ProductProgramDenialCase(
-                "shell",
-                "return await tools.bash({\"command\":\"touch src/program-shell-escape\"});"
-            ),
-            ProductProgramDenialCase(
-                "network",
-                "return await tools[\"host.network.http\"]({\"intent_id\":\"fixture-network-probe\"});"
-            ),
-            ProductProgramDenialCase(
-                "nested-program",
-                "return await tools.run_program({\"source\":\"return 1;\"});"
-            ),
-            ProductProgramDenialCase(
-                "model-api",
-                "return await model.generate({\"prompt\":\"fixture\"});"
-            ),
-            ProductProgramDenialCase(
-                "provider-api",
-                "return await provider.complete({\"prompt\":\"fixture\"});"
-            )
-        ]) {
-            let rejectedSessionId = SessionId(
-                "durable-product-program-denied-" + scenario.name
-            )
-            product.fixtureProbe.getOrThrow().enqueueToolCallReply(
-                "fixture-program-denied-" + scenario.name,
-                programBinding.name,
-                objectValue([ValueField("code", textValue(scenario.source))])
-            )
-            let rejectedResult = product.applicationSession(
-                sessionId: Some(rejectedSessionId)
-            ).submit("Attempt prohibited Program access: " + scenario.name)
-            let rejectedRunId = match (rejectedResult) {
-                case Result.Ok(response) => match (response.snapshot) {
-                    case Some(snapshot) => Some(snapshot.runId.value)
-                    case None => None<String>
+            for (scenario in [
+                ProductProgramDenialCase(
+                    "write",
+                    "return await tools.write({\"path\":\"src/alpha.cj\",\"content\":\"modified\"});"
+                ),
+                ProductProgramDenialCase(
+                    "shell",
+                    "return await tools.bash({\"command\":\"touch src/program-shell-escape\"});"
+                ),
+                ProductProgramDenialCase(
+                    "network",
+                    "return await tools[\"host.network.http\"]({\"intent_id\":\"fixture-network-probe\"});"
+                ),
+                ProductProgramDenialCase(
+                    "nested-program",
+                    "return await tools.run_program({\"source\":\"return 1;\"});"
+                ),
+                ProductProgramDenialCase(
+                    "model-api",
+                    "return await model.generate({\"prompt\":\"fixture\"});"
+                ),
+                ProductProgramDenialCase(
+                    "provider-api",
+                    "return await provider.complete({\"prompt\":\"fixture\"});"
+                )
+            ]) {
+                let rejectedSessionId = SessionId(
+                    "durable-product-program-denied-" + scenario.name
+                )
+                product.fixtureProbe.getOrThrow().enqueueToolCallReply(
+                    "fixture-program-denied-" + scenario.name,
+                    programBinding.name,
+                    objectValue([ValueField("code", textValue(scenario.source))])
+                )
+                let rejectedResult = product.applicationSession(
+                    sessionId: Some(rejectedSessionId)
+                ).submit("Attempt prohibited Program access: " + scenario.name)
+                let rejectedRunId = match (rejectedResult) {
+                    case Result.Ok(response) => match (response.snapshot) {
+                        case Some(snapshot) => Some(snapshot.runId.value)
+                        case None => None<String>
+                    }
+                    case Result.Err(_) => None<String>
                 }
-                case Result.Err(_) => None<String>
+                let rejectionObserved = match (rejectedRunId) {
+                    case Some(runId) =>
+                        denialDatabase.scalarInt(
+                            "SELECT COUNT(*) FROM operation_receipts receipt " +
+                                "JOIN operations root_operation " +
+                                "ON root_operation.id=receipt.operation_id " +
+                                "WHERE root_operation.run_id='" + runId +
+                                "' AND receipt.outcome='failed'"
+                        ) == 1 && denialDatabase.scalarInt(
+                            "SELECT COUNT(*) FROM derived_operation_admissions " +
+                                "WHERE parent_operation_id IN (SELECT id FROM operations " +
+                                "WHERE run_id='" + runId + "')"
+                        ) == 0 && String.fromUtf8(File.readFrom(
+                            workspace + "/src/alpha.cj"
+                        )) == alphaSource
+                    case None => false
+                }
+                expect(
+                    rejectionObserved,
+                    "Product rejects forbidden PTC " + scenario.name +
+                        " before child admission or workspace effects"
+                )
             }
-            let rejectionObserved = match (rejectedRunId) {
-                case Some(runId) =>
-                    denialDatabase.scalarInt(
-                        "SELECT COUNT(*) FROM operation_receipts receipt " +
-                            "JOIN operations root_operation " +
-                            "ON root_operation.id=receipt.operation_id " +
-                            "WHERE root_operation.run_id='" + runId +
-                            "' AND receipt.outcome='failed'"
-                    ) == 1 && denialDatabase.scalarInt(
-                        "SELECT COUNT(*) FROM derived_operation_admissions " +
-                            "WHERE parent_operation_id IN (SELECT id FROM operations " +
-                            "WHERE run_id='" + runId + "')"
-                    ) == 0 && String.fromUtf8(File.readFrom(
-                        workspace + "/src/alpha.cj"
-                    )) == alphaSource
-                case None => false
-            }
-            expect(
-                rejectionObserved,
-                "Product rejects forbidden PTC " + scenario.name +
-                    " before child admission or workspace effects"
-            )
-        }
-        denialDatabase.close()
+        } finally { denialDatabase.close() }
         runNativeReadCancellationContract(root, workspace)
         runProgramCancellationRecoveryContract(root, workspace)
+        closeAttempted = true
         product.close().value().getOrThrow()
         runSignedPluginProductContract(root)
 
         requireProductCoreDurableReadback96(root, workspace, stateRoot, programBinding, sessionId, toolSessionId, seededSession, forkedSession, deliveredSession, laneExecutionSession, reviewExecutionRunId, programSessionId, programSource, partialProgramSessionId, partialProgramRunId)
+    } catch (failure: Exception) {
+        if (!closeAttempted) {
+            // Preserve the failing contract; a secondary cleanup failure is separate evidence.
+            try {
+                match (product.close()) {
+                    case Result.Err(error) => println("Core fixture Product cleanup failed: " + error.code)
+                    case Result.Ok(_) => ()
+                }
+            } catch (cleanup: Exception) { println("Core fixture Product cleanup threw: " + cleanup.message) }
+        }
+        throw failure
+    }
 }
 
 func requireProductCoreDurableReadback96(
