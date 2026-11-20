@@ -196,6 +196,7 @@
     "agent_store/src/sqlite_column_copy_test.cj",
     "agent_store/src/sqlite_exact_current_rows_test.cj",
     "agent_store/src/stored_frame_bulk_append_test.cj",
+    "agent_store/src/tool_input_attachment_test.cj",
     "agent_store/src/waiting_preparation_failure_test.cj"
   ],
   "agent_core": [

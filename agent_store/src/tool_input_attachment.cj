@@ -28,9 +28,12 @@ public func verifyToolInputAttachmentExecuting(tx: SqliteTransaction, operation:
 }
 
 public func retainToolInputAttachment(tx: SqliteTransaction, operation: OperationId, run: RunId,
-    thread: ThreadId, epoch: Int64, source: OperationRootSource, plan: NormalizedOperationPlan,
+    thread: ThreadId, epoch: Int64, source: OperationRootSource, expected: NormalizedOperationPlan,
     artifact: AgentValue): AgentValue {
-    let node = requireToolInputAttachmentRoot(tx, operation, run, thread, epoch, source, plan)
+    let node = requireToolInputAttachmentRoot(tx, operation, run, thread, epoch, source, expected)
+    // The complete expected plan matched inside this transaction. Publish
+    // data from the independently decoded Store row, not the caller's DOM.
+    let plan = node.plan
     let host = plan.canonicalArguments.field("host_plan").getOrThrow()
     let profile = host.field("input_attachment").getOrThrow()
     if (!toolInputAttachmentProfileValid(profile)) { throw IllegalStateException("input attachment profile is not frozen") }
