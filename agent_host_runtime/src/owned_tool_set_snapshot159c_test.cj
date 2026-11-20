@@ -193,47 +193,81 @@ private func ordinaryCatalogRecord221(value: PluginRegistryResult<ProductPluginR
     }
 }
 
+private func withOrdinaryNativeCatalog221(action: (HostJavaScriptPluginHost, ToolCatalog, ProductPluginRecord, String) -> Unit): Unit {
+    let parent = match (getVariable("TMPDIR")) {
+        case Some(value) => value
+        case None => "/tmp"
+    }
+    let fixture = match (getVariable("AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE")) {
+        case Some(value) => value
+        case None => throw IllegalStateException("original Native tool fixture is required")
+    }
+    let root = Directory.createTemp(parent).toString()
+    let source = root + "/source"
+    Directory.create(source, recursive: true)
+    copyVerifiedPluginSnapshot(fixture[..fixture.lastIndexOf("/").getOrThrow()], source)
+    File.writeTo(source + "/axyndra.plugin.json", (
+        "{\"id\":\"ordinary-catalog\",\"version\":\"1.0.0\"," +
+        "\"entry_kind\":\"native-executable\",\"entrypoint\":\"native-plugin-tool\"," +
+        "\"sdk_range\":\"[2.0.0,3.0.0)\",\"protocol_range\":\"axyndra-js-host-v2\"," +
+        "\"contributions\":[{\"kind\":\"tool\",\"name\":\"echo\"}]}"
+    ).toArray())
+    let registry = PluginRegistry(root + "/settings", root)
+    let host = HostJavaScriptPluginHost({ path => HostLocalReadTargetInspector(path) }, settingsRoot: root + "/settings")
+    let catalog = ToolCatalog()
+    try {
+        ordinaryCatalogRecord221(registry.importLocal(source)).close()
+        let record = ordinaryCatalogRecord221(registry.setEnabled("axyndra:ordinary-catalog", true))
+        try {
+            @Expect(host.ownRegistry(registry).isOk())
+            @Expect(hostMountAndRegisterPluginTools(record, host, catalog).isOk())
+            action(host, catalog, record, root)
+        } finally { record.close() }
+    } finally {
+        let _ = host.close()
+        registry.close()
+        remove(root, recursive: true)
+    }
+}
+
 @Test
 class OrdinaryCatalogLifetimeSmoke221 {
     @TestCase
     func actualPlainNativeCatalogRetiresAfterItsWholePublicationReturns(): Unit {
-        let parent = match (getVariable("TMPDIR")) {
-            case Some(value) => value
-            case None => "/tmp"
-        }
-        let fixture = match (getVariable("AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE")) {
-            case Some(value) => value
-            case None => throw IllegalStateException("original Native tool fixture is required")
-        }
-        let root = Directory.createTemp(parent).toString()
-        let source = root + "/source"
-        Directory.create(source, recursive: true)
-        copyVerifiedPluginSnapshot(fixture[..fixture.lastIndexOf("/").getOrThrow()], source)
-        File.writeTo(source + "/axyndra.plugin.json", (
-            "{\"id\":\"ordinary-catalog\",\"version\":\"1.0.0\"," +
-            "\"entry_kind\":\"native-executable\",\"entrypoint\":\"native-plugin-tool\"," +
-            "\"sdk_range\":\"[2.0.0,3.0.0)\",\"protocol_range\":\"axyndra-js-host-v2\"," +
-            "\"contributions\":[{\"kind\":\"tool\",\"name\":\"echo\"}]}"
-        ).toArray())
-        let registry = PluginRegistry(root + "/settings", root)
-        let host = HostJavaScriptPluginHost({ path => HostLocalReadTargetInspector(path) }, settingsRoot: root + "/settings")
-        let catalog = ToolCatalog()
-        try {
-            ordinaryCatalogRecord221(registry.importLocal(source)).close()
-            let record = ordinaryCatalogRecord221(registry.setEnabled("axyndra:ordinary-catalog", true))
+        withOrdinaryNativeCatalog221({ _, catalog, _, _ =>
+            @Expect(catalog.definitionNamesEqual159(["plugin.axyndra:ordinary-catalog.echo"]))
+            // No public Raw descriptor or snapshot escaped this Catalog.
+            // The distinct Host generation still owns its legacy graph.
+            @Expect(catalog.retireCatalogData159())
+        })
+    }
+    @TestCase
+    func unselectedPrimitiveDoesNotPinPrivateOperatorConfiguration(): Unit {
+        withOrdinaryNativeCatalog221({ host, _, record, root =>
+            let namespace = "axyndra:ordinary-catalog"
+            let generation = host.instanceGeneration(namespace)
+            let descriptor = match (host.servicePackageData81(namespace, generation)) {
+                case Result.Err(error) => throw IllegalStateException(error.code)
+                case Result.Ok(value) => value
+            }
+            // This is a valid selection for the installed package, but not for echo.
+            let path = root + "/settings/plugins/primitives.json"
+            File.writeTo(path, ("{\"version\":1,\"plugins\":[{\"namespace\":\"" + namespace +
+                "\",\"package_digest\":\"" + descriptor.contentDigest +
+                "\",\"tools\":[{\"name\":\"other\",\"profile\":\"frozen-primitives-v1\"," +
+                "\"services\":[\"child.start\"],\"preparation_provider\":\"provider\"}]}]}").toArray())
+            let probe = record.descriptor.deriveCopiedDataPayment(4096)
             try {
-                @Expect(host.ownRegistry(registry).isOk())
-                @Expect(hostMountAndRegisterPluginTools(record, host, catalog).isOk())
-                @Expect(catalog.definitionNamesEqual159(["plugin.axyndra:ordinary-catalog.echo"]))
-                // No public Raw descriptor or snapshot escaped this Catalog.
-                // The distinct Host generation still owns its legacy graph.
-                @Expect(catalog.retireCatalogData159())
-            } finally { record.close() }
-        } finally {
-            let _ = host.close()
-            registry.close()
-            remove(root, recursive: true)
-        }
+                let before = probe.retainedCustodyUsage113()
+                for (_ in 0..2) {
+                    let absent = match (host.primitiveConfiguration111(namespace, "echo", generation)) {
+                        case Result.Err(error) => throw IllegalStateException(error.code)
+                        case Result.Ok(result) => result.isNone()
+                    }
+                    @Expect(absent)
+                    catalogSnapshotUsage159c(probe.retainedCustodyUsage113(), before)
+                }
+            } finally { probe.close() }
+        })
     }
 }
-

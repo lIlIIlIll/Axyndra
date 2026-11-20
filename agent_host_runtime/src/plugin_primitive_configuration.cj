@@ -420,19 +420,6 @@ class HostPrimitiveConfigurationCache111 {
         owned191 = Some(result); pendingOwned191 = None<LogicalJsonOwnerReservation>
         result
     }
-    func loadCompatibility191(host: HostJavaScriptPluginHost, settingsRoot: String, namespace: String,
-        packageDigest: String, generation: UInt64): Result<?HostPrimitiveConfiguration111> {
-        let selected = match (loadOwned191(host, settingsRoot, namespace, packageDigest, generation)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        let result = primitiveCompatibilityWholeFrame191(selected)
-        // Only the temporary private view/header is returned. Its opaque shell
-        // was never given to the Raw consumer; real backing remains paid Held.
-        match (selected) { case Some(value) => value.returnOwnedPrimitive191(); case None => () }
-        Result.Ok(result)
-    }
-    private func primitiveCompatibilityWholeFrame191(selected: ?HostOwnedPrimitiveConfiguration191): ?HostPrimitiveConfiguration111 {
-        match (selected) { case Some(value) => Some(value.exportCompatibilityHeld191()); case None => None<HostPrimitiveConfiguration111> }
-    }
     func loadOwned191(host: HostJavaScriptPluginHost, settingsRoot: String, namespace: String,
         packageDigest: String, generation: UInt64): Result<?HostOwnedPrimitiveConfiguration191> {
         let path = Path(settingsRoot).join("plugins").join("primitives.json").toString()

@@ -1036,19 +1036,16 @@ public open class HostJavaScriptPluginHost {
     }
     func primitiveConfiguration111(namespace: String, localTool: String,
         generation: UInt64): Result<?HostPrimitiveConfiguration111> {
-        let descriptor = match (servicePackageData81(namespace, generation)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        let selected = match (primitiveConfigurations111.loadCompatibility191(this, settingsRoot, namespace, descriptor.contentDigest, generation)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        match (selected) {
-            case Some(value) => if (value.permits(localTool)) {
-                let profile = match (toolExecutionProfile(namespace, localTool, generation)) {
-                    case Result.Err(error) => return Result.Err(error); case Result.Ok(actual) => actual }
-                if (descriptor.entryKind != PluginEntryKind.NativeExecutable || profile != PluginToolExecutionProfile.Brokered) {
-                    return hostPluginResourceError("child.profile_invalid", "primitive selection requires an actual Native brokered Tool") }
-                return Result.Ok(Some(value)) }
-            case None => () }
-        Result<?HostPrimitiveConfiguration111>.Ok(Option<HostPrimitiveConfiguration111>.None)
+        match (primitiveConfigurationOwned191(namespace, localTool, generation)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(None) => return Result<?HostPrimitiveConfiguration111>.Ok(None<HostPrimitiveConfiguration111>)
+            case Result.Ok(Some(selected)) =>
+                // Only an actual Raw consumer keeps the backing. Return the private
+                // view after the complete export helper has registered that debt.
+                let raw = selected.exportCompatibilityHeld191()
+                selected.returnOwnedPrimitive191()
+                return Result.Ok(Some(raw))
+        }
     }
     func primitiveConfigurationOwned191(namespace: String, localTool: String,
         generation: UInt64): Result<?HostOwnedPrimitiveConfiguration191> {
