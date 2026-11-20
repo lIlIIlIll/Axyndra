@@ -55,8 +55,10 @@ func productContextProviderReadInput159(host: ProductJavaScriptPluginHost, names
         if (cancellation.isCancelled()) { return pluginProcessError<Unit>("context.update_source_stale", "context selection was withdrawn") }
         match (host.servicePackage(namespace, binding.generation)) {
             case Result.Err(_) => pluginProcessError<Unit>("context.update_source_stale", "content provider was revoked or replaced")
-            case Result.Ok(value) => if (value.textEquals(PluginDescriptorText.ContentDigest, binding.digest)) { Result.Ok(()) }
+            case Result.Ok(value) => try {
+                if (value.textEquals(PluginDescriptorText.ContentDigest, binding.digest)) { Result.Ok(()) }
                 else { pluginProcessError<Unit>("context.update_source_stale", "content provider package changed") }
+            } finally { value.close() }
         }
     }
     let read = ToolPreparationRead(namespace, binding.digest, configuration,

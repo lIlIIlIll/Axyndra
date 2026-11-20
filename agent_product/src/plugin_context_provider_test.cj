@@ -56,6 +56,36 @@ class ContextProviderProductFixture {
 @Test
 class PluginContextProviderTests {
     @TestCase
+    func repeatedReadValidityDoesNotRetainPluginDescriptors(): Unit {
+        let fixture = ContextProviderProductFixture()
+        try {
+            let host = fixture.product.vnext.javascriptPlugins
+            let input = InitialContextPreparationInput159(fixture.thread, RunId("context-validity-run"),
+                1, InvocationContextProjection(), fixture.cancellation.token)
+            let prepared = lifecycleTestRequire(productContextProviderReadInput159(host, fixture.namespace, "context",
+                input, listValue([]), objectValue([]), fixture.cancellation.token, [], "validity-check"))
+            let descriptor = lifecycleTestRequire(host.servicePackage(fixture.namespace, host.instanceGeneration(fixture.namespace)))
+            let probe = try { descriptor.deriveCopiedDataPayment(1024) } finally { descriptor.close() }
+            try {
+                let before = probe.retainedCustodyUsage113()
+                for (_ in 0..2) {
+                    @Assert(prepared.validity().isOk())
+                    let after = probe.retainedCustodyUsage113()
+                    @Expect(after[2], before[2])
+                    @Expect(after[0], before[0])
+                }
+                match (fixture.product.setPluginEnabled(fixture.namespace, false)) {
+                    case PluginRegistryResult.Ok(record) => record.close()
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                match (prepared.validity()) {
+                    case Result.Err(error) => @Expect(error.code, "context.update_source_stale")
+                    case Result.Ok(_) => throw IllegalStateException("revoked provider passed read validity")
+                }
+            } finally { probe.close() }
+        } finally { fixture.close() }
+    }
+    @TestCase
     func onlyContextAndResourceContributionsInstallWithoutInventingToolOrModelFacts(): Unit {
         let fixture = ContextProviderProductFixture()
         try {
