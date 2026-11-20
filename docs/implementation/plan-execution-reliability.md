@@ -11665,3 +11665,24 @@ On detached SQLite copies, the main store had 35 Runs, 69 Operations and 69 Rece
 On published `6cc417b5c2`, E2207 rebuilt the Runtime dependency and the Store Native test executable using the pinned SDK. The SQLite case `ToolInputAttachmentStoreTests.retainedEvidenceCannotMutateTheExecutingPlan` passed in isolation. The same ELF (`d0d3308cea43659f341b732303ead3abf2ed4ddd26e9718476a17568b337f560`) then ran the full natural inventory: **263 passed, zero skipped, failed or errored**. This run did not include the private Host attachment or Domain byte-buffer changes. Evidence: `publicattachmentstore2207/summary.json`.
 
 E2219 assembled all three distributions on published `7a90aed983`. Minimal contained no plugins and passed assembly, clean-environment startup and empty offline startup. Coding contained nine plugins and passed assembly, Skills/Program/Shell wire checks, clean-environment startup and setup. Full contained 17 plugins and passed those six checks plus the Eval wire check. Minimal packaged ELF: `df7d6fdbf62821bf7c21c24e23d76d059bffd10c6e864e4724c78b34460536e3`. Coding and Full packaged ELF: `1d46957d413ca922af54897942977e0a8b74aeeb9ccfc7f25daf3d86c437ab35`. Evidence: `publishedthreepackages2219/summary.json`. These 16 checks do not cover the later Host change, the five-second provider request, or complete frontend and release acceptance.
+
+## Product inventory and matched performance at `7a90aed983`
+
+E2211 ran every eligible Product case on Native ELF `162d30b3b82ffd8aff618fd34255da8a0c92bdfb4a5d1c5a8429f2f9777a7daa`: **437 passed, two failed, 667 previously deferred cases were not run** (1,106 enumerated). Both failures were SIGSEGV with a dynamic `CheckAndPush → GCTib::ForEachBitmapWord` stack. `PluginDocumentServiceTests.namespaceCeilingAndAClaimedSuccessWithoutTheFrozenReceiptCannotWrite` reached `Mutator::GCPhasePreForward`; `PluginRuntimeContractTests.commandOnlyPiPluginActivationIsAdvertisedAndRevoked` reached `Mutator::GcPhaseEnum`. Both remain failures within the approved GC deferral. No Product-wide pass. Evidence: `publiccontextproduct2211/qualified.json`.
+
+E2216 and E2224 compared base `4d88fa6072` with `7a90aed983` under the same fixed SDK. Both arms passed the seven original absolute gates. The second set of measurements used two distinct overlapping workers, verified their exact payload and progress, and checked physical PID disappearance after close. Times below are nearest-rank P95 in microseconds unless marked otherwise.
+
+| Measurement | Base | Candidate |
+|---|---:|---:|
+| Extension cold activation / first call / steady IPC | 71,067 / 2,786 / 9,230 | 49,420 / 519 / 241 |
+| Extension cancellation (including 100 ms trigger) | 128,390 | 127,116 |
+| Extension host RSS (bytes) | 29,290,496 | 20,942,848 |
+| CLI help / declarative inspect cold start | 146,413 / 194,191 | 455,892 / 452,809 |
+| CLI help / inspect peak RSS (bytes) | 93,122,560 / 93,278,208 | 51,384,320 / 51,712,000 |
+| Overlapping 256-byte / 32-KiB calls: pair span | 10,036 / 95,774 | 741 / 3,415 |
+| Same calls: per-worker close to observed PID disappearance | 12,814 / 12,506 | 20,019 / 19,999 |
+| Cancellation trigger to observed PID disappearance | 27,296 | 17,055 |
+
+CLI cold start and normal worker close were slower despite lower RSS and shorter overlapping calls. The extension probes used 12 samples (240 for steady IPC), each CLI profile used 20, and each output size used 12 pairs. The candidate output driver returns its payload after checking the bytes and recording the end timestamp; the cancellation drivers are identical. Only the independent worker benchmark's 266 candidate source inputs were checked unchanged at `56589ab751`; no packaged CLI result is transferred to that change. Evidence: `publishedmatchedload2216/qualified.json` and `publicpairedstartup2224/{baseline,candidate}/summary.json`.
+
+Neither E2212 nor E2217 measured the five-second model request. During fixture installation, both read-only workspace mounts rejected the registry writer lock before the first `--print`. Both process trees closed; neither arm has a timed model invocation. This does not supersede the earlier five-second timeout or qualify the private Registry change.
