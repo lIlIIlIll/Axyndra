@@ -117,7 +117,7 @@ class PluginPeerScopeTests111 {
             let duplicate=peerRequire111(f.store.prepareDerivedOperation(OperationId("duplicate"),f.parent,f.run,f.source,
                 exactServiceRequestKey(f.source.callId(),f.childPlan),f.childPlan))
             @Expect(duplicate.value,f.child.value)
-            peerRequire111(f.store.settleDerivedOperation(f.run,f.parent,VNextOperationReceipt("receipt-"+f.child.value,f.child,
+            peerRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run,f.parent,VNextOperationReceipt("receipt-"+f.child.value,f.child,
                 OperationOutcome.Completed,objectValue([]),objectValue([]),15)))
             @Expect(f.verify().isError())
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations"),2)

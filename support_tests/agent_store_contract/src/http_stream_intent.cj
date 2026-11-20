@@ -364,11 +364,11 @@ func httpStreamServiceIntentScenario(committed: Bool, scenario: String): Unit {
         let receipt = fixture.receipt(outcome)
         if (scenario == "settlement-startup-recheck") {
             streamContractCorruptStartup(database)
-            expect(store.settleDerivedOperation(fixture.run, fixture.parent, receipt).isError(),
+            expect(settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, receipt).isError(),
                 label + " settlement cannot forget exact lease startup provenance")
             streamContractRestoreStartup(database, startupDetail)
         }
-        httpContractRequire(store.settleDerivedOperation(fixture.run, fixture.parent, receipt), label + " settlement")
+        httpContractRequire(settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, receipt), label + " settlement")
         let replay = httpContractRequire(store.prepareDerivedOperation(OperationId("stream-replay"), fixture.parent,
             fixture.run, fixture.source, fixture.key, fixture.childPlan), label + " replay identity")
         expect(replay.value == fixture.child.value && store.markExecuting(replay, fixture.run, fixture.childPlan, 40, false).isError() &&
@@ -416,20 +416,20 @@ func httpStreamServiceCancellationScenario(committed: Bool, stage: String): Unit
                 store.markExecutionHandoff(fixture.child, fixture.run, fixture.thread, 40).isError(),
                 "cleanup permission cannot create new admission, execution or handoff")
             for (forbidden in [OperationOutcome.Completed, OperationOutcome.Failed]) {
-                expect(store.settleDerivedOperation(fixture.run, fixture.parent, fixture.receipt(forbidden)).isError(),
+                expect(settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, fixture.receipt(forbidden)).isError(),
                     "cancelling channel cannot claim known success or failure")
             }
-            expect(store.settleDerivedOperation(fixture.run, fixture.parent,
+            expect(settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent,
                 fixture.receipt(if (stage.startsWith("executing")) { OperationOutcome.Rejected } else { OperationOutcome.Unknown })).isError(),
                 "cancellation cannot downgrade an executing child or invent execution from preparation")
             database.execute("UPDATE runs SET epoch=epoch+1 WHERE id='stream-target-run'")
-            expect(store.settleDerivedOperation(fixture.run, fixture.parent, receipt).isError(), "cancellation retains original epoch")
+            expect(settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, receipt).isError(), "cancellation retains original epoch")
             database.execute("UPDATE runs SET epoch=epoch-1 WHERE id='stream-target-run'")
             let startupDetail = database.query("SELECT detail FROM operation_receipts WHERE operation_id='stream-startup-operation'")[0].required(0)
             streamContractCorruptStartup(database)
-            expect(store.settleDerivedOperation(fixture.run, fixture.parent, receipt).isError(), "cancellation retains exact startup proof")
+            expect(settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, receipt).isError(), "cancellation retains exact startup proof")
             streamContractRestoreStartup(database, startupDetail)
-            httpContractRequire(store.settleDerivedOperation(fixture.run, fixture.parent, receipt), "existing channel obligation settles")
+            httpContractRequire(settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, receipt), "existing channel obligation settles")
             let parentResult = httpContractRequire(fixture.runtime.resolveOperation(ItemId("stream-parent-result"), fixture.parent,
                 CanonicalToolCallId(fixture.call.callId), fixture.rootPlan, OperationAttemptStage.Executing,
                 Result<ToolInvocationResult>.Err(AgentError(AgentErrorKind.Cancelled, "channel.cancelled", "owned channel cancelled")),
@@ -445,7 +445,7 @@ func httpStreamServiceCancellationScenario(committed: Bool, stage: String): Unit
         let retained = httpContractRequire(store.loadDerivedOperationReceipt(fixture.child, fixture.run), "load cancelled channel Receipt").getOrThrow()
         expect(retained.outcome == outcome && database.query("SELECT state FROM runs WHERE id='stream-target-run'")[0].required(0) == "cancelled" &&
             store.markExecuting(fixture.child, fixture.run, fixture.childPlan, 44, false).isError() &&
-            store.settleDerivedOperation(fixture.run, fixture.parent, receipt).isError() &&
+            settleFixtureDerived(store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, receipt).isError() &&
             database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='stream-child'") == 1 &&
             database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE operation_id='stream-child' AND kind='operation_execution_handoff'") ==
                 (if (stage == "executing") { 1 } else { 0 }) && database.query("PRAGMA foreign_key_check").isEmpty(),

@@ -76,7 +76,7 @@ class ServiceEffectStoreFixture {
         VNextOperationReceipt("receipt-" + prefix + "-child", child, outcome,
             objectValue([ValueField("observed", textValue("readonly root, mutating transport"))]), objectValue([]), 36)
     }
-    func settle(outcome: OperationOutcome): Result<Unit> { store.settleDerivedOperation(run, parent, receipt(outcome)) }
+    func settle(outcome: OperationOutcome): Result<Unit> { settleFixtureDerived(store, child, childPlan, run, parent, receipt(outcome)) }
     func startupId(): String { prefix + "-startup-operation" }
     func countChild(table: String): Int64 {
         database.scalarInt("SELECT COUNT(*) FROM " + table + " WHERE " +

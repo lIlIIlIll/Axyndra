@@ -332,8 +332,8 @@ func productDocumentPayloadReplacementScenario(mode: String): Unit {
         } else {
             @Expect(result.isError());@Expect(latest.encoded,original.original.encoded);@Expect(latest.revision,original.original.revision)
             @Expect(lifecycleTestRequire(store.loadDerivedOperationReceipt(child,run)).isNone())
-            lifecycleTestRequire(store.settleDerivedOperation(run,parent,VNextOperationReceipt(receipt.receiptId,child,
-                OperationOutcome.Unknown,objectValue([]),objectValue([]),35)))
+            lifecycleTestRequire(withDerivedReceiptBinding(child, childPlan.bindingDigest, false, { binding => store.settleDerivedOperation(run,parent,VNextOperationReceipt(receipt.receiptId,child,
+                OperationOutcome.Unknown,objectValue([]),objectValue([]),35), binding) }))
             if(mode=="cancelled"){@Expect(cancellation.token.isCancelled())}
         }
         @Expect(reader.collect());@Expect(reader.runCommit({_=>Result<Unit>.Ok(())}).isError())

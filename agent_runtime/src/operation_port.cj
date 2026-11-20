@@ -439,11 +439,13 @@ public interface OperationRuntimePort {
     func settleDerivedOperation(
         runId: RunId,
         parentOperationId: OperationId,
-        receipt: VNextOperationReceipt
+        receipt: VNextOperationReceipt,
+        binding: DerivedReceiptBinding
     ): Result<Unit> {
         let _ = runId
         let _ = parentOperationId
         let _ = receipt
+        let _ = binding
         Result.Err(AgentError(
             AgentErrorKind.RecoveryRequired,
             "operation.derived_settlement_unavailable",
@@ -938,14 +940,15 @@ public class InMemoryOperationRuntimePort <: OperationRuntimePort {
     public func settleDerivedOperation(
         runId: RunId,
         parentOperationId: OperationId,
-        receipt: VNextOperationReceipt
+        submitted: VNextOperationReceipt,
+        binding: DerivedReceiptBinding
     ): Result<Unit> {
         lock.lock()
         try {
             var child: ?MemoryOperationPlanEntry = None
             var parentActive = false
             for (entry in entries) {
-                if (entry.operationId.value == receipt.operationId.value &&
+                if (entry.operationId.value == submitted.operationId.value &&
                     entry.runId.value == runId.value) {
                     match (entry.parentOperationId) {
                         case Some(parent) => if (parent.value == parentOperationId.value) {
@@ -965,6 +968,11 @@ public class InMemoryOperationRuntimePort <: OperationRuntimePort {
                     "operation.derived_settlement_owner_invalid",
                     "derived receipt does not belong to this parent Operation"
                 )
+            }
+            let receipt = match (binding.checkedReceipt(submitted, selected.plan.bindingDigest)) {
+                case Some(value) => value
+                case None => return operationPortConflict("operation.derived_binding_changed",
+                    "derived receipt differs from its frozen operation binding")
             }
             for (existing in derivedReceipts where
                 existing.operationId.value == receipt.operationId.value &&

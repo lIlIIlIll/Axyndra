@@ -253,9 +253,28 @@ func externalDerivedCase(mode: String): Unit {
             try {
                 expect(!output.isError && output.output.field("sentinel").getOrThrow().text == "EXTERNAL_DERIVED_SCOPE" &&
                     fixture.probe.calls == 1, "the admitted child executes its exact original pipeline once")
-                fixture.store.settleDerivedOperation(parentContext.runId, fixture.parent.operationId,
-                    VNextOperationReceipt("receipt-" + child.operationId.value, child.operationId, OperationOutcome.Completed,
-                        output.output, objectValue([]), agentUtcMillis())).value().getOrThrow()
+                let receiptRun = parentContext.runId
+                let verification = objectValue([ValueField("sentinel", textValue("kept"))])
+                let receipt = VNextOperationReceipt("receipt-" + child.operationId.value, child.operationId,
+                    OperationOutcome.Completed, output.output, verification, agentUtcMillis())
+                let expired = child.withReceiptBinding(true, { check => check })
+                expect(fixture.store.settleDerivedOperation(receiptRun, fixture.parent.operationId,
+                    receipt, expired).isError(), "retained comparison handle is inert after its supplying frame returns")
+                let frozen = fixture.database.query("SELECT request_digest FROM derived_operation_admissions WHERE operation_id=?",
+                    [SqlParameter.Text(child.operationId.value)])[0].required(0)
+                expect(withDerivedReceiptBinding(OperationId("another-child"), frozen, true, { wrong =>
+                    fixture.store.settleDerivedOperation(receiptRun, fixture.parent.operationId, receipt, wrong)
+                }).isError() && withDerivedReceiptBinding(child.operationId, frozen + "-changed", true, { wrong =>
+                    fixture.store.settleDerivedOperation(receiptRun, fixture.parent.operationId, receipt, wrong)
+                }).isError(), "neither a sibling with equal bytes nor a different digest can settle the child")
+                expect(fixture.store.loadDerivedOperationReceipt(child.operationId, receiptRun).value().getOrThrow().isNone(),
+                    "rejected comparison cannot consume a reserved Receipt")
+                child.withReceiptBinding(true, { binding => fixture.store.settleDerivedOperation(receiptRun,
+                    fixture.parent.operationId, receipt, binding) }).value().getOrThrow()
+                let stored = fixture.store.loadDerivedOperationReceipt(child.operationId, receiptRun).value().getOrThrow().getOrThrow()
+                expect(verification.field("request_digest").isNone() && stored.verification.field("sentinel").getOrThrow().text == "kept" &&
+                    child.textEquals(PreparedMetadataText.PlanBindingDigest, stored.verification.field("request_digest").getOrThrow().text),
+                    "persisted verification uses the stored digest without changing the caller's evidence")
                 expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'") == 1 &&
                     fixture.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='operation_execution_handoff'") == 2 &&
                     fixture.database.query("PRAGMA foreign_key_check").isEmpty(),
@@ -326,9 +345,10 @@ func externalDerivedCase(mode: String): Unit {
                 !actual.provesReturnedCancellation(fixture.parent, failure) &&
                 !actual.provesReturnedCancellation(child, AgentError(failure.kind, failure.code, failure.message)),
                 "only the original returned executor observation proves its exact Prepared cancellation; copied errors and naked tokens do not")
-            fixture.store.settleDerivedOperation(parentContext.runId, fixture.parent.operationId,
+            let receiptRun = parentContext.runId
+            child.withReceiptBinding(false, { binding => fixture.store.settleDerivedOperation(receiptRun, fixture.parent.operationId,
                 VNextOperationReceipt("receipt-" + child.operationId.value, child.operationId, OperationOutcome.Cancelled,
-                    objectValue([ValueField("error_code", textValue(failure.code))]), objectValue([]), agentUtcMillis())).value().getOrThrow()
+                    objectValue([ValueField("error_code", textValue(failure.code))]), objectValue([]), agentUtcMillis()), binding) }).value().getOrThrow()
             expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='cancelled'") == 1 &&
                 fixture.database.scalarInt("SELECT COUNT(*) FROM operations WHERE state='recovery_required'") == 0 &&
                 sameNormalizedOperationPlan(fixture.store.loadPlan(child.operationId, parentContext.runId).value().getOrThrow(), child.operationPlan) &&

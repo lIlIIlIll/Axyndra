@@ -9,6 +9,12 @@ import std.unittest.testmacro.*
 import yjson.*
 import yjson_support.*
 
+func settleFixtureDerived(store: OperationRuntimePort, child: OperationId, frozen: NormalizedOperationPlan,
+    run: RunId, parent: OperationId, receipt: VNextOperationReceipt): Result<Unit> {
+    withDerivedReceiptBinding(child, frozen.bindingDigest, false, { binding =>
+        store.settleDerivedOperation(run, parent, receipt, binding) })
+}
+
 private func childRequire111<T>(result: Result<T>): T {
     match (result) { case Result.Ok(value) => value
         case Result.Err(error) => throw IllegalStateException("child fixture: " + error.code) }
@@ -121,7 +127,7 @@ private class ChildStoreFixture111 {
         childRequire111(store.markExecutionHandoffWithSource(Some(source),id,run,thread,17))
     }
     func launchReceipt(): Unit {
-        childRequire111(store.settleDerivedOperation(run,parent,VNextOperationReceipt("receipt-"+child.value,child,
+        childRequire111(settleFixtureDerived(store, child, childPlan, run,parent,VNextOperationReceipt("receipt-"+child.value,child,
             OperationOutcome.Completed,objectValue([ValueField("schema",textValue("axyndra.child-launch-result/v1")),
                 ValueField("child_id",textValue("observed-child")),ValueField("run_id",textValue("observed-run")),
                 ValueField("thread_id",textValue("observed-thread"))]),objectValue([
@@ -171,7 +177,7 @@ class PluginChildScopeTests111 {
                 try {
                     f.parentHandoff()
                     if (outcome == OperationOutcome.Rejected) { childRequire111(f.prepareChild()) } else { f.childHandoff() }
-                    childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+                    childRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run, f.parent, VNextOperationReceipt(
                         "receipt-" + f.child.value, f.child, outcome, objectValue([]), objectValue([]), 15)))
                     @Assert(f.commitParentFailure())
                     let completed = f.runtime.finish(RunState.Completed, 1000)
@@ -204,7 +210,7 @@ class PluginChildScopeTests111 {
         var pressure: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
         try {
             f.parentHandoff(); f.childHandoff()
-            childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+            childRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run, f.parent, VNextOperationReceipt(
                 "receipt-" + f.child.value, f.child, OperationOutcome.Failed, objectValue([]), objectValue([]), 15)))
             @Assert(f.commitParentFailure())
             let held = original.deriveRetainedLease(); pressure = Some(held)
@@ -238,7 +244,7 @@ class PluginChildScopeTests111 {
             let f = ChildStoreFixture111(allocation: Some(allocate))
             try {
                 f.parentHandoff(); f.childHandoff()
-                childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+                childRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run, f.parent, VNextOperationReceipt(
                     "receipt-" + f.child.value, f.child, OperationOutcome.Failed, objectValue([]), objectValue([]), 15)))
                 @Assert(f.commitParentFailure())
                 let marker = "projection-argument-canary"
@@ -280,7 +286,7 @@ class PluginChildScopeTests111 {
             let f = ChildStoreFixture111()
             try {
                 f.parentHandoff(); f.childHandoff()
-                childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt(
+                childRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run, f.parent, VNextOperationReceipt(
                     "receipt-" + f.child.value, f.child, OperationOutcome.Failed, objectValue([]), objectValue([]), 15)))
                 @Assert(f.commitParentFailure())
                 if (mode == "unknown") { f.database.execute("UPDATE operation_receipts SET outcome='unknown' WHERE operation_id='primitive-child'") }
@@ -343,7 +349,7 @@ class PluginChildScopeTests111 {
             @Expect(f.verify().isOk(), true)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM plan_action_admissions"), 1)
             @Expect(f.database.scalarInt("SELECT attempt_no FROM plan_action_admissions"), 1)
-            childRequire111(f.store.settleDerivedOperation(f.run, f.parent, VNextOperationReceipt("receipt-" + f.child.value,
+            childRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run, f.parent, VNextOperationReceipt("receipt-" + f.child.value,
                 f.child, OperationOutcome.Unknown, objectValue([]), objectValue([]), 15)))
             let owner = plans.openInspection204(f.run, original).value().getOrThrow()
             let loan = owner.beginConsumer204()
@@ -397,7 +403,7 @@ class PluginChildScopeTests111 {
                 f.source, exactServiceRequestKey(f.source.callId(), f.childPlan), f.childPlan))
             @Expect(duplicate.value, f.child.value)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations"), 2)
-            childRequire111(f.store.settleDerivedOperation(f.run, f.parent,
+            childRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run, f.parent,
                 VNextOperationReceipt("receipt-" + f.child.value, f.child, OperationOutcome.Completed,
                     objectValue([]), objectValue([]), 15)))
             @Expect(f.verify().isError(), true)
@@ -432,7 +438,7 @@ class PluginChildWaitScopeTests111 {
             @Expect(f.store.pluginChildStartReceipt111(f.source,OperationId("foreign-parent"),wait,f.run,f.thread,f.epoch,plan).isError())
             @Expect(f.store.pluginChildStartReceipt111(f.source,f.parent,wait,RunId("foreign-run"),f.thread,f.epoch,plan).isError())
             @Expect(f.store.pluginChildStartReceipt111(f.source,f.parent,wait,f.run,f.thread,f.epoch+1,plan).isError())
-            childRequire111(f.store.settleDerivedOperation(f.run,f.parent,VNextOperationReceipt("receipt-"+wait.value,wait,
+            childRequire111(settleFixtureDerived(f.store, wait, plan, f.run,f.parent,VNextOperationReceipt("receipt-"+wait.value,wait,
                 OperationOutcome.Completed,objectValue([]),objectValue([]),18)))
             @Expect(f.waitReceipt().isError());@Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs"),1)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts"),2)

@@ -376,7 +376,7 @@ func httpParentIntentScenario(committed: Bool, method: String, scenario: String)
             let outcome = if (scenario.endsWith("rejected")) { OperationOutcome.Rejected }
                 else if (scenario.endsWith("completed")) { OperationOutcome.Completed }
                 else if (scenario.endsWith("failed")) { OperationOutcome.Failed } else { OperationOutcome.Unknown }
-            let settled = store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-http-child", child,
+            let settled = settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-http-child", child,
                 outcome, objectValue([]), objectValue([]), 13))
             if (outcome == OperationOutcome.Rejected && scenario != "cancelling-prepared-handoff-rejected") {
                 httpContractRequire(settled, label + " unexecuted cancellation settlement")
@@ -434,7 +434,7 @@ func httpParentIntentScenario(committed: Bool, method: String, scenario: String)
             database.execute("UPDATE runs SET state='cancelling' WHERE id='http-run'")
             let outcome = if (scenario == "cancelling-unknown") { OperationOutcome.Unknown }
                 else if (scenario == "cancelling-failed") { OperationOutcome.Failed } else { OperationOutcome.Completed }
-            let settled = store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-http-child", child,
+            let settled = settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-http-child", child,
                 outcome, objectValue([]), objectValue([]), 15))
             if (outcome == OperationOutcome.Unknown) {
                 httpContractRequire(settled, label + " uncertain cancellation settlement")
@@ -452,14 +452,14 @@ func httpParentIntentScenario(committed: Bool, method: String, scenario: String)
             database.execute(if (scenario == "cancel-before-settle") {
                 "UPDATE runs SET state='cancelled' WHERE id='http-run'"
             } else { "UPDATE runs SET epoch=epoch+1 WHERE id='http-run'" })
-            expect(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-http-child", child,
+            expect(settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-http-child", child,
                 OperationOutcome.Completed, objectValue([]), objectValue([]), 15)).isError() &&
                 database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='http-child'") == 0,
                 label + " stale HTTP completion cannot settle against cancelled or changed parent authority")
             return
         }
         let outcome = if (scenario == "unknown-replay") { OperationOutcome.Unknown } else { OperationOutcome.Completed }
-        httpContractRequire(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-http-child", child,
+        httpContractRequire(settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-http-child", child,
             outcome, objectValue([ValueField("status", textValue("retained"))]), objectValue([]), 15)), label + " settlement")
         let receipt = store.loadDerivedOperationReceipt(child, run).value().getOrThrow().getOrThrow()
         expect(receipt.outcome == outcome, label + " records the actual child outcome")

@@ -119,7 +119,7 @@ func documentServiceScenario(committed: Bool, read: Bool, scenario: String): Uni
         httpContractRequire(admitted, label + " admitted exact child")
         if (scenario == "cancelling-prepared-rejected") {
             documentBeginCancellation(runtime, cancellation, run, active.epoch, database, label)
-            httpContractRequire(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-document-child", child,
+            httpContractRequire(settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-document-child", child,
                 OperationOutcome.Rejected, objectValue([]), objectValue([]), 13)), label + " close unexecuted obligation")
             expect(repository.read(thread, LaneId("main"), "axyndra:workflow", "todo").value().getOrThrow().encoded == original.encoded &&
                 store.markExecuting(child, run, childPlan, 14, false).isError(), label + " rejection writes no document and cannot reexecute")
@@ -183,7 +183,7 @@ func documentServiceScenario(committed: Bool, read: Bool, scenario: String): Uni
         let participant = DocumentCommitProbe(scenario == "participant-rollback")
         let settle = { =>
             if (outcome != OperationOutcome.Completed || scenario == "unguarded-completed") {
-                return store.settleDerivedOperation(run, parent, receipt) }
+                return settleFixtureDerived(store, child, childPlan, run, parent, receipt) }
             if (scenario.startsWith("participant-")) {
                 return store.settlePluginDocumentOperation(run, parent, receipt, { => Result.Ok(()) }, participant) }
             store.settlePluginDocumentOperation(run, parent, receipt, { =>
@@ -216,7 +216,7 @@ func documentServiceScenario(committed: Bool, read: Bool, scenario: String): Uni
                 expect(current.revision == original.revision && current.encoded == original.encoded &&
                     database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 0,
                     label + " cancelled transaction rolls back document and completed Receipt together")
-                httpContractRequire(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-document-child", child,
+                httpContractRequire(settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-document-child", child,
                     OperationOutcome.Unknown, objectValue([]), objectValue([]), 16)), label + " close the existing handed obligation as Unknown")
                 expect(store.loadDerivedOperationReceipt(child, run).value().getOrThrow().getOrThrow().outcome == OperationOutcome.Unknown,
                     label + " cancellation cannot turn the handed child into a known failure")
@@ -269,7 +269,7 @@ func documentServiceScenario(committed: Bool, read: Bool, scenario: String): Uni
                 httpContractRequire(settle(), label + " retry atomic settlement only; no new execution")
             }
             if (scenario == "changed-before-settle") {
-                httpContractRequire(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-document-child", child,
+                httpContractRequire(settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-document-child", child,
                     OperationOutcome.Unknown, objectValue([]), objectValue([]), 16)), label + " close old uncertainty after competing CAS")
                 expect(repository.read(thread, LaneId("main"), "axyndra:workflow", "todo").value().getOrThrow().encoded == "\"competitor\"",
                     label + " Unknown does not erase competing committed document")

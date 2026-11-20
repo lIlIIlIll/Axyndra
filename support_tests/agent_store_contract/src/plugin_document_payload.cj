@@ -165,7 +165,7 @@ func documentPayloadFinalRead(database: SqliteDatabase, runtime: AgentThreadRunt
     let settled = store.settlePluginDocumentOperation(run, parent, receipt, { => Result.Ok(()) })
     if (mode == "intent-changed-before-settle") {
         expect(settled.isError(), label + " no completed read from stale reference")
-        httpContractRequire(store.settleDerivedOperation(run, parent, VNextOperationReceipt(receipt.receiptId, child,
+        httpContractRequire(settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt(receipt.receiptId, child,
             OperationOutcome.Unknown, objectValue([]), objectValue([]), 25)), label + " late uncertainty closes original debt without resurrecting bytes")
     } else {
         httpContractRequire(settled, label + " same transaction complete reference Receipt")

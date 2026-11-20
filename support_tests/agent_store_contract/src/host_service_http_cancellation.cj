@@ -71,40 +71,40 @@ func hostServiceHttpCancellationScenario(stage: String): Unit {
                 store.markExecutionHandoff(child, run, thread, 16).isError(),
                 "origin cleanup permission cannot reprepare, execute or hand off while cancelling")
             for (forbidden in [OperationOutcome.Completed, OperationOutcome.Failed]) {
-                expect(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-host-http-child",
+                expect(settleFixtureDerived(store, child, plan, run, parent, VNextOperationReceipt("receipt-host-http-child",
                     child, forbidden, objectValue([]), objectValue([]), 16)).isError(),
                     "cancelling HostService cannot assert a known HTTP success or failure")
             }
             if (stage == "executing") {
-                expect(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-host-http-child",
+                expect(settleFixtureDerived(store, child, plan, run, parent, VNextOperationReceipt("receipt-host-http-child",
                     child, OperationOutcome.Rejected, objectValue([]), objectValue([]), 16)).isError(),
                     "real HTTP handoff cannot become unexecuted rejection")
                 database.execute("UPDATE operations SET state='prepared' WHERE id='host-http-child'")
                 database.execute("UPDATE operation_state_registers SET state='prepared' WHERE operation_id='host-http-child'")
-                expect(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-host-http-child",
+                expect(settleFixtureDerived(store, child, plan, run, parent, VNextOperationReceipt("receipt-host-http-child",
                     child, OperationOutcome.Rejected, objectValue([]), objectValue([]), 16)).isError(),
                     "a stale prepared register cannot erase durable HTTP handoff")
                 database.execute("UPDATE operations SET state='executing' WHERE id='host-http-child'")
                 database.execute("UPDATE operation_state_registers SET state='executing' WHERE operation_id='host-http-child'")
             } else {
-                expect(store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-host-http-child",
+                expect(settleFixtureDerived(store, child, plan, run, parent, VNextOperationReceipt("receipt-host-http-child",
                     child, OperationOutcome.Unknown, objectValue([]), objectValue([]), 16)).isError(),
                     "unexecuted child cannot invent in-flight HTTP effects")
             }
             database.execute("UPDATE runs SET epoch=epoch+1 WHERE id='host-http-run'")
-            expect(store.settleDerivedOperation(run, parent, receipt).isError(),
+            expect(settleFixtureDerived(store, child, plan, run, parent, receipt).isError(),
                 "late cancellation Receipt must still match the immutable handoff epoch")
             database.execute("UPDATE runs SET epoch=epoch-1 WHERE id='host-http-run'")
             let proof = database.query("SELECT payload FROM audit_events WHERE kind='operation_host_origin_bound'")[0].required(0)
             database.execute("UPDATE audit_events SET payload=? WHERE kind='operation_host_origin_bound'",
                 [SqlParameter.Text(encodeStoredValue(objectValue([])))])
-            expect(store.settleDerivedOperation(run, parent, receipt).isError(),
+            expect(settleFixtureDerived(store, child, plan, run, parent, receipt).isError(),
                 "late cancellation Receipt cannot discard the exact host-origin proof")
             database.execute("UPDATE audit_events SET payload=? WHERE kind='operation_host_origin_bound'", [SqlParameter.Text(proof)])
             expect(database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 0,
                 "all refused cancellation claims are transactional and create no Receipt")
-            httpContractRequire(store.settleDerivedOperation(run, parent, receipt), "host HTTP obligation settles during cancellation")
-            expect(store.settleDerivedOperation(run, parent, receipt).isError() &&
+            httpContractRequire(settleFixtureDerived(store, child, plan, run, parent, receipt), "host HTTP obligation settles during cancellation")
+            expect(settleFixtureDerived(store, child, plan, run, parent, receipt).isError() &&
                 database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='host-http-child'") == 1,
                 "joined HTTP obligation has exactly one immutable Receipt")
             let parentResult = httpContractRequire(runtime.resolveOperation(ItemId("host-http-result"), parent,
@@ -128,7 +128,7 @@ func hostServiceHttpCancellationScenario(stage: String): Unit {
         expect(retained.outcome == outcome && canonicalAgentValue(retained.detail) == canonicalAgentValue(receipt.detail) &&
             canonicalAgentValue(retained.verification) == canonicalAgentValue(receipt.verification) &&
             store.markExecuting(child, run, plan, 20, false).isError() &&
-            store.settleDerivedOperation(run, parent, receipt).isError(),
+            settleFixtureDerived(store, child, plan, run, parent, receipt).isError(),
             "terminal cancellation retains exact evidence and cannot revive or replace the settled child")
         expect(database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='host-http-child'") == 1 &&
             database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='host-http-parent' AND outcome='unknown'") == 1 &&

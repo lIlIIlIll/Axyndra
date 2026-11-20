@@ -1308,7 +1308,8 @@ func hostExecuteTaskChildFrame204(catalog: ToolCatalog, pipeline: ToolPipeline, 
             OperationOutcome.Completed, output.output, objectValue([ValueField("request_key", textValue(key)),
                 ValueField("parent_operation_id", textValue(root.operationId.value)), ValueField("invocation_id", textValue(invocationId)),
                 ValueField("request_id", textValue(requestId)), ValueField("service", textValue(service))]), agentUtcMillis())
-        match (operations.settleDerivedOperation(context.runId, root.operationId, receipt)) {
+        match (child.withReceiptBinding(false, { binding =>
+            operations.settleDerivedOperation(context.runId, root.operationId, receipt, binding) })) {
             case Result.Err(error) => return hostFailPluginChild111(operations, context, root, child, error); case Result.Ok(_) => () }
         hostPluginServiceResult(requestId, service, call.callId, receipt.receiptId, output.output, false)
     } finally { output.releasePayload() }
@@ -1355,7 +1356,8 @@ func hostExecuteLegacyChildFrame204(catalog: ToolCatalog, pipeline: ToolPipeline
             OperationOutcome.Completed, output.output, objectValue([ValueField("request_key", textValue(key)),
                 ValueField("parent_operation_id", textValue(root.operationId.value)), ValueField("invocation_id", textValue(invocationId)),
                 ValueField("request_id", textValue(requestId)), ValueField("service", textValue(service))]), agentUtcMillis())
-        match (operations.settleDerivedOperation(context.runId, root.operationId, receipt)) {
+        match (child.withReceiptBinding(false, { binding =>
+            operations.settleDerivedOperation(context.runId, root.operationId, receipt, binding) })) {
             case Result.Err(error) => return hostFailPluginChild111(operations, context, root, child, error); case Result.Ok(_) => () }
         hostPluginServiceResult(requestId, service, call.callId, receipt.receiptId, output.output, false)
     } finally { output.releasePayload() }
@@ -1372,7 +1374,8 @@ func hostFailPluginChild111(operations: OperationRuntimePort, context: ToolInvoc
     let outcome = if (state == "prepared" || state == "waiting_approval") { OperationOutcome.Rejected } else { OperationOutcome.Unknown }
     let receipt = VNextOperationReceipt("receipt-" + child.operationId.value, child.operationId, outcome,
         objectValue([ValueField("error_code", textValue(error.code))]), objectValue([]), agentUtcMillis())
-    match (operations.settleDerivedOperation(context.runId, root.operationId, receipt)) {
+    match (child.withReceiptBinding(false, { binding =>
+            operations.settleDerivedOperation(context.runId, root.operationId, receipt, binding) })) {
         case Result.Err(settleError) => return hostPluginServiceAgentError(settleError); case Result.Ok(_) => () }
     if (outcome == OperationOutcome.Unknown) {
         return hostPluginServiceAgentError(AgentError(AgentErrorKind.RecoveryRequired, "child.outcome_unknown",

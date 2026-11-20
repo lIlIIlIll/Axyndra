@@ -1751,12 +1751,11 @@ public class HostJavaScriptPluginServiceBroker {
                 ValueField("error_code", textValue("")),
                 ValueField("error_message", textValue(""))
             ]),
-            verificationValue(prepared, requestKey, invocationId, requestId, service),
+            verificationValue(requestKey, invocationId, requestId, service),
             agentUtcMillis()
         )
-        match (operations.settleDerivedOperation(
-            rootContext.runId, rootPrepared.operationId, receipt
-        )) {
+        match (prepared.withReceiptBinding(true, { binding => operations.settleDerivedOperation(
+            rootContext.runId, rootPrepared.operationId, receipt, binding) })) {
             case Result.Err(error) => return hostPluginServiceAgentError(error)
             case Result.Ok(_) => ()
         }
@@ -1777,7 +1776,7 @@ public class HostJavaScriptPluginServiceBroker {
         outcome!: OperationOutcome = OperationOutcome.Rejected,
         executionDiagnostic!: ?AgentValue = None
     ): JavaScriptHostResult<String> {
-        let verification = verificationValue(prepared, requestKey, invocationId, requestId, service)
+        let verification = verificationValue(requestKey, invocationId, requestId, service)
         if (outcome == OperationOutcome.Unknown) {
             match (executionDiagnostic) { case Some(value) => verification.put("execution_observation_diagnostic", value); case None => () }
         }
@@ -1797,9 +1796,8 @@ public class HostJavaScriptPluginServiceBroker {
             verification,
             agentUtcMillis()
         )
-        match (operations.settleDerivedOperation(
-            rootContext.runId, rootPrepared.operationId, receipt
-        )) {
+        match (prepared.withReceiptBinding(true, { binding => operations.settleDerivedOperation(
+            rootContext.runId, rootPrepared.operationId, receipt, binding) })) {
             case Result.Err(settleError) => return hostPluginServiceAgentError(settleError)
             case Result.Ok(_) => ()
         }
@@ -1901,7 +1899,6 @@ public class HostJavaScriptPluginServiceBroker {
     }
 
     private func verificationValue(
-        prepared: PreparedToolInvocation,
         requestKey: String,
         invocationId: String,
         requestId: String,
@@ -1909,7 +1906,6 @@ public class HostJavaScriptPluginServiceBroker {
     ): AgentValue {
         objectValue([
             ValueField("request_key", textValue(requestKey)),
-            ValueField("request_digest", textValue(prepared.operationPlan.bindingDigest)),
             ValueField("parent_operation_id", textValue(rootPrepared.operationId.value)),
             ValueField("invocation_id", textValue(invocationId)),
             ValueField("request_id", textValue(requestId)),

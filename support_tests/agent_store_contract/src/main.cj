@@ -15,6 +15,37 @@ import agent_runtime.*
 import agent_ports.*
 import agent_store.*
 
+func settleFixtureDerived(store: OperationRuntimePort, child: OperationId, frozen: NormalizedOperationPlan,
+    run: RunId, parent: OperationId, receipt: VNextOperationReceipt): Result<Unit> {
+    withDerivedReceiptBinding(child, frozen.bindingDigest, false, { binding =>
+        store.settleDerivedOperation(run, parent, receipt, binding) })
+}
+
+func verifyMemoryDerivedReceiptBinding(source: CommittedToolCallRef, run: RunId, thread: ThreadId,
+    rootPlan: NormalizedOperationPlan, childPlan: NormalizedOperationPlan): Unit {
+    let store = InMemoryOperationRuntimePort()
+    let parent = OperationId("memory-binding-parent")
+    let child = OperationId("memory-binding-child")
+    store.prepare(parent, run, source, rootPlan).value().getOrThrow()
+    store.markExecuting(parent, run, rootPlan, 3, false).value().getOrThrow()
+    store.markExecutionHandoff(parent, run, thread, 4).value().getOrThrow()
+    store.prepareDerivedOperation(child, parent, run, source, "memory-request", childPlan).value().getOrThrow()
+    store.markExecuting(child, run, childPlan, 5, false).value().getOrThrow()
+    store.markExecutionHandoff(child, run, thread, 6).value().getOrThrow()
+    let receipt = VNextOperationReceipt("receipt-memory-binding", child, OperationOutcome.Completed,
+        objectValue([]), objectValue([ValueField("source", textValue("fixture"))]), 7)
+    let settle = { binding: DerivedReceiptBinding => store.settleDerivedOperation(run, parent, receipt, binding) }
+    expect(withDerivedReceiptBinding(child, "wrong-binding", true, settle).isError() &&
+        store.loadDerivedOperationReceipt(child, run).value().getOrThrow().isNone(),
+        "Memory refuses a mismatched frozen binding without publishing a receipt")
+    withDerivedReceiptBinding(child, childPlan.bindingDigest, true, settle).value().getOrThrow()
+    withDerivedReceiptBinding(child, childPlan.bindingDigest, true, settle).value().getOrThrow()
+    let stored = store.loadDerivedOperationReceipt(child, run).value().getOrThrow().getOrThrow()
+    expect(stored.verification.field("request_digest").getOrThrow().text == childPlan.bindingDigest &&
+        stored.verification.field("source").getOrThrow().text == "fixture" && receipt.verification.field("request_digest").isNone(),
+        "Memory keeps the verified receipt after handle return and accepts an identical replay")
+}
+
 main(): Int64 {
     let arguments = getCommandLine()
     if (arguments.size == 5 && arguments[1] == "--crash-recovery-transaction") {
@@ -562,6 +593,7 @@ func derivedOperationAdmissionContract(): Unit {
             OperationEffectClass.ReadOnly, OperationRetryDisposition.Safe,
             "derived-read-plan-v1"
         )
+        verifyMemoryDerivedReceiptBinding(rootToolCall, runId, threadId, rootPlan, childPlan)
         let beforeItems = database.scalarInt(
             "SELECT COUNT(*) FROM items WHERE thread_id='derived-thread'"
         )
@@ -738,8 +770,7 @@ func derivedOperationAdmissionContract(): Unit {
         ) == 3, "rolled-back admission leaves its identity and sequence available for retry")
         expect(store.markExecuting(
             firstOperation, runId, childPlan, 5, false
-        ).isOk() && store.settleDerivedOperation(
-            runId, parentOperation, VNextOperationReceipt(
+        ).isOk() && settleFixtureDerived(store, firstOperation, childPlan, runId, parentOperation, VNextOperationReceipt(
                 "receipt-derived-child-1", firstOperation, OperationOutcome.Completed,
                 objectValue([ValueField("content", textValue("ok"))]), objectValue([]), 6
             )

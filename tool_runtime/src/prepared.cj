@@ -131,6 +131,25 @@ public class PreparedToolInvocation {
             }
         }
     }
+    // Only the scalar comparator crosses into the port. Revoke it before the
+    // counted DATA reader / Catalog frame returns, including on exceptions.
+    public func withReceiptBinding<T>(recordDigest: Bool, body: (DerivedReceiptBinding) -> T): T {
+        match (detachedMetadata204) {
+            case Some(owner) =>
+                let reader = owner.retain204()
+                try { withDerivedReceiptBinding(operationId, operationPlanData204.getOrThrow().bindingDigest, recordDigest, body) }
+                finally { reader.returnConsumerFrame204() }
+            case None =>
+                requireMetadataBorrow204()
+                match (catalogConsumer204) {
+                    case Some(owner) =>
+                        let frame = owner.beginFrame204()
+                        try { withDerivedReceiptBinding(operationId, operationPlanData204.getOrThrow().bindingDigest, recordDigest, body) }
+                        finally { frame.returnedWholeAction204() }
+                    case None => withDerivedReceiptBinding(operationId, operationPlanData204.getOrThrow().bindingDigest, recordDigest, body)
+                }
+        }
+    }
     public func retainMetadataConsumer204(): ?PreparedMetadataConsumer204 {
         match (detachedMetadata204) { case Some(value) => Some(value.retain204()); case None => None<PreparedMetadataConsumer204> }
     }

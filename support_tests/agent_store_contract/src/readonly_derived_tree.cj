@@ -102,7 +102,7 @@ class ReadonlyTreeFixture {
     func settle(operation: OperationId, parent: OperationId, outcome: OperationOutcome): Result<Unit> {
         let row = database.query("SELECT reserved_receipt_id FROM operation_effect_records WHERE operation_id=?",
             [SqlParameter.Text(operation.value)])[0]
-        store.settleDerivedOperation(run, parent, VNextOperationReceipt(row.required(0), operation, outcome,
+        settleFixtureDerived(store, operation, (if (operation.value == leaf.value) { leafPlan } else { childPlan }), run, parent, VNextOperationReceipt(row.required(0), operation, outcome,
             objectValue([ValueField("fixture", boolValue(true))]), objectValue([]), 20))
     }
     func settleRootUnknown(): Unit {

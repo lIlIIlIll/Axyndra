@@ -122,7 +122,7 @@ func readViewParentIntentScenario(committed: Bool, scenario: String): Unit {
         let outcome = if (scenario == "unknown") { OperationOutcome.Unknown } else { OperationOutcome.Completed }
         let receiptReservation = database.query("SELECT reserved_receipt_id FROM operation_effect_records WHERE operation_id='view-child'")
         expect(receiptReservation.size == 1, label + " has one immutable child Receipt reservation")
-        httpContractRequire(store.settleDerivedOperation(run, parent, VNextOperationReceipt(receiptReservation[0].required(0), child, outcome,
+        httpContractRequire(settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt(receiptReservation[0].required(0), child, outcome,
             objectValue([ValueField("status", textValue("fixture"))]), objectValue([]), 15)), label + " settles actual outcome")
         expect(store.prepareDerivedOperation(OperationId("view-repeat"), parent, run, source, key, childPlan).value().getOrThrow().value == child.value,
             label + " request identity cannot create another child")

@@ -139,7 +139,8 @@ public func hostFailDocumentChild(operations: OperationRuntimePort, context: Too
     let outcome = if (state == "prepared" || state == "waiting_approval") { OperationOutcome.Rejected } else { OperationOutcome.Unknown }
     let receipt = VNextOperationReceipt("receipt-" + child.operationId.value, child.operationId, outcome,
         objectValue([ValueField("error_code", textValue(error.code))]), objectValue([]), agentUtcMillis())
-    match (operations.settleDerivedOperation(context.runId, root.operationId, receipt)) {
+    match (child.withReceiptBinding(false, { binding =>
+            operations.settleDerivedOperation(context.runId, root.operationId, receipt, binding) })) {
         case Result.Err(settleError) => return hostPluginServiceAgentError(settleError); case Result.Ok(_) => () }
     if (outcome == OperationOutcome.Unknown) {
         return hostPluginServiceAgentError(AgentError(AgentErrorKind.RecoveryRequired, "plugin.document_commit_unknown",

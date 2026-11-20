@@ -88,6 +88,35 @@ execution. The supported Codex command-hook subset remains PreToolUse/PostToolUs
 exact-name or `*` matching, and finite command timeouts; it does not imply
 arbitrary Codex JavaScript, vendor apps, hosted execution, or MCP activation.
 
+## Migrate a derived Operation store
+
+The host-side `OperationRuntimePort.settleDerivedOperation` takes a fourth
+argument, `binding: DerivedReceiptBinding`. Rebuild custom Store adapters and
+callers together; the three-argument entry is gone. This change does not alter
+the Native plugin wire protocol or require a database migration.
+
+Pass the binding from the **same prepared child**. Select `true` when the
+Receipt must publish `request_digest`, and leave that field out of the input:
+
+```cangjie
+child.withReceiptBinding(true, { binding =>
+    store.settleDerivedOperation(runId, parentId, receipt, binding)
+})
+```
+
+Inside the existing settlement transaction, load the admitted child's stored
+plan, validate the original Run, parent, handoff and reserved Receipt, and call
+`binding.checkedReceipt(receipt, storedPlan.bindingDigest)`. Reject `None`
+without writing. Persist the returned Receipt, not the input. Its digest comes
+from the Store; the handle exports neither the caller's digest nor its plan.
+A mismatched child or digest is rejected. With `false`, verification that had
+no digest stays that way. Matching a digest does not authorize settlement.
+
+Do not retain the handle to finish settlement later. Once `withReceiptBinding`
+returns or throws, even a saved handle can no longer match. Existing Receipts
+are not rewritten and earlier raw Prepared exports are not retroactively
+released. The wider Prepared call/plan API migration remains open.
+
 ## Persisted state and inspection
 
 The current SQLite format is **schema v29**. It is independent of the Native

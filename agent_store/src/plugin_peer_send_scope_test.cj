@@ -115,7 +115,7 @@ class PluginPeerSendScopeTests111 {
             let replay=peerSendRequire111(f.store.prepareDerivedOperation(OperationId("peer-send-replay"),f.parent,f.run,f.source,
                 exactServiceRequestKey(f.source.callId(),f.childPlan),f.childPlan))
             @Expect(replay.value,f.child.value)
-            peerSendRequire111(f.store.settleDerivedOperation(f.run,f.parent,VNextOperationReceipt("receipt-"+f.child.value,
+            peerSendRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run,f.parent,VNextOperationReceipt("receipt-"+f.child.value,
                 f.child,OperationOutcome.Completed,objectValue([]),objectValue([]),15)))
             @Expect(f.verify().isError());@Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts"),1)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM derived_operation_admissions"),1)

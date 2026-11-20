@@ -27,7 +27,7 @@ func serviceCapacityDurableContract(): Unit {
                 if (mode == "exact") {
                     httpContractRequire(admitted, "large child authorized by exact completed startup profile")
                     fixture.execute(); fixture.handoff()
-                    httpContractRequire(fixture.store.settleDerivedOperation(fixture.run, fixture.parent,
+                    httpContractRequire(settleFixtureDerived(fixture.store, fixture.child, fixture.childPlan, fixture.run, fixture.parent,
                         fixture.receipt(OperationOutcome.Unknown)), "large handed-off write remains Unknown when effect cannot be determined")
                     expect(fixture.database.query("SELECT id FROM operation_receipts WHERE operation_id=? AND outcome='unknown'",
                         [SqlParameter.Text(fixture.child.value)]).size == 1, "one large-child Unknown receipt")

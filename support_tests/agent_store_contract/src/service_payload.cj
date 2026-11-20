@@ -76,7 +76,7 @@ func servicePayloadDurableContract(): Unit {
                     httpContractRequire(prepared, "exact immutable payload preparation")
                     fixture.activateParent(); httpContractRequire(fixture.admit(), "exact payload child")
                     fixture.execute(); fixture.handoff()
-                    httpContractRequire(fixture.store.settleDerivedOperation(fixture.run, fixture.parent,
+                    httpContractRequire(settleFixtureDerived(fixture.store, fixture.child, fixture.childPlan, fixture.run, fixture.parent,
                         fixture.receipt(OperationOutcome.Unknown)), "artifact child Unknown receipt")
                     expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='channel-child' AND outcome='unknown'") == 1,
                         "one canonical artifact-child receipt")
@@ -100,7 +100,7 @@ func servicePayloadDurableContract(): Unit {
                 let rejected = if (stage == "admit") { fixture.admit().isError() }
                     else if (stage == "execute") { fixture.store.markExecuting(fixture.child, fixture.run, fixture.childPlan, 34, false).isError() }
                     else if (stage == "handoff") { fixture.store.markExecutionHandoff(fixture.child, fixture.run, fixture.thread, 35).isError() }
-                    else { fixture.store.settleDerivedOperation(fixture.run, fixture.parent, fixture.receipt(OperationOutcome.Unknown)).isError() }
+                    else { settleFixtureDerived(fixture.store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, fixture.receipt(OperationOutcome.Unknown)).isError() }
                 expect(rejected, "every actual state transition rechecks immutable payload pin: " + stage)
                 expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='channel-child'") == 0,
                     "failed payload proof cannot create a terminal receipt")
@@ -108,7 +108,7 @@ func servicePayloadDurableContract(): Unit {
                 if (stage == "admit") { httpContractRequire(fixture.admit(), "restored payload admit") }
                 if (stage == "admit" || stage == "execute") { fixture.execute() }
                 if (stage != "settle") { fixture.handoff() }
-                httpContractRequire(fixture.store.settleDerivedOperation(fixture.run, fixture.parent,
+                httpContractRequire(settleFixtureDerived(fixture.store, fixture.child, fixture.childPlan, fixture.run, fixture.parent,
                     fixture.receipt(OperationOutcome.Unknown)), "restored exact payload proof settles once")
             } finally { fixture.close() }
             cases += 1
@@ -138,12 +138,12 @@ func servicePayloadCancellationContract(committed: Bool): Unit {
             while (!token.isCancelled() && agentUtcMillis() < deadline) { sleep(Duration.millisecond) }
             expect(token.isCancelled(), "actual canonical cancellation reached child cleanup")
             payloadStoreCorruptWitness(fixture)
-            expect(fixture.store.settleDerivedOperation(fixture.run, fixture.parent, fixture.receipt(OperationOutcome.Unknown)).isError(),
+            expect(settleFixtureDerived(fixture.store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, fixture.receipt(OperationOutcome.Unknown)).isError(),
                 "cancelled cleanup still requires the historical exact payload witness")
             payloadStoreRestoreWitness(fixture)
             expect(fixture.admit().isError() && fixture.store.markExecutionHandoff(fixture.child, fixture.run, fixture.thread, 40).isError(),
                 "late observation permission does not reopen execution")
-            httpContractRequire(fixture.store.settleDerivedOperation(fixture.run, fixture.parent, fixture.receipt(OperationOutcome.Unknown)), "late genuine artifact child Unknown")
+            httpContractRequire(settleFixtureDerived(fixture.store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, fixture.receipt(OperationOutcome.Unknown)), "late genuine artifact child Unknown")
             let result = httpContractRequire(fixture.runtime.resolveOperation(ItemId("payload-parent-result"), fixture.parent,
                 CanonicalToolCallId(fixture.call.callId), fixture.rootPlan, OperationAttemptStage.Executing,
                 Result<ToolInvocationResult>.Err(AgentError(AgentErrorKind.RecoveryRequired, "payload.cancel_unknown", "cancelled after possible write")),

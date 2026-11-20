@@ -145,7 +145,7 @@ class PluginPeerResumeScopeTests111 {
             @Expect(duplicate.value,f.child.value)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM derived_operation_admissions"),1)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs"),1)
-            peerResumeStoreRequire111(f.store.settleDerivedOperation(f.run,f.parent,VNextOperationReceipt("receipt-"+f.child.value,f.child,
+            peerResumeStoreRequire111(settleFixtureDerived(f.store, f.child, f.childPlan, f.run,f.parent,VNextOperationReceipt("receipt-"+f.child.value,f.child,
                 OperationOutcome.Completed,objectValue([]),objectValue([]),19)))
             @Expect(f.verify().isError());@Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts"),2)
         }finally{f.close()}

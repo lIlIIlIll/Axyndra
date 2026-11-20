@@ -91,6 +91,25 @@ class PreparedMetadataCopy204Tests {
         @Expect(bank.usage()[0],0); @Expect(bank.usage()[1],0)
     }
     @TestCase
+    func portCanRetainOnlyAnInertBindingAfterItsPaidProducerReturns(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("binding-run"), SessionId("binding-session"), CapabilitySet())
+        let prepared = metadataFixture204(context, objectValue([]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let child = prepared.operationId
+        let retained = prepared.withReceiptBinding(false, { binding =>
+            owner.producerReturned204(); root.close()
+            @Expect(bank.usage()[1] > 0)
+            @Expect(binding.matches(child, "copy-binding"))
+            @Expect(!binding.matches(OperationId("other-child"), "copy-binding"))
+            binding
+        })
+        @Expect(!retained.matches(child, "copy-binding"))
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func actualRawPlanExportKeepsOnlyIndependentMetadataCopyHeld():Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged:16777216); let root = bank.acquire(131072)
         let core = MetadataCopyConsumer204(root)

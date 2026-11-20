@@ -196,7 +196,7 @@ func directDerivedOperationAdmissionFor(serviceName: String): Unit {
             "Direct request replay retains its original admitted Operation identity")
         store.markExecuting(child, run, childPlan, 13, false).value().getOrThrow()
         store.markExecutionHandoff(child, run, thread, 14).value().getOrThrow()
-        match (store.settleDerivedOperation(run, parent, VNextOperationReceipt("receipt-" + child.value, child,
+        match (settleFixtureDerived(store, child, childPlan, run, parent, VNextOperationReceipt("receipt-" + child.value, child,
             OperationOutcome.Completed, objectValue([]), objectValue([]), 15))) {
             case Result.Ok(_) => ()
             case Result.Err(error) => throw IllegalStateException(error.describe())

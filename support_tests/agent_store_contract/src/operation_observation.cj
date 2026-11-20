@@ -30,7 +30,7 @@ func operationObservationDurableContract(): Unit {
                 }
                 expect(resolution.receipt.outcome == OperationOutcome.Unknown &&
                     resolution.retryDecision == OperationRetryDecision.Stop, "observation cannot turn uncertainty into success or retry")
-                httpContractRequire(fixture.store.settleDerivedOperation(fixture.run, fixture.parent, resolution.receipt),
+                httpContractRequire(settleFixtureDerived(fixture.store, fixture.child, fixture.childPlan, fixture.run, fixture.parent, resolution.receipt),
                     "observation settles through existing store authority")
                 let stored = httpContractRequire(fixture.store.loadDerivedOperationReceipt(fixture.child, fixture.run),
                     "observation actual Receipt readback").getOrThrow()

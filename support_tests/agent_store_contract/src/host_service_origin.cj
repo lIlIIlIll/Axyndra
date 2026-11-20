@@ -184,7 +184,7 @@ func hostServiceOriginGrantAndReceiptContract(): Unit {
         expect(fixture.store.prepareDerivedOperation(OperationId("host-origin-grandchild"), child,
             fixture.run, OperationRootSource.Direct(source), "javascript-service:" + fixture.call.callId + ":grandchild",
             childPlan).isError(), "a service child cannot become a second-level parent or borrow its root's source")
-        fixture.store.settleDerivedOperation(fixture.run, fixture.operation, VNextOperationReceipt(
+        settleFixtureDerived(fixture.store, child, childPlan, fixture.run, fixture.operation, VNextOperationReceipt(
             "receipt-" + child.value, child, OperationOutcome.Completed, objectValue([]), objectValue([]), 16))
             .value().getOrThrow()
         let execution = Result<ToolInvocationResult>.Ok(ToolInvocationResult.Completed(

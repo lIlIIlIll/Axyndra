@@ -2398,8 +2398,8 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
     }
 
     public func settleDerivedOperation(runId: RunId, parentOperationId: OperationId,
-        receipt: VNextOperationReceipt): Result<Unit> {
-        settleDerivedOperationChecked(runId, parentOperationId, receipt, None, None, None)
+        receipt: VNextOperationReceipt, binding: DerivedReceiptBinding): Result<Unit> {
+        settleDerivedOperationChecked(runId, parentOperationId, receipt, None, None, None, binding: Some(binding))
     }
 
     public func settlePluginRowJournalOperation(runId:RunId,parentOperationId:OperationId,receipt:VNextOperationReceipt,
@@ -2427,8 +2427,9 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
     }
 
     private func settleDerivedOperationChecked(runId: RunId, parentOperationId: OperationId,
-        receipt: VNextOperationReceipt, documentGuard: ?() -> Result<Unit>,
-        documentParticipant: ?PluginDocumentCommitParticipant, documentCommitter: ?PluginDocumentPayloadCommitter, rowJournal!:Bool=false): Result<Unit> {
+        submitted: VNextOperationReceipt, documentGuard: ?() -> Result<Unit>,
+        documentParticipant: ?PluginDocumentCommitParticipant, documentCommitter: ?PluginDocumentPayloadCommitter, rowJournal!:Bool=false,
+        binding!: ?DerivedReceiptBinding = None): Result<Unit> {
         try {
             database.transaction { transaction =>
                 let rows = transaction.query(
@@ -2438,24 +2439,37 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
                         "FROM operations o JOIN derived_operation_admissions a " +
                         "ON a.operation_id=o.id JOIN operation_effect_records e " +
                         "ON e.operation_id=o.id WHERE o.id=?",
-                    [SqlParameter.Text(receipt.operationId.value)]
+                    [SqlParameter.Text(submitted.operationId.value)]
                 )
                 if (rows.size != 1 || rows[0].required(1) != runId.value ||
                     rows[0].required(3) != parentOperationId.value ||
-                    rows[0].required(4) != receipt.receiptId) {
+                    rows[0].required(4) != submitted.receiptId) {
                     throw IllegalStateException(
                         "derived receipt is not bound to the expected child Operation"
                     )
                 }
                 let state = rows[0].required(0)
                 if (state != "executing" &&
-                    !(receipt.outcome == OperationOutcome.Rejected &&
+                    !(submitted.outcome == OperationOutcome.Rejected &&
                         (state == "prepared" || state == "waiting_approval"))) {
                     throw IllegalStateException(
                         "derived Operation did not reach a settleable state"
                     )
                 }
                 let childPlan = decodeOperationPlan(rows[0].required(7))
+                let receipt = match (binding) {
+                    case Some(check) =>
+                        if (transaction.query("SELECT 1 FROM derived_operation_admissions WHERE operation_id=? " +
+                            "AND CAST(request_digest AS BLOB)=CAST(? AS BLOB)", [SqlParameter.Text(submitted.operationId.value),
+                            SqlParameter.Text(childPlan.bindingDigest)]).size != 1) {
+                            throw IllegalStateException("derived admission differs from its stored plan binding")
+                        }
+                        match (check.checkedReceipt(submitted, childPlan.bindingDigest)) {
+                            case Some(value) => value
+                            case None => throw IllegalStateException("derived receipt differs from its frozen operation binding")
+                        }
+                    case None => submitted // The specialized document ports retain their own transaction guards.
+                }
                 let cancellationSettlement = (state == "executing" && receipt.outcome == OperationOutcome.Unknown) ||
                     ((state == "prepared" || state == "waiting_approval") && receipt.outcome == OperationOutcome.Rejected)
                 let readonlyTree = requireReadonlyDerivedIntent(transaction, receipt.operationId, runId, childPlan,
@@ -2610,14 +2624,14 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
                 case Some(observer) =>
                     try {
                         observer(
-                            if (receipt.operationId.value.size <= 1024) { receipt.operationId.value } else { "[oversized operation_id]" },
+                            if (submitted.operationId.value.size <= 1024) { submitted.operationId.value } else { "[oversized operation_id]" },
                             if (runId.value.size <= 1024) { runId.value } else { "[oversized run_id]" },
                             if (parentOperationId.value.size <= 1024) { parentOperationId.value } else { "[oversized parent_operation_id]" },
                             if (error.message.size <= 512) { error.message } else { "[oversized exception message]" })
                     } catch (_:Exception) { () }
                 case None => ()
             }
-            operationStoreError("operation.derived_settle_failed", receipt.operationId, error)
+            operationStoreError("operation.derived_settle_failed", submitted.operationId, error)
         }
     }
 

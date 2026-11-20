@@ -212,7 +212,7 @@ func managedJobExecutionScenario(committed: Bool, scenario: String): Unit {
             let receipt = VNextOperationReceipt(reservedReceipt, child,
                 if (cancelled) { OperationOutcome.Unknown } else { OperationOutcome.Completed },
                 objectValue([ValueField("written_bytes", integerValue(6))]), objectValue([]), agentUtcMillis())
-            httpContractRequire(fixture.store.settleDerivedOperation(active.runId, operation, receipt),
+            httpContractRequire(settleFixtureDerived(fixture.store, child, fixture.childPlan, active.runId, operation, receipt),
                 "actual write receipt settles even after child or parent cancellation")
             let outcome: Result<ToolInvocationResult> = if (cancelled) {
                 Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "fixture.managed_unknown", "actual Task write may have executed"))

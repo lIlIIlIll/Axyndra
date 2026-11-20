@@ -64,12 +64,12 @@ func managedFilePlanContract(): Unit {
                         objectValue([ValueField("parent_operation_id", textValue(fixture.parent.value)), ValueField("service", textValue("file.plan.propose"))]), 36)
                     if (mode == "startup-settle") {
                         channelContractCorruptStartup(fixture.database)
-                        expect(fixture.store.settleDerivedOperation(fixture.run, fixture.parent, receipt).isError(), "settlement rechecks startup proof")
+                        expect(settleFixtureDerived(fixture.store, child, plan, fixture.run, fixture.parent, receipt).isError(), "settlement rechecks startup proof")
                         expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='file-plan-child'") == 0,
                             "invalid settlement cannot retain a false completed receipt")
                         channelContractRestoreStartup(fixture.database, detail)
                     }
-                    httpContractRequire(fixture.store.settleDerivedOperation(fixture.run, fixture.parent, receipt), "proposal single completed receipt")
+                    httpContractRequire(settleFixtureDerived(fixture.store, child, plan, fixture.run, fixture.parent, receipt), "proposal single completed receipt")
                     expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE operation_id='file-plan-child'") == 1 &&
                         fixture.database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE operation_id='file-plan-child' AND kind='operation_parent_intent_authorized'") == 0,
                         "proposal preserves one read-only receipt without inventing frozen ParentIntent approval")
