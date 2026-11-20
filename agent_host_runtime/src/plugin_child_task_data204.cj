@@ -59,17 +59,17 @@ class HostTaskHistory204 {
 }
 
 func copyHostTaskHistory204(configuration: HostPrimitiveConfiguration111,
-    prepared: PreparedToolInvocation, call: ToolCall, plan: NormalizedOperationPlan): HostTaskHistory204 {
+    prepared: PreparedToolInvocation, plan: NormalizedOperationPlan): HostTaskHistory204 {
     let payment = configuration.deriveDataPayment191(65536)
     try {
         let producer = configuration.inputTemporaryPayment111(1048576)
-        try { copyHostTaskHistoryFrame204(payment, producer, prepared, call, plan) }
+        try { copyHostTaskHistoryFrame204(payment, producer, prepared, plan) }
         finally { producer.close() }
     } catch (error: Exception) { payment.close(); throw error }
 }
 
 private func copyHostTaskHistoryFrame204(payment: LogicalJsonOwnerReservation,
-    producer: LogicalJsonOwnerReservation, prepared: PreparedToolInvocation, call: ToolCall,
+    producer: LogicalJsonOwnerReservation, prepared: PreparedToolInvocation,
     plan: NormalizedOperationPlan): HostTaskHistory204 {
     let intent = plan.canonicalArguments.field("intent").getOrThrow()
     let input = intent.field("input").getOrThrow()
@@ -78,8 +78,19 @@ private func copyHostTaskHistoryFrame204(payment: LogicalJsonOwnerReservation,
         objectValue([ValueField("request", proposal.field("request").getOrThrow()),
             ValueField("completion", proposal.field("completion").getOrThrow())])
     } else { input }
+    // Only the descriptive ID is needed; the call, name and argument graph
+    // never leave the scoped reader. Keep this independent text copy prepaid
+    // alongside the history encoder until the complete producer frame returns.
+    let (callId, producerBase) = prepared.withCallInput({ reader =>
+        let size = reader.byteCount(ToolResolverText.CallId)
+        let base: Int64 = 1048576 + 8192
+        if (size > (Int64.Max - base) / 6) { throw LogicalJsonPayloadError("Task history call identity invoice overflow") }
+        let peak = base + size * 6
+        producer.ensureRetainedPeak(peak)
+        (reader.copyText(ToolResolverText.CallId), peak)
+    })
     let history = objectValue([
-        ValueField("call_id", textValue(call.callId)),
+        ValueField("call_id", textValue(callId)),
         ValueField("operation_id", textValue(prepared.operationId.value)),
         ValueField("parent_call_id", textValue(httpIntentText(plan.canonicalArguments.field("binding").getOrThrow(), "parent_call_id"))),
         ValueField("parent_operation_id", match (prepared.source.parentOperationId) {
@@ -90,12 +101,12 @@ private func copyHostTaskHistoryFrame204(payment: LogicalJsonOwnerReservation,
         ValueField("definition", definition)])
     let bytes = logicalJsonWriteReservationBytes(history, 8388608)
     let nodes = logicalJsonValueNodeCount(history)
-    if (bytes > (Int64.Max - 1048576) / 16 || nodes > (Int64.Max - 1048576 - bytes * 16) / 512) {
+    if (bytes > (Int64.Max - producerBase) / 16 || nodes > (Int64.Max - producerBase - bytes * 16) / 512) {
         throw LogicalJsonPayloadError("Task history invoice overflow")
     }
     let invoice = bytes * 16 + nodes * 512
     payment.ensureRetainedPeak(invoice + 65536)
-    producer.ensureRetainedPeak(invoice + 1048576)
+    producer.ensureRetainedPeak(invoice + producerBase)
     let encoded = encodeAgentValue(history)
     HostTaskHistory204(payment, parseUnifiedJson(encoded, maxBytes: 8388608))
 }

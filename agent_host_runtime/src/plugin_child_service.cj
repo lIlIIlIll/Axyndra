@@ -106,12 +106,11 @@ public class HostPluginChildAdmission111 {
     init(host: HostJavaScriptPluginHost, operations: OperationRuntimePort, context: ToolInvocationContext,
         prepared: PreparedToolInvocation, configuration: HostPrimitiveConfiguration111,
         generation: UInt64, localTool: String, closedTask204!: Bool = false,
-        retainTaskMetadata204!: Bool = false, taskPlan204!: ?NormalizedOperationPlan = None<NormalizedOperationPlan>,
-        taskCall204!: ?ToolCall = None<ToolCall>) {
+        retainTaskMetadata204!: Bool = false, taskPlan204!: ?NormalizedOperationPlan = None<NormalizedOperationPlan>) {
         this.host = host; this.operations = operations; this.liveContext180 = Some(context); this.preparedData204 = Some(prepared)
         this.closedTask204 = closedTask204
         if (closedTask204 && retainTaskMetadata204) {
-            let history = copyHostTaskHistory204(configuration, prepared, taskCall204.getOrThrow(), taskPlan204.getOrThrow())
+            let history = copyHostTaskHistory204(configuration, prepared, taskPlan204.getOrThrow())
             try {
                 taskMetadata204 = prepared.retainMetadataConsumer204()
                 taskHistory204 = Some(history)
@@ -1025,13 +1024,13 @@ class HostPluginChildExecutor111 <: ToolExecutor {
     private func actual(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         retainTaskMetadata204!: Bool = false): Result<HostPluginChildAdmission111> {
         if (taskDataSelected204(prepared)) {
-            return prepared.withOperationPlan204({ plan => prepared.withCall204({ call =>
-                actualTaskPlanFrame204(context, prepared, call, plan, retainTaskMetadata204) }) })
+            return prepared.withOperationPlan204({ plan =>
+                actualTaskPlanFrame204(context, prepared, plan, retainTaskMetadata204) })
         }
         actualLegacyFrame204(context, prepared)
     }
     private func actualTaskPlanFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        call: ToolCall, plan: NormalizedOperationPlan, retainTaskMetadata204: Bool): Result<HostPluginChildAdmission111> {
+        plan: NormalizedOperationPlan, retainTaskMetadata204: Bool): Result<HostPluginChildAdmission111> {
         if (!isPluginChildStartPlan111(plan) || prepared.source.kind != PreparedInvocationSourceKind.Derived ||
             prepared.source.operationRoot.isNone() || prepared.source.parentOperationId.isNone()) {
             return hostPluginResourceError("child.source_invalid", "child primitive needs its actual admitted derived invocation") }
@@ -1052,7 +1051,7 @@ class HostPluginChildExecutor111 <: ToolExecutor {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         try {
             Result.Ok(HostPluginChildAdmission111(host, operations, context, prepared, selected, generation, localTool,
-                closedTask204: true, retainTaskMetadata204: retainTaskMetadata204, taskPlan204: Some(plan), taskCall204: Some(call)))
+                closedTask204: true, retainTaskMetadata204: retainTaskMetadata204, taskPlan204: Some(plan)))
         } catch (_: LogicalJsonPayloadError) {
             // The complete unpublished constructor has returned and rolled
             // back its own data leases. This known pre-effect capacity refusal
