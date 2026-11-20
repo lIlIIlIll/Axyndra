@@ -358,6 +358,30 @@ public func pluginPrimitiveArgumentsService111(arguments: AgentValue): String {
     httpIntentText(intents.items[0],"service")
 }
 
+// Closed projections for a retained child selection. Only a generation or a
+// comparison result leaves the read; neither result authorizes a launch.
+public func resolverChildStartOrWaitGeneration(input: ToolResolverInput, namespace: String,
+    contribution: String): ?UInt64 {
+    input.domainProjection({ call =>
+        let binding = call.arguments.field("binding") ?? nullValue()
+        if (httpIntentText(binding, "namespace") != namespace || httpIntentText(binding, "contribution") != contribution) {
+            return None<UInt64>
+        }
+        let service = pluginPrimitiveArgumentsService111(call.arguments)
+        if (service != "child.start" && service != "child.wait") { return None<UInt64> }
+        try { Some(UInt64.parse(httpIntentText(binding, "generation"))) } catch (_: Exception) { None<UInt64> }
+    })
+}
+
+public func resolverSelectsChildWait(input: ToolResolverInput, startIntent: String, bindingWitness: String): Bool {
+    input.domainProjection({ call =>
+        let intent = call.arguments.field("intent").getOrThrow()
+        httpIntentText(intent, "service") == "child.wait" &&
+            httpIntentText(intent.field("input").getOrThrow(), "start_intent_id") == startIntent &&
+            canonicalAgentValueMatches(call.arguments.field("binding").getOrThrow(), bindingWitness)
+    })
+}
+
 // Operator-selected data in the exact frozen plan, never an independent grant.
 // The actual Host compares this with its captured complete configuration at
 // preparation and handoff. Absent keeps the original ExtensionInvoke contract.

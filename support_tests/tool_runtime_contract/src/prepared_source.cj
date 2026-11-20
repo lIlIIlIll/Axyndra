@@ -31,6 +31,20 @@ func runPreparedSourceContract(): Unit {
         RunId("source-run"), SessionId("source-session"),
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]), epoch: 1
     )
+    // Use the public pipeline; an external client cannot construct a Prepared invocation.
+    let binding = objectValue([ValueField("namespace", textValue("fixture")),
+        ValueField("contribution", textValue("workflow.task")), ValueField("generation", textValue("5"))])
+    let wait = objectValue([ValueField("binding", binding), ValueField("intent", objectValue([
+        ValueField("service", textValue("child.wait")), ValueField("input", objectValue([
+            ValueField("start_intent_id", textValue("started"))]))]))])
+    let proposed = sourceReady(pipeline.prepare(context, ToolCall("wait-call", "source_read", wait)))
+    proposed.withCanonicalCallInput({ input =>
+        expect(resolverChildStartOrWaitGeneration(input, "fixture", "workflow.task").getOrThrow() == 5 &&
+            resolverSelectsChildWait(input, "started", canonicalAgentValue(binding)) &&
+            !resolverSelectsChildWait(input, "different", canonicalAgentValue(binding)) &&
+            !resolverSelectsChildWait(input, "started", canonicalAgentValue(objectValue([]))),
+            "external Task selectors compare generation, start identity and the whole frozen binding")
+    })
     let childCall = ToolCall("source-child", "source_read", objectValue([]))
     let direct = sourceReady(pipeline.prepare(context, childCall))
     let savedInput = direct.withCanonicalCallInput({ input =>

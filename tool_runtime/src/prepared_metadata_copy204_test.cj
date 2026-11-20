@@ -133,6 +133,38 @@ class PreparedMetadataCopy204Tests {
         @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
     }
     @TestCase
+    func retainedWaitReadsFrozenBindingAfterProducerReturn(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("task-read"), SessionId("task-session"), CapabilitySet())
+        let binding = objectValue([ValueField("namespace", textValue("fixture")), ValueField("contribution", textValue("task")),
+            ValueField("generation", textValue("42"))])
+        let intent = objectValue([ValueField("service", textValue("child.wait")), ValueField("input",
+            objectValue([ValueField("start_intent_id", textValue("start"))]))])
+        let args = objectValue([ValueField("binding", binding), ValueField("intent", intent)])
+        let call = ToolCall("task-call", "service", objectValue([]))
+        let plan = NormalizedOperationPlan(call.name, args, [], OperationEffectClass.ReadOnly,
+            OperationRetryDisposition.Never, "task-binding")
+        let prepared = PreparedToolInvocation(OperationId("task"), call, exclusiveToolConcurrency(),
+            PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        owner.producerReturned204(); root.close()
+        @Expect(reader.withCallInput({ input => resolverChildStartOrWaitGeneration(input, "fixture", "task").isNone() }))
+        let saved = reader.withCanonicalCallInput({ input =>
+            @Expect(resolverChildStartOrWaitGeneration(input, "fixture", "task").getOrThrow(), 42u64)
+            @Expect(resolverChildStartOrWaitGeneration(input, "other", "task").isNone())
+            @Expect(resolverSelectsChildWait(input, "start", canonicalAgentValue(binding)))
+            @Expect(!resolverSelectsChildWait(input, "other", canonicalAgentValue(binding)))
+            @Expect(!resolverSelectsChildWait(input, "start", canonicalAgentValue(objectValue([]))))
+            input
+        })
+        var stale = false
+        try { let _ = saved.count([]) } catch (_: IllegalStateException) { stale = true }
+        @Expect(stale); @Expect(bank.usage()[1] > 0)
+        reader.returnConsumerFrame204(); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func actualRawPlanExportKeepsOnlyIndependentMetadataCopyHeld():Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged:16777216); let root = bank.acquire(131072)
         let core = MetadataCopyConsumer204(root)

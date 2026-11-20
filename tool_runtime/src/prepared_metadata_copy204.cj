@@ -157,13 +157,24 @@ public class PreparedMetadataConsumer204 {
         finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
     }
     public func withCallInput<T>(body: (ToolResolverInput) -> T): T {
+        withCallProjection(false, body)
+    }
+    public func withCanonicalCallInput<T>(body: (ToolResolverInput) -> T): T {
+        withCallProjection(true, body)
+    }
+    private func withCallProjection<T>(canonical: Bool, body: (ToolResolverInput) -> T): T {
         let actual = try { lock.lock(); let value = owner.getOrThrow()
             if (loans == Int64.Max) { throw IllegalStateException("prepared DATA loan count overflow") }
             loans++; value
         } finally { lock.unlock() }
         // The view is invalidated before lowering the loan count, even on unwind.
-        try { withToolResolverInput(actual.call204(), body) }
-        finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
+        try {
+            let call = actual.call204()
+            if (canonical) {
+                return withToolResolverInput(ToolCall(call.callId, call.name, actual.plan204().canonicalArguments), body)
+            }
+            withToolResolverInput(call, body)
+        } finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
     }
     public func returnConsumerFrame204(): Unit {
         let actual = try { lock.lock()

@@ -155,6 +155,13 @@ public class HostPluginChildAdmission111 {
         match (taskMetadata204) { case Some(value) => value.withOperationPlan204(body)
             case None => prepared.withOperationPlan204(body) }
     }
+    private func withLiveTaskInput<T>(body: (ToolResolverInput) -> T): T {
+        if (liveContext180.isNone() || preparedData204.isNone()) {
+            throw IllegalStateException("retired Task history cannot authorize execution")
+        }
+        match (taskMetadata204) { case Some(value) => value.withCanonicalCallInput(body)
+            case None => prepared.withCanonicalCallInput(body) }
+    }
     // Called by the real Task collector after its complete original child
     // helpers and retained Context have returned, never by terminal status.
     public func returnTaskPreparedAfterOriginalHelpers204(): Unit {
@@ -671,7 +678,7 @@ public class HostPluginChildAdmission111 {
     public func selectsStart(start: HostPluginChildAdmission111, receipt: VNextOperationReceipt): Bool {
         if (closedTask204 && start.taskHistory204.isSome()) {
             start.lock.lock()
-            try { return withLiveTaskPlan204({ plan => start.taskHistory204.getOrThrow().withData({ data =>
+            try { return withLiveTaskInput({ input => start.taskHistory204.getOrThrow().withData({ data =>
                 if (!refEq(host,start.host) || !refEq(configuration,start.configuration) || generation != start.generation ||
                     localTool != start.localTool || !start.claimed || !refEq(context.budget,start.originalBudget180) ||
                     context.sessionId.value != start.originalSession180.value || context.runId.value != start.originalRun180.value ||
@@ -679,10 +686,7 @@ public class HostPluginChildAdmission111 {
                     httpIntentText(data,"parent_operation_id") != prepared.source.parentOperationId.getOrThrow().value ||
                     receipt.operationId.value != start.callOperationId204 || receipt.receiptId != "receipt-" + start.callOperationId204 ||
                     receipt.outcome != OperationOutcome.Completed) { return false }
-                let intent = plan.canonicalArguments.field("intent").getOrThrow()
-                httpIntentText(intent,"service") == "child.wait" &&
-                    httpIntentText(intent.field("input").getOrThrow(),"start_intent_id") == httpIntentText(data,"intent_id") &&
-                    canonicalAgentValue(plan.canonicalArguments.field("binding").getOrThrow()) == httpIntentText(data,"binding")
+                resolverSelectsChildWait(input, httpIntentText(data, "intent_id"), httpIntentText(data, "binding"))
             }) }) } finally { start.lock.unlock() }
         }
 
@@ -1007,17 +1011,15 @@ class HostPluginChildExecutor111 <: ToolExecutor {
         this.host = host; this.operations = operations; this.backend = backend
     }
     private func taskDataSelected204(prepared: PreparedToolInvocation): Bool {
-        prepared.withOperationPlan204({ plan =>
-            let binding = plan.canonicalArguments.field("binding") ?? nullValue()
-            if (httpIntentText(binding,"namespace") != "axyndra:workflow" ||
-                httpIntentText(binding,"contribution") != "plugin.axyndra:workflow.task" ||
-                !["child.start","child.wait"].contains(pluginPrimitivePlanService111(plan))) { return false }
-            let generation = try { UInt64.parse(httpIntentText(binding,"generation")) } catch (_: Exception) { return false }
-            match (host.primitiveConfiguration111("axyndra:workflow","task",generation)) {
-                case Result.Ok(Some(value)) => value.supervisedTaskServices191("task")
+        let generation = prepared.withCanonicalCallInput({ input =>
+            resolverChildStartOrWaitGeneration(input, "axyndra:workflow", "plugin.axyndra:workflow.task") })
+        match (generation) {
+            case None => false
+            case Some(value) => match (host.primitiveConfiguration111("axyndra:workflow", "task", value)) {
+                case Result.Ok(Some(configuration)) => configuration.supervisedTaskServices191("task")
                 case _ => false
             }
-        })
+        }
     }
     private func actual(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         retainTaskMetadata204!: Bool = false): Result<HostPluginChildAdmission111> {
