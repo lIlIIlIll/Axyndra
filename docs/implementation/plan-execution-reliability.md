@@ -11516,3 +11516,25 @@ E2087/E2088 removed the Skills executable's unnecessary Domain dependency in a p
 E2106 built all ten production roots from `3405693335` using the pinned SDK, without rebuilding any toolchain component. App ELF `7ef9d2b54c5aeeef4064b20eba32d08991f55423bc17e631242400e928eee3f8`; Minimal ELF `e1f317f86e2f7e81215f50b5a12285eb0215c28cc3e52c2865e98b6702f77d20`. Production builds are not application acceptance. E2108 used the preceding `9821b4f1da` native App and sealed Full fixture packages: all ten real PTY cases passed (three rich-response protocols, cancel, Ctrl-C, HTTP error, timeout, incomplete EOF, invalid UTF-8 and MCP). The fixture preserved key input and terminal observations and checked process cleanup. Local HTTP/MCP only; not a test of current Coding startup, mouse or resize.
 
 E2105's private service-predicate candidate passed the original Core budget positive. Its unsplit Core still failed; the join through the actual effect record and its reserved Receipt on a detached Store copy identified `read_view.output_capacity` for both `plugin.axyndra:workspace.grep` and `host.process.readview`. E2109's stronger private predicate also rejected a wrong service, changed implementation and reduced ceiling in the real external Tool contract. Neither experiment is a Core fix or a public API on this revision. Evidence: `countedcallproduction2106/summary.json`, `resolverfullpty2108/summary.json`, `closedservicefacts2105/detached-projection/receipt.json`, `servicefactcontracts2109/summary.json`.
+
+### Counted-reader release packages, terminal flows and local first request
+
+E2112–E2114 used the ten production roots from E2106 (`3405693335`) and independent fresh destinations. Coding (9 plugins), Minimal (0) and Full (17) passed their 6, 3 and 7 selected packaging/entry checks. Coding and Full packaged ELF: `75bfe0ae43dec1864d4b31d13be4a9933ea106f637e5bea70f0efd6696826e7d`. Minimal: `af8d9fd90c1cad0bc151b0721daeb1f39cbf516a7dcf01085e43ca6154a19358`. E2123 ran all ten real PTY cases on the E2106 App with sealed Full fixtures: three rich protocols, cancellation, Ctrl-C, HTTP error, timeout, incomplete EOF, invalid UTF-8 and MCP. This covers local fixture requests and the observed terminal flows, not public providers, mouse or resize. Receipts: `countedcoding2112`, `countedminimal2113`, `countedfull2114` and `countedpackagepty2123` (`summary.json` in each).
+
+E2119's first local Coding request did **not** pass: nine installed packages, 5,002.321 ms to timeout, zero HTTP arrivals. Detached SQLite recorded one cancelled Run, one completed context read (+582 ms), one cancelled model attempt and zero approvals. The three captured DB/WAL/SHM hashes remained unchanged; no owned process survived cleanup. No second profile or external provider was called. E2115/E2118 separately built and packaged a private paired-inspection candidate. It passed the six Coding checks but E2120 still timed out at 5,002.687 ms with zero HTTP arrivals; it was not promoted. Receipts: `countedcold2119/detached/receipt.json`, `pairinspectioncold2120/detached/receipt.json` and the corresponding `summary.json` files.
+
+E2122 compared the same inputs, fixed SDK and original bounds on base `4d88fa6072` and the E2112 Coding package. Both passed all seven absolute gates. The extension worker was faster at P95; both CLI paths used less peak RSS but started more slowly.
+
+| P95 | Base | Counted-reader Coding |
+| --- | ---: | ---: |
+| Extension activation (ms) | 86.607 | 46.823 |
+| First worker call (ms) | 2.309 | 0.517 |
+| Steady IPC (ms) | 2.012 | 0.237 |
+| Worker peak RSS (bytes) | 29,216,768 | 20,852,736 |
+| Cancellation including 100 ms trigger (ms) | 127.689 | 125.926 |
+| `/help` (ms) | 125.035 | 417.606 |
+| `/plugins inspect` (ms) | 123.187 | 440.430 |
+
+See `countedmatched2122/{baseline,candidate}/summary.json` for the raw samples and limits. These absolute gates and PTY results do not establish latency parity, complete Core, whole Product or release acceptance. E2111's private readonly-delegation projection also passed its budget positive but retained the unsplit `read_view.output_capacity` failure. Neither producer return nor process cleanup establishes return of escaped Prepared DATA. PR remains Draft; GC is deferred, not passed.
+
+E2126 extended the private service checks to both readonly Program delegation branches. Tool, Host, Product and the external Native fixture built; the original Program budget case passed. The unchanged continuous Core fixture exited 1. The main Store had 35 Runs, 69 Operations and 69 Receipts; the file-plan-failure Store had 1/4/4. The reserved grep and `host.process.readview` Receipts again both report `read_view.output_capacity`. Both detached databases passed `quick_check`; all six raw files retained their hashes. This candidate is not a Core fix. Receipt: `delegatedchildfacts2126/detached-projection/receipt.json`.
