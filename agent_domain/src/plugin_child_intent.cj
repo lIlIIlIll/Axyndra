@@ -358,6 +358,14 @@ public func pluginPrimitiveArgumentsService111(arguments: AgentValue): String {
     httpIntentText(intents.items[0],"service")
 }
 
+// Both derived identifiers already belong to the child request. The callback
+// cannot retain the root call, its ID or its display arguments through this projection.
+public func resolverChildServiceIds(input: ToolResolverInput, requestId: String): (String, String) {
+    input.domainProjection({ call =>
+        (call.callId + ":child:" + requestId, "child-service:" + call.callId + ":" + requestId)
+    })
+}
+
 // Closed projections for a retained child selection. Only a generation or a
 // comparison result leaves the read; neither result authorizes a launch.
 public func resolverChildStartOrWaitGeneration(input: ToolResolverInput, namespace: String,

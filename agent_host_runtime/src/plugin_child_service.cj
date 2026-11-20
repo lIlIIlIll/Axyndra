@@ -1261,32 +1261,31 @@ func hostExecutePluginChild111(catalog: ToolCatalog, pipeline: ToolPipeline, ope
     admitted: (OperationId) -> Unit): JavaScriptHostResult<String> {
     if (identity.namespace == "axyndra:workflow" &&
         hostWorkflowTaskDataSelected204(identity.host, identity.namespace, "task", identity.generation) &&
-        root.withCall204({ call => call.name == "plugin.axyndra:workflow.task" })) {
-        return root.withOperationPlan204({ plan => root.withCall204({ call =>
-            hostExecuteTaskChildFrame204(catalog, pipeline, operations,
-                identity, context, root, call, plan, invocationId, requestId, service, arguments, admitted) }) })
+        root.textEquals(PreparedMetadataText.CallName, "plugin.axyndra:workflow.task")) {
+        return root.withOperationPlan204({ plan => hostExecuteTaskChildFrame204(catalog, pipeline, operations,
+            identity, context, root, plan, invocationId, requestId, service, arguments, admitted) })
     }
     hostExecuteLegacyChildFrame204(catalog, pipeline, operations, identity, context, root,
         invocationId, requestId, service, arguments, admitted)
 }
 func hostExecuteTaskChildFrame204(catalog: ToolCatalog, pipeline: ToolPipeline, operations: OperationRuntimePort,
     identity: HostPluginServiceIdentity, context: ToolInvocationContext, root: PreparedToolInvocation,
-    taskRootCall: ToolCall, plan: NormalizedOperationPlan, invocationId: String, requestId: String, service: String, arguments: AgentValue,
+    plan: NormalizedOperationPlan, invocationId: String, requestId: String, service: String, arguments: AgentValue,
     admitted: (OperationId) -> Unit): JavaScriptHostResult<String> {
     if (!httpIntentExactFields(arguments, ["intent_id"]) || httpIntentText(arguments, "intent_id") != requestId) {
         return hostPluginServiceError("child.intent_identity", "child service selects only its exact frozen intent ID") }
-    let prefix = "plugin." + identity.namespace + "."
-    if (!taskRootCall.name.startsWith(prefix)) { return hostPluginServiceError("child.parent_invalid", "child request belongs to another actual Tool") }
+    // The caller selected this exact namespace and full Task call name. The
+    // existing plan/generation check still runs before deriving either ID.
     match (hostChildInvocationPlanFrame204(identity.host, context, root, identity.namespace,
-        taskRootCall.name[prefix.size..], identity.generation, plan)) { case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(_) => () }
+        "task", identity.generation, plan)) { case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(_) => () }
     let value = match (pluginChildStartArguments111(plan.canonicalArguments, requestId)) {
         case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(item) => item }
     if (httpIntentText(value.field("intent").getOrThrow(),"service")!=service) {
         return hostPluginServiceError("child.intent_service_changed","requested service differs from the exact frozen intent") }
     let childContext = match (hostChildTaskServiceContextFrame204(root, context, plan)) {
         case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(item) => item }
-    let call = ToolCall(taskRootCall.callId + ":child:" + requestId, HOST_PLUGIN_CHILD_TOOL111, value)
-    let key = "child-service:" + taskRootCall.callId + ":" + requestId
+    let (childId, key) = root.withCallInput({ input => resolverChildServiceIds(input, requestId) })
+    let call = ToolCall(childId, HOST_PLUGIN_CHILD_TOOL111, value)
     let child = match (pipeline.prepareDerived(context, childContext, call, root, key)) {
         case Result.Err(error) => return hostPluginServiceAgentError(error)
         case Result.Ok(ToolPreparation.Ready(item)) => item
@@ -1332,8 +1331,8 @@ func hostExecuteLegacyChildFrame204(catalog: ToolCatalog, pipeline: ToolPipeline
         return hostPluginServiceError("child.intent_service_changed","requested service differs from the exact frozen intent") }
     let childContext = match (hostChildServiceContext111(root, context)) {
         case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(item) => item }
-    let call = ToolCall(root.call.callId + ":child:" + requestId, HOST_PLUGIN_CHILD_TOOL111, value)
-    let key = "child-service:" + root.call.callId + ":" + requestId
+    let (childId, key) = root.withCallInput({ input => resolverChildServiceIds(input, requestId) })
+    let call = ToolCall(childId, HOST_PLUGIN_CHILD_TOOL111, value)
     let child = match (pipeline.prepareDerived(context, childContext, call, root, key)) {
         case Result.Err(error) => return hostPluginServiceAgentError(error)
         case Result.Ok(ToolPreparation.Ready(item)) => item

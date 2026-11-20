@@ -150,6 +150,7 @@ class PreparedMetadataCopy204Tests {
         let reader = prepared.retainMetadataConsumer204().getOrThrow()
         owner.producerReturned204(); root.close()
         @Expect(reader.withCallInput({ input => resolverChildStartOrWaitGeneration(input, "fixture", "task").isNone() }))
+        let (childId, requestKey) = reader.withCallInput({ input => resolverChildServiceIds(input, "step:雪") })
         let saved = reader.withCanonicalCallInput({ input =>
             @Expect(resolverChildStartOrWaitGeneration(input, "fixture", "task").getOrThrow(), 42u64)
             @Expect(resolverChildStartOrWaitGeneration(input, "other", "task").isNone())
@@ -159,9 +160,10 @@ class PreparedMetadataCopy204Tests {
             input
         })
         var stale = false
-        try { let _ = saved.count([]) } catch (_: IllegalStateException) { stale = true }
+        try { let _ = resolverChildServiceIds(saved, "another") } catch (_: IllegalStateException) { stale = true }
         @Expect(stale); @Expect(bank.usage()[1] > 0)
         reader.returnConsumerFrame204(); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+        @Expect(childId, "task-call:child:step:雪"); @Expect(requestKey, "child-service:task-call:step:雪")
     }
 
     @TestCase

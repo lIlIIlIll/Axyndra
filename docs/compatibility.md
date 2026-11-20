@@ -164,8 +164,10 @@ For a counted metadata consumer, replace `reader.withCall204` with
 `reader.withCallInput` for display arguments or `reader.withCanonicalCallInput`
 for the frozen arguments. For Task selection, `resolverChildStartOrWaitGeneration`
 reads the matching namespace and contribution; `resolverSelectsChildWait`
-compares the start ID and complete binding. These are selection checks, not
-permission to launch or reuse a Receipt. Use `textEquals` for comparisons and
+compares the start ID and complete binding. To name a derived child call, use
+`resolverChildServiceIds(input, requestId)` inside `withCallInput`. It returns
+only the child call ID and its idempotency key; neither string retains the parent
+call or its arguments. These reads do not grant permission to launch or reuse a Receipt. Use `textEquals` for comparisons and
 `copyText` only when the recipient needs its own string. The raw-call callback on the reader
 no longer compiles; recompile host extensions against the updated Tool API.
 Returning a scoped view does **not** return the reader. Call
