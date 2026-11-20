@@ -1093,18 +1093,18 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
 
     public func verifyPluginChildExecution111(source: OperationRootSource, parent: OperationId,
         child: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
-        plan: NormalizedOperationPlan): Result<Unit> {
+        plan: PluginChildPlanMatch): Result<Unit> {
         match (validateExternalStoreSource(Some(source))) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        if (!isPluginChildStartPlan111(plan)) { return Result<Unit>.Err(AgentError(AgentErrorKind.PermissionDenied,
+        if (!plan.hasCandidate()) { return Result<Unit>.Err(AgentError(AgentErrorKind.PermissionDenied,
             "child.execution_plan_invalid", "exact frozen child-start plan required")) }
         try {
-            let encoded = encodeOperationPlan(plan)
             database.transaction { transaction: SqliteTransaction =>
-                let frozen = decodeOperationPlan(encoded)
+                let row = checkedStoredPluginChildPlan(transaction, child, run, plan)
+                let frozen = row.plan
                 channelStoreRequire(isActiveDerivedRoot(transaction, parent, run, source,
                     exactServiceRequestKey(source.callId(), frozen), frozen))
-                requirePluginChildExecution111(transaction, source, parent, child, run, thread, epoch, frozen)
+                requirePluginChildExecution111(transaction, source, parent, child, run, thread, epoch, row)
                 requireExactParentIntent(transaction, child, run, frozen)
             }
             Result<Unit>.Ok(())
@@ -1114,16 +1114,16 @@ public class DurableOperationStore <: OperationRuntimePort & HubDerivedProcessSe
 
     public func pluginChildStartReceipt111(source: OperationRootSource, parent: OperationId,
         child: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
-        plan: NormalizedOperationPlan): Result<VNextOperationReceipt> {
+        plan: PluginChildPlanMatch): Result<VNextOperationReceipt> {
         match (validateExternalStoreSource(Some(source))) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         try {
-            let encoded = encodeOperationPlan(plan)
             let receipt = database.transaction { transaction: SqliteTransaction =>
-                let frozen = decodeOperationPlan(encoded)
+                let row = checkedStoredPluginChildPlan(transaction, child, run, plan)
+                let frozen = row.plan
                 channelStoreRequire(isActiveDerivedRoot(transaction,parent,run,source,
                     exactServiceRequestKey(source.callId(),frozen),frozen))
                 requireExactParentIntent(transaction,child,run,frozen)
-                requirePluginChildStartReceipt111(transaction,source,parent,child,run,thread,epoch,frozen,
+                requirePluginChildStartReceipt111(transaction,source,parent,child,run,thread,epoch,row,
                     { launch: OperationId, launchPlan: NormalizedOperationPlan => requireExactParentIntent(transaction,launch,run,launchPlan) })
             }
             Result.Ok(receipt)

@@ -98,7 +98,7 @@ private class PeerSendStoreFixture111 {
         peerSendRequire111(store.markExecutingWithSource(Some(source), child, run, childPlan, 13, false))
         peerSendRequire111(store.markExecutionHandoffWithSource(Some(source), child, run, thread, 14))
     }
-    func verify(): Result<Unit> { store.verifyPluginChildExecution111(source, parent, child, run, thread, epoch, childPlan) }
+    func verify(): Result<Unit> { withStoredPluginChildPlan(childPlan, { proof => store.verifyPluginChildExecution111(source, parent, child, run, thread, epoch, proof) }) }
     func close(): Unit { database.close(); remove(directory, recursive: true) }
 }
 

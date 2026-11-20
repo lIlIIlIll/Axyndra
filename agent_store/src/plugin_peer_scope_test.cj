@@ -95,7 +95,7 @@ private class PeerStoreFixture111 {
         peerRequire111(store.markExecutingWithSource(Some(source), child, run, childPlan, 13, false))
         peerRequire111(store.markExecutionHandoffWithSource(Some(source), child, run, thread, 14))
     }
-    func verify(): Result<Unit> { store.verifyPluginChildExecution111(source, parent, child, run, thread, epoch, childPlan) }
+    func verify(): Result<Unit> { withStoredPluginChildPlan(childPlan, { proof => store.verifyPluginChildExecution111(source, parent, child, run, thread, epoch, proof) }) }
     func close(): Unit { database.close(); remove(directory, recursive: true) }
 }
 
@@ -129,10 +129,10 @@ class PluginPeerScopeTests111 {
         let f=PeerStoreFixture111()
         try {
             f.parentHandoff();f.childHandoff();@Expect(f.verify().isOk())
-            @Expect(f.store.verifyPluginChildExecution111(f.source,f.parent,f.child,RunId("foreign"),f.thread,f.epoch,f.childPlan).isError())
-            @Expect(f.store.verifyPluginChildExecution111(f.source,f.parent,f.child,f.run,ThreadId("foreign"),f.epoch,f.childPlan).isError())
-            @Expect(f.store.verifyPluginChildExecution111(f.source,f.parent,f.child,f.run,f.thread,f.epoch+1,f.childPlan).isError())
-            @Expect(f.store.verifyPluginChildExecution111(f.source,OperationId("foreign"),f.child,f.run,f.thread,f.epoch,f.childPlan).isError())
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source,f.parent,f.child,RunId("foreign"),f.thread,f.epoch, proof) }).isError())
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source,f.parent,f.child,f.run,ThreadId("foreign"),f.epoch, proof) }).isError())
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source,f.parent,f.child,f.run,f.thread,f.epoch+1, proof) }).isError())
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source,OperationId("foreign"),f.child,f.run,f.thread,f.epoch, proof) }).isError())
             @Expect(f.verify().isOk());@Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts"),0)
         } finally {f.close()}
     }

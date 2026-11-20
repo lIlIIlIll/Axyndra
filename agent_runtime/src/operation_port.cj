@@ -9,7 +9,7 @@ public interface OperationRuntimePort {
     // This method does not start a Run or construct a live child owner.
     func verifyPluginChildExecution111(source: OperationRootSource, parent: OperationId,
         child: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
-        plan: NormalizedOperationPlan): Result<Unit> {
+        plan: PluginChildPlanMatch): Result<Unit> {
         Result.Err(AgentError(AgentErrorKind.PermissionDenied, "child.execution_port_unavailable",
             "this operation port cannot prove exact child-start execution"))
     }
@@ -18,7 +18,7 @@ public interface OperationRuntimePort {
     // handed-off wait intent. It neither restores a child owner nor starts it.
     func pluginChildStartReceipt111(source: OperationRootSource, parent: OperationId,
         child: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
-        plan: NormalizedOperationPlan): Result<VNextOperationReceipt> {
+        plan: PluginChildPlanMatch): Result<VNextOperationReceipt> {
         Result.Err(AgentError(AgentErrorKind.PermissionDenied, "child.wait_port_unavailable",
             "this operation port cannot prove the exact completed launch"))
     }

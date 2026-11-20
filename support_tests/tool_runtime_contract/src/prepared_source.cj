@@ -282,6 +282,7 @@ func runDirectSourceAndHostServiceContract(serviceName: String): Unit {
     let bound = pipeline.bindDirectRoot(context, raw, reference).value().getOrThrow()
     expect(bound.source.kind == PreparedInvocationSourceKind.Direct && bound.committedToolCall.isNone() &&
         bound.source.operationRoot.isSome(), "binding Direct preserves its distinct non-model identity")
+    verifyScopedChildPortContract(bound.source.operationRoot.getOrThrow(), bound.operationId, run, thread)
     expect(pipeline.bindDirectRoot(context, bound, reference).isError(),
         "an already bound source cannot be rebound")
     let wrongPrepared = sourceReady(pipeline.prepare(context,
@@ -337,4 +338,21 @@ class SourceEstimator <: ThreadTokenEstimator {
     public func estimateCheckpoint(_: ContextCheckpoint): Int64 { 1 }
     public func estimateItem(_: ThreadItem): Int64 { 1 }
     public func estimateDynamicState(_: AgentValue): Int64 { 1 }
+}
+
+func verifyScopedChildPortContract(source: OperationRootSource, parent: OperationId, run: RunId, thread: ThreadId): Unit {
+    let backend = HttpApprovalRecordingOperations()
+    let port: OperationRuntimePort = backend
+    let child = OperationId("external-child")
+    let check = { proof: PluginChildPlanMatch, execution: String, wait: String =>
+        expect(match (port.verifyPluginChildExecution111(source, parent, child, run, thread, 1, proof)) {
+            case Result.Err(error) => error.code == execution; case _ => false }, "external execution port remains closed")
+        expect(match (port.pluginChildStartReceipt111(source, parent, child, run, thread, 1, proof)) {
+            case Result.Err(error) => error.code == wait; case _ => false }, "external receipt port remains closed")
+    }
+    let saved = withPluginChildPlanBytes(Some(backend.childRow), { proof =>
+        check(proof, "child.execution_port_unavailable", "child.wait_port_unavailable"); proof })
+    check(saved, "fixture.child_row_mismatch", "fixture.child_row_mismatch")
+    withPluginChildPlanBytes(Some(backend.childRow + "-changed"), { proof =>
+        check(proof, "fixture.child_row_mismatch", "fixture.child_row_mismatch") })
 }

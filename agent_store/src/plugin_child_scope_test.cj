@@ -112,7 +112,7 @@ private class ChildStoreFixture111 {
         childRequire111(store.markExecutingWithSource(Some(source), child, run, childPlan, 13, false))
         childRequire111(store.markExecutionHandoffWithSource(Some(source), child, run, thread, 14))
     }
-    func verify(): Result<Unit> { store.verifyPluginChildExecution111(source, parent, child, run, thread, epoch, childPlan) }
+    func verify(): Result<Unit> { withStoredPluginChildPlan(childPlan, { proof => store.verifyPluginChildExecution111(source, parent, child, run, thread, epoch, proof) }) }
     func waitPlan(): NormalizedOperationPlan {
         let arguments=childRequire111(pluginChildStartArguments111(parentPlan.canonicalArguments,"wait-0"))
         NormalizedOperationPlan(HOST_PLUGIN_CHILD_TOOL111,arguments,childPlan.requiredCapabilities,
@@ -135,7 +135,7 @@ private class ChildStoreFixture111 {
                 ValueField("request_id",textValue("start-0")),ValueField("service",textValue("child.start"))]),15)))
     }
     func waitReceipt(): Result<VNextOperationReceipt> {
-        store.pluginChildStartReceipt111(source,parent,OperationId("primitive-wait"),run,thread,epoch,waitPlan())
+        withStoredPluginChildPlan(waitPlan(), { proof => store.pluginChildStartReceipt111(source,parent,OperationId("primitive-wait"),run,thread,epoch, proof) })
     }
     func commitParentFailure(): Bool {
         let slots = database.query("SELECT reserved_receipt_id,reserved_result_item_id FROM operation_effect_records WHERE operation_id=?",
@@ -379,16 +379,45 @@ class PluginChildScopeTests111 {
         } finally { f.close() }
     }
     @TestCase
+    func onlyTheLiveCompletePlanWitnessMatchesTheDurableChild(): Unit {
+        let f = ChildStoreFixture111()
+        try {
+            f.parentHandoff(); f.childHandoff()
+            let encoded = encodeOperationPlan(f.childPlan)
+            let changed = storedOperationPlanValue(f.childPlan)
+            changed.put("cwd", textValue("/other-workspace")) // unchanged binding_digest, different plan
+            let other = encodeStoredValue(changed)
+            let saved = withStoredPluginChildPlan(f.childPlan, { proof =>
+                @Expect(proof.matchesStored(encoded)); @Expect(!proof.matchesStored(other))
+                @Expect(storedPluginChildPlanMatches(f.childPlan, proof))
+                @Expect(!storedPluginChildPlanMatches(decodeOperationPlan(other), proof))
+                @Expect(f.store.verifyPluginChildExecution111(f.source, f.parent, f.child,
+                    f.run, f.thread, f.epoch, proof).isOk())
+                proof
+            })
+            @Expect(!saved.hasCandidate()); @Expect(!saved.matchesStored(encoded))
+            @Expect(!storedPluginChildPlanMatches(f.childPlan, saved))
+            @Expect(f.store.verifyPluginChildExecution111(f.source, f.parent, f.child,
+                f.run, f.thread, f.epoch, saved).isError())
+            @Expect(withPluginChildPlanBytes(Some(other), { proof =>
+                f.store.verifyPluginChildExecution111(f.source, f.parent, f.child,
+                    f.run, f.thread, f.epoch, proof) }).isError())
+            @Expect(f.verify().isOk())
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations"), 2)
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts"), 0)
+        } finally { f.close() }
+    }
+    @TestCase
     func wrongCallerRunThreadEpochAndPlanCannotBorrowTheActualHandoff(): Unit {
         let f = ChildStoreFixture111()
         try {
             f.parentHandoff(); f.childHandoff()
             @Expect(f.verify().isOk(), true)
-            @Expect(f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, RunId("other"), f.thread, f.epoch, f.childPlan).isError(), true)
-            @Expect(f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, f.run, ThreadId("other"), f.epoch, f.childPlan).isError(), true)
-            @Expect(f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, f.run, f.thread, f.epoch + 1, f.childPlan).isError(), true)
-            @Expect(f.store.verifyPluginChildExecution111(f.source, OperationId("other"), f.child, f.run, f.thread, f.epoch, f.childPlan).isError(), true)
-            @Expect(f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, f.run, f.thread, f.epoch, f.parentPlan).isError(), true)
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, RunId("other"), f.thread, f.epoch, proof) }).isError(), true)
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, f.run, ThreadId("other"), f.epoch, proof) }).isError(), true)
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, f.run, f.thread, f.epoch + 1, proof) }).isError(), true)
+            @Expect(withStoredPluginChildPlan(f.childPlan, { proof => f.store.verifyPluginChildExecution111(f.source, OperationId("other"), f.child, f.run, f.thread, f.epoch, proof) }).isError(), true)
+            @Expect(withStoredPluginChildPlan(f.parentPlan, { proof => f.store.verifyPluginChildExecution111(f.source, f.parent, f.child, f.run, f.thread, f.epoch, proof) }).isError(), true)
             @Expect(f.verify().isOk(), true)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations"), 2)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_receipts"), 0)
@@ -435,9 +464,9 @@ class PluginChildWaitScopeTests111 {
             f.parentHandoff();f.childHandoff();f.launchReceipt();f.waitHandoff()
             let plan=f.waitPlan();let wait=OperationId("primitive-wait")
             @Expect(f.waitReceipt().isOk())
-            @Expect(f.store.pluginChildStartReceipt111(f.source,OperationId("foreign-parent"),wait,f.run,f.thread,f.epoch,plan).isError())
-            @Expect(f.store.pluginChildStartReceipt111(f.source,f.parent,wait,RunId("foreign-run"),f.thread,f.epoch,plan).isError())
-            @Expect(f.store.pluginChildStartReceipt111(f.source,f.parent,wait,f.run,f.thread,f.epoch+1,plan).isError())
+            @Expect(withStoredPluginChildPlan(plan, { proof => f.store.pluginChildStartReceipt111(f.source,OperationId("foreign-parent"),wait,f.run,f.thread,f.epoch, proof) }).isError())
+            @Expect(withStoredPluginChildPlan(plan, { proof => f.store.pluginChildStartReceipt111(f.source,f.parent,wait,RunId("foreign-run"),f.thread,f.epoch, proof) }).isError())
+            @Expect(withStoredPluginChildPlan(plan, { proof => f.store.pluginChildStartReceipt111(f.source,f.parent,wait,f.run,f.thread,f.epoch+1, proof) }).isError())
             childRequire111(settleFixtureDerived(f.store, wait, plan, f.run,f.parent,VNextOperationReceipt("receipt-"+wait.value,wait,
                 OperationOutcome.Completed,objectValue([]),objectValue([]),18)))
             @Expect(f.waitReceipt().isError());@Expect(f.database.scalarInt("SELECT COUNT(*) FROM runs"),1)

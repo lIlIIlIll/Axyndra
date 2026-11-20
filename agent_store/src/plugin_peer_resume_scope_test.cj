@@ -129,7 +129,7 @@ private class PeerResumeStoreFixture111 {
         peerResumeStoreRequire111(store.markExecutingWithSource(Some(OperationRootSource.Direct(source)),child,run,childPlan,17,false))
         peerResumeStoreRequire111(store.markExecutionHandoffWithSource(Some(OperationRootSource.Direct(source)),child,run,thread,18))
     }
-    func verify():Result<Unit>{store.verifyPluginChildExecution111(OperationRootSource.Direct(source),parent,child,run,thread,active.epoch,childPlan)}
+    func verify():Result<Unit>{withStoredPluginChildPlan(childPlan, { proof => store.verifyPluginChildExecution111(OperationRootSource.Direct(source),parent,child,run,thread,active.epoch, proof) })}
     func close():Unit{database.close();remove(root,recursive:true)}
 }
 

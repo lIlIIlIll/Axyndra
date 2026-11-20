@@ -234,6 +234,23 @@ class HttpApprovalSourceExecutor <: ToolExecutor {
 // the port boundary and require its exact operation before executor admission.
 class HttpApprovalRecordingOperations <: OperationRuntimePort {
     let inner = InMemoryOperationRuntimePort()
+    // This external port can compare its stored DATA, not inspect a caller's plan.
+    // A match still delegates to an unsupported backend and must not authorize a child.
+    let childRow = "stored-child-witness"
+    public func verifyPluginChildExecution111(source: OperationRootSource, parent: OperationId,
+        child: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
+        plan: PluginChildPlanMatch): Result<Unit> {
+        if (!plan.matchesStored(childRow)) { return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+            "fixture.child_row_mismatch", "no matching child row")) }
+        inner.verifyPluginChildExecution111(source, parent, child, run, thread, epoch, plan)
+    }
+    public func pluginChildStartReceipt111(source: OperationRootSource, parent: OperationId,
+        child: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
+        plan: PluginChildPlanMatch): Result<VNextOperationReceipt> {
+        if (!plan.matchesStored(childRow)) { return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+            "fixture.child_row_mismatch", "no matching child row")) }
+        inner.pluginChildStartReceipt111(source, parent, child, run, thread, epoch, plan)
+    }
     var approvals: Int64 = 0
     var approvedOperation = ""
     var approvedSource = ""

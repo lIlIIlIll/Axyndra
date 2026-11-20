@@ -14,7 +14,7 @@ func reserveHubProcessServiceInTransaction180(transaction: SqliteTransaction,
     thread: ThreadId, epoch: Int64, plan: NormalizedOperationPlan,
     requireParentIntent: () -> Unit): Unit {
     channelStoreRequire(pluginPrimitivePlanService111(plan)=="process.service")
-    requirePluginChildExecution111(transaction,source,parent,child,run,thread,epoch,plan)
+    requirePluginChildExecution111(transaction,source,parent,child,run,thread,epoch,StoredPluginChildPlan111(plan))
     requireParentIntent()
     channelStoreRequire(transaction.query("SELECT id FROM audit_events WHERE operation_id=? " +
         "AND kind='hub_process_service_reserved' LIMIT 2",[SqlParameter.Text(child.value)]).isEmpty())
@@ -75,7 +75,7 @@ func reserveHubProcessObservationInTransaction197(transaction: SqliteTransaction
     thread: ThreadId, epoch: Int64, plan: NormalizedOperationPlan,
     requireParentIntent: () -> Unit): Unit {
     channelStoreRequire(isPluginHubProcessObservationPlan197(plan))
-    requirePluginChildExecution111(transaction,source,parent,child,run,thread,epoch,plan)
+    requirePluginChildExecution111(transaction,source,parent,child,run,thread,epoch,StoredPluginChildPlan111(plan))
     requireParentIntent()
     channelStoreRequire(transaction.query("SELECT id FROM audit_events WHERE operation_id=? " +
         "AND kind='hub_process_service_reserved' LIMIT 2",[SqlParameter.Text(child.value)]).isEmpty())

@@ -41,7 +41,8 @@ func requirePluginChildScope111(transaction: SqliteTransaction, run: RunId,
 // own executing state and physical handoff; a prepared plan cannot launch a Run.
 func requirePluginChildExecution111(transaction: SqliteTransaction, source: OperationRootSource,
     parent: OperationId, child: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
-    plan: NormalizedOperationPlan): Unit {
+    row: StoredPluginChildPlan111): Unit {
+    let plan = row.plan
     channelStoreRequire(epoch > 0 && isPluginChildStartPlan111(plan))
     let rows = transaction.query("SELECT child.tool_call_item_id,parent.normalized_plan FROM operations child " +
         "JOIN operation_state_registers state ON state.operation_id=child.id AND state.state=child.state " +
@@ -58,7 +59,7 @@ func requirePluginChildExecution111(transaction: SqliteTransaction, source: Oper
         "AND derived.request_key=? AND derived.request_digest=? " +
         "AND NOT EXISTS(SELECT 1 FROM operation_receipts receipt WHERE receipt.operation_id=child.id) LIMIT 2",
         [SqlParameter.Text(child.value), SqlParameter.Text(parent.value), SqlParameter.Text(run.value),
-            SqlParameter.Text(encodeOperationPlan(plan)), SqlParameter.Text(thread.value), SqlParameter.Int64Value(epoch),
+            SqlParameter.Text(row.encoded), SqlParameter.Text(thread.value), SqlParameter.Int64Value(epoch),
             SqlParameter.Text(exactServiceRequestKey(source.callId(), plan)), SqlParameter.Text(plan.bindingDigest)])
     channelStoreRequire(rows.size == 1 && rows[0].required(0) == source.itemId().value &&
         pluginChildParentAllows111(decodeOperationPlan(rows[0].required(1)), plan))
@@ -82,8 +83,9 @@ func requirePluginChildExecution111(transaction: SqliteTransaction, source: Oper
 
 func requirePluginChildStartReceipt111(transaction: SqliteTransaction, source: OperationRootSource,
     parent: OperationId, wait: OperationId, run: RunId, thread: ThreadId, epoch: Int64,
-    plan: NormalizedOperationPlan, verifyStart: (OperationId, NormalizedOperationPlan) -> Unit): VNextOperationReceipt {
-    requirePluginChildExecution111(transaction, source, parent, wait, run, thread, epoch, plan)
+    frozen: StoredPluginChildPlan111, verifyStart: (OperationId, NormalizedOperationPlan) -> Unit): VNextOperationReceipt {
+    requirePluginChildExecution111(transaction, source, parent, wait, run, thread, epoch, frozen)
+    let plan = frozen.plan
     let intent = plan.canonicalArguments.field("intent").getOrThrow()
     channelStoreRequire(httpIntentText(intent, "service") == "child.wait")
     let id = httpIntentText(intent.field("input").getOrThrow(), "start_intent_id")
@@ -121,4 +123,36 @@ func requirePluginChildStartReceipt111(transaction: SqliteTransaction, source: O
         httpIntentText(verification,"request_id")==id && httpIntentText(verification,"service")=="child.start")
     VNextOperationReceipt(row.required(3),OperationId(row.required(0)),OperationOutcome.Completed,
         detail,verification,parseStoreInt(row.required(6),"child launch Receipt timestamp"))
+}
+
+// Use the Store's durable codec, not the separately extended Prepared wire
+// (which also carries the in-memory approval preview). No row is trusted here.
+public func withStoredPluginChildPlan<T>(plan: NormalizedOperationPlan, body: (PluginChildPlanMatch) -> T): T {
+    let encoded = if (isPluginChildStartPlan111(plan)) { Some(encodeOperationPlan(plan)) } else { None<String> }
+    withPluginChildPlanBytes(encoded, body)
+}
+
+// For an external operation store retaining its own typed plan, not the
+// SQLite wire. The receiver can compare its data without reading the caller's.
+public func storedPluginChildPlanMatches(plan: NormalizedOperationPlan, proof: PluginChildPlanMatch): Bool {
+    proof.hasCandidate() && proof.matchesStored(encodeOperationPlan(plan))
+}
+
+// The SQL predicate and typed checks use the same plan. A checked Store row
+// is decoded once; it is never serialized a second time just to bind SQL.
+struct StoredPluginChildPlan111 {
+    let encoded: String
+    let plan: NormalizedOperationPlan
+    init(supplied: NormalizedOperationPlan) { plan = supplied; encoded = encodeOperationPlan(supplied) }
+    init(stored: String) { encoded = stored; plan = decodeOperationPlan(stored) }
+}
+
+func checkedStoredPluginChildPlan(transaction: SqliteTransaction, child: OperationId, run: RunId,
+    proof: PluginChildPlanMatch): StoredPluginChildPlan111 {
+    let rows = transaction.query("SELECT normalized_plan FROM operations WHERE id=? AND run_id=? LIMIT 2",
+        [SqlParameter.Text(child.value), SqlParameter.Text(run.value)])
+    channelStoreRequire(rows.size == 1)
+    let encoded = rows[0].required(0)
+    channelStoreRequire(proof.matchesStored(encoded))
+    StoredPluginChildPlan111(encoded)
 }

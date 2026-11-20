@@ -135,6 +135,22 @@ returns or throws, even a saved handle can no longer match. Existing Receipts
 are not rewritten and earlier raw Prepared exports are not retroactively
 released. The wider Prepared call/plan API migration remains open.
 
+## Verify a child operation without borrowing its plan
+
+Rebuild custom `OperationRuntimePort` implementations. The last argument to
+`verifyPluginChildExecution111` and `pluginChildStartReceipt111` is now a
+`PluginChildPlanMatch`, not a `NormalizedOperationPlan`. The Host calls each
+method inside `withStoredPluginChildPlan(frozenPlan, { proof => … })`.
+
+Compare the receiver’s own durable plan inside the same transaction as the
+Source, parent, Run, thread, epoch, handoff and Receipt checks. Use
+`proof.matchesStored(encodedRow)` for the Store’s original bytes, or
+`storedPluginChildPlanMatches(storedPlan, proof)` from `agent_store` for a
+typed record. Neither a match nor `proof.hasCandidate()` authorizes a child.
+A saved proof no longer matches after the call returns or throws; do not
+queue it for a later execution. Unsupported ports still deny both operations.
+Stored rows and the SQLite schema do not change.
+
 ## Read a prepared call without exporting its arguments
 
 Host executors can use `prepared.withCallInput` for the display call. Use

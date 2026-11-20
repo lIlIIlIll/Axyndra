@@ -2,6 +2,7 @@ package agent_host_runtime
 
 import agent_domain.*
 import agent_runtime.*
+import agent_store.withStoredPluginChildPlan
 import agent_plugin_registry.*
 import agent_extension_runtime.*
 import tool_runtime.*
@@ -214,9 +215,9 @@ public class HostPluginChildAdmission111 {
         if (prepared.source.kind != PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
             prepared.source.parentOperationId.isNone() || !isPluginChildStartPlan111(plan)) {
             return hostPluginResourceError("child.source_invalid", "child start has no exact executing canonical parent") }
-        operations.verifyPluginChildExecution111(prepared.source.operationRoot.getOrThrow(),
+        withStoredPluginChildPlan(plan, { proof => operations.verifyPluginChildExecution111(prepared.source.operationRoot.getOrThrow(),
             prepared.source.parentOperationId.getOrThrow(), prepared.operationId, context.runId,
-            ThreadId(context.sessionId.value), context.epoch, plan)
+            ThreadId(context.sessionId.value), context.epoch, proof) })
     }
     public func acquireHubProcessService180():Result<HostHubDerivedProcessLease180>{
         lock.lock()
@@ -670,9 +671,9 @@ public class HostPluginChildAdmission111 {
     }
     private func startReceiptTaskPlanFrame204(plan: NormalizedOperationPlan): Result<VNextOperationReceipt> {
         match (check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        operations.pluginChildStartReceipt111(prepared.source.operationRoot.getOrThrow(),
+        withStoredPluginChildPlan(plan, { proof => operations.pluginChildStartReceipt111(prepared.source.operationRoot.getOrThrow(),
             prepared.source.parentOperationId.getOrThrow(), prepared.operationId, context.runId,
-            ThreadId(context.sessionId.value), context.epoch, plan)
+            ThreadId(context.sessionId.value), context.epoch, proof) })
     }
     // Matches an already-live actual start owner, never a deserialized DTO.
     public func selectsStart(start: HostPluginChildAdmission111, receipt: VNextOperationReceipt): Bool {
