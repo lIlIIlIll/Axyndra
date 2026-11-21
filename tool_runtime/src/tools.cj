@@ -964,9 +964,10 @@ public class ToolCatalog {
         try {
             for (item in registrations where !item.revoked && item.descriptor.planReviewSafe && item.descriptor.supervisedExecutionSafe &&
                 !item.descriptor.controlOnly && !item.descriptor.hostServiceOnly && toolRegistrationVisible(item, Some(thread))) {
-                if (snapshot.planReviewSafeExport159(item.descriptor.definition.name, item.descriptor.implementationVersion,
+                let name = item.descriptor.nameForData204()
+                if (snapshot.planReviewSafeExport159(name, item.descriptor.implementationVersion,
                     item.descriptor.implementationFingerprint, item.descriptor.schemaDigest)) {
-                    names.add(String.fromUtf8(item.descriptor.definition.name.toArray()))
+                    names.add(String.fromUtf8(name.toArray()))
                 }
             }
             names.toArray()
@@ -2024,10 +2025,11 @@ public class ToolCatalog {
                     break
                 }
             }
+            let definition = item.descriptor.definition
             entries.add(ToolSnapshotEntry(
-                item.descriptor.definition.name,
-                item.descriptor.definition.description,
-                item.descriptor.definition.inputSchema,
+                definition.name,
+                definition.description,
+                definition.inputSchema,
                 item.descriptor.implementationVersion,
                 required,
                 implementationFingerprint: item.descriptor.implementationFingerprint,

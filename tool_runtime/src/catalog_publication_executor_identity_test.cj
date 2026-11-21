@@ -1,6 +1,7 @@
 package tool_runtime
 
 import agent_domain.*
+import agent_runtime.*
 import agent_ports.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -22,6 +23,32 @@ private func catalogPublicationIdentityDescriptor110(name: String): ToolDescript
 
 @Test
 class CatalogPublicationExecutorIdentityTests110 {
+    @TestCase
+    func ownedSnapshotsKeepIndependentSchemaAndCapabilityDecision(): Unit {
+        let catalog = ToolCatalog()
+        let thread = ThreadId("snapshot-thread")
+        let owner = catalog.createContributionOwner("snapshot-owner", "test.scoped.",
+            threadId: Some(thread)).value().getOrThrow()
+        let digest = "0000000000000000000000000000000000000000000000000000000000000000"
+        let binding = ToolContributionBinding("sha256:" + digest, digest, "snapshot-instance", 1)
+        let name = "test.scoped.snapshot"
+        let schema = objectValue([ValueField("required", listValue([textValue("path")]))])
+        let descriptor = ToolDescriptor(ModelToolDefinition(name, "Snapshot schema", schema),
+            Capability(CapabilityKind.WorkspaceRead))
+        let executor = CatalogPublicationIdentityExecutor110()
+        @Expect(catalog.replaceOwnedBatch(owner, 0, binding, [ToolCatalogRegistration(descriptor, executor)]).isOk())
+        let allowed = CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+        let first = catalog.toolSetSnapshot("allowed", allowed, threadId: Some(thread)).entries[0]
+        @Expect(first.availableAtSnapshot)
+        first.inputSchema.field("required").getOrThrow().items[0] = textValue("changed")
+        let next = catalog.toolSetSnapshot("restricted", CapabilitySet(values: []), threadId: Some(thread)).entries[0]
+        @Expect(!next.availableAtSnapshot)
+        @Expect(next.name, name)
+        @Expect(next.description, "Snapshot schema")
+        @Expect(next.schemaDigest, descriptor.schemaDigest)
+        @Expect(next.inputSchema.field("required").getOrThrow().items[0].asString(), "path")
+    }
+
     @TestCase
     func revokingAnIdleToolDropsNoExternalReference(): Unit {
         let catalog = ToolCatalog()
