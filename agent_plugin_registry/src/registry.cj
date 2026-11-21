@@ -1443,6 +1443,21 @@ public open class PluginRegistry {
         None
     }
 
+    // Includes disabled and shadowed records: distribution defaults must not
+    // overwrite either. No record or descriptor escapes this observation.
+    public func hasInstalledRecord(namespace!: ?String = None): Bool {
+        registryLock.lock()
+        try {
+            requireOpenLocked()
+            match (namespace) {
+                case None => !records.isEmpty()
+                case Some(name) =>
+                    for (record in records where record.descriptor.namespace == name) { return true }
+                    false
+            }
+        } finally { registryLock.unlock() }
+    }
+
     public func list(): OwnedPluginRecordList {
         registryLock.lock()
         try { requireOpenLocked(); ownRecordList78(listLocked()) } finally { registryLock.unlock() }

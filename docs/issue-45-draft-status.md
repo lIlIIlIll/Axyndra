@@ -5204,3 +5204,7 @@ Both `ToolPipeline.prepareDerived` entry points now ask the live parent whether 
 ### E2361: bind file application to the frozen operations and patch
 
 The [file application check](implementation/plan-execution-reliability.md#e2361-apply-the-stored-operations-only-if-they-match-the-frozen-request) passed all 97 Native Tool Runtime cases and the real AST recovery and approved-write contract. Core capacity, the first five-second model request, and final release remain open.
+
+### E2362: installed defaults use a presence check; complete Core still fails
+
+[Eight Native distribution cases and paired query measurements](implementation/plan-execution-reliability.md#e2362-check-installed-defaults-without-copying-the-registry) verify the new lookup without changing package integrity or operator enablement. On its parent `c8d896d5`, all 436 eligible Product cases and 16 selected packaging stages passed. The unsplit Core still failed on `host.process.readview`; neither the five-second model entry nor whole Product or final release is accepted. GC work remains deferred.

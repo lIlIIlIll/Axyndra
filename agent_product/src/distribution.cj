@@ -156,16 +156,13 @@ private func applyDistributionDefaultsFrame(product: ProductRuntime, directory: 
         // so N defaults cost O(N^2) resident generations. Register every
         // default first, then mount each one once through the same activation
         // path. Existing operator records retain their state and activation.
-        let existingRecords = product.pluginSnapshots()
-        let registryEmpty = existingRecords.size == 0
-        existingRecords.close()
+        let registryEmpty = !product.hasInstalledPlugin()
         let enabledNamespaces = ArrayList<String>()
         let firstAssembly = ArrayList<DistributionPluginInstall>()
         for (index in 0..descriptors.size) {
             let descriptor = descriptors[index]; let entry = entries.items[index]
-            // This decision needs only presence, not copied records or their
-            // scope ranking. Keep the original snapshot timing around imports.
-            if (distributionHasInstalledNamespace(product, httpIntentText(entry, "namespace"))) {
+            // Recheck after each preceding import; this is not an activation decision.
+            if (product.hasInstalledPlugin(namespace: Some(httpIntentText(entry, "namespace")))) {
                 // Never update, re-enable or shadow an operator's record.
                 // Startup and explicit management own its activation.
                 continue
@@ -367,18 +364,6 @@ func seedDistributionWorkspace(product: ProductRuntime, value: AgentValue): Resu
         catch(_:Exception){if(!exists(destination)){return distributionError("distribution.workspace_write_failed")}}
     }finally{if(exists(Path(temporary))){remove(temporary)}}
     Result.Ok(())
-}
-
-// Only a Bool leaves the owned snapshot. No complete record JSON, raw name,
-// or compatibility-copy debt is needed to decide whether to import a default.
-private func distributionHasInstalledNamespace(product: ProductRuntime, namespace: String): Bool {
-    let records = product.pluginSnapshots()
-    try {
-        for (index in 0..records.size) {
-            if (records.at(index).descriptor.textEquals(PluginDescriptorText.Namespace, namespace)) { return true }
-        }
-        false
-    } finally { records.close() }
 }
 
 // Select against a fresh snapshot at each original lookup. Only a content lock leaves;

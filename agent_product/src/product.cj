@@ -1263,6 +1263,10 @@ public class ProductRuntime {
         }
     }
 
+    func hasInstalledPlugin(namespace!: ?String = None): Bool {
+        pluginRuntime.hasInstalledRecord(namespace: namespace)
+    }
+
     public func pluginSnapshots(): OwnedPluginRecordList {
         pluginRuntime.list()
     }
