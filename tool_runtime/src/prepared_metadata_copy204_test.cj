@@ -54,6 +54,41 @@ private class PlanRuleObservationNode <: JsonNode {
 @Test
 class PreparedMetadataCopy204Tests {
     @TestCase
+    func saturatedMetadataCanAnswerClosedQueriesButStillRefusesAnotherExternalReader(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("read-run"), SessionId("read-session"), CapabilitySet())
+        let prepared = metadataFixture204(context, objectValue([]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let held = prepared.retainMetadataConsumer204().getOrThrow()
+        let ballast = root.deriveRetainedLease()
+        ballast.ensureRetainedPeak(bank.capacity() - root.retainedCustodyUsage113()[0])
+        @Assert(root.retainedCustodyUsage113()[0], bank.capacity())
+        var refused = false
+        // Construction can already have paid a higher peak on this exact lease.
+        // Consume that slack with real handles before testing the next allocation.
+        var handles: Int64 = 0
+        while (!refused && handles <= bank.capacity() / 1024) {
+            try {
+                let extra = prepared.retainMetadataConsumer204().getOrThrow()
+                extra.returnConsumerFrame204(); handles++
+            } catch (_: LogicalJsonPayloadError) { refused = true }
+        }
+        @Expect(refused)
+        let catalog = ToolCatalog(); let thread = ThreadId(context.sessionId.value)
+        var closedReads: Int64 = 0
+        try {
+            if (prepared.withCallInput({ input => input.textEquals(ToolResolverText.CallId, "copy-call") })) { closedReads++ }
+            if (prepared.withCanonicalCallInput({ input => input.textEquals(ToolResolverText.Name, "copy-tool") })) { closedReads++ }
+            if (prepared.withReceiptBinding(false, { binding => binding.matches(prepared.operationId, "copy-binding") })) { closedReads++ }
+            if (prepared.resolvedHostServiceMatches(catalog, "unpublished", thread).isNone()) { closedReads++ }
+        } catch (_: LogicalJsonPayloadError) { }
+        @Expect(closedReads, 4)
+        owner.producerReturned204(); ballast.close(); root.close()
+        @Expect(held.textEquals(PreparedMetadataText.CallName, "copy-tool")); @Expect(bank.usage()[1] > 0)
+        held.returnConsumerFrame204(); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func callerParentCanReturnTheProducerWithoutRetiringTheActiveComparison(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
         let context = ToolInvocationContext(RunId("caller-run"), SessionId("caller-session"), CapabilitySet())

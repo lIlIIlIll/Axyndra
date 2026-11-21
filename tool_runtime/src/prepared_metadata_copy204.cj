@@ -73,7 +73,7 @@ class PreparedMetadataOwner204 {
             data.textEqualsFrame(field, expected)
         } finally { lock.unlock() }
     }
-    func matchesFrozenPlan(producer: PreparedToolInvocation, rule: FrozenPluginPlanRule): Bool {
+    func beginScopedRead204(producer: PreparedToolInvocation): Unit {
         lock.lock()
         try {
             if (returned || producerReturned || consumers == Int64.Max || !refEq(prepared.getOrThrow(), producer)) {
@@ -82,6 +82,9 @@ class PreparedMetadataOwner204 {
             // One stack-scoped reader; no external handle or handle header.
             consumers++
         } finally { lock.unlock() }
+    }
+    func matchesFrozenPlan(producer: PreparedToolInvocation, rule: FrozenPluginPlanRule): Bool {
+        beginScopedRead204(producer)
         try { producer.matchFrozenPlanFrame(rule) }
         catch (error: Exception) { holdUnknown204(); throw error }
         finally { consumerReturned204() }

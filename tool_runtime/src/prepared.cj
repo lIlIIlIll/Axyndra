@@ -163,10 +163,10 @@ public class PreparedToolInvocation {
     private func compareResolvedDescriptor(catalog: ToolCatalog, threadId: ThreadId, check: PreparedDescriptorCheck): ?Bool {
         match (detachedMetadata204) {
             case Some(owner) =>
-                let reader = owner.retain204(this)
+                owner.beginScopedRead204(this)
                 try { resolvedDescriptorFrame(catalog, threadId, check) }
                 catch (error: Exception) { owner.holdUnknown204(); throw error }
-                finally { reader.returnConsumerFrame204() }
+                finally { owner.consumerReturned204() }
             case None =>
                 requireMetadataBorrow204()
                 match (catalogConsumer204) {
@@ -197,9 +197,9 @@ public class PreparedToolInvocation {
     public func withReceiptBinding<T>(recordDigest: Bool, body: (DerivedReceiptBinding) -> T): T {
         match (detachedMetadata204) {
             case Some(owner) =>
-                let reader = owner.retain204(this)
+                owner.beginScopedRead204(this)
                 try { withDerivedReceiptBinding(operationId, operationPlanData204.getOrThrow().bindingDigest, recordDigest, body) }
-                finally { reader.returnConsumerFrame204() }
+                finally { owner.consumerReturned204() }
             case None =>
                 requireMetadataBorrow204()
                 match (catalogConsumer204) {
@@ -226,8 +226,8 @@ public class PreparedToolInvocation {
     private func withCallProjection204<T>(canonical: Bool, body: (ToolResolverInput) -> T): T {
         match (detachedMetadata204) {
             case Some(owner) =>
-                let reader = owner.retain204(this)
-                try { projectCallFrame204(canonical, body) } finally { reader.returnConsumerFrame204() }
+                owner.beginScopedRead204(this)
+                try { projectCallFrame204(canonical, body) } finally { owner.consumerReturned204() }
             case None =>
                 requireMetadataBorrow204()
                 match (catalogConsumer204) {
