@@ -860,6 +860,11 @@ func loadProductStoredFileApplicationPlan(
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
+    loadProductStoredFileApplicationPlan(planRef, planDigest, workspace, artifacts)
+}
+
+private func loadProductStoredFileApplicationPlan(planRef: String, planDigest: String,
+    workspace: LocalWorkspace, artifacts: ProductArtifactStore): Result<ProductStoredFileApplicationPlan> {
     let planText = match (readProductApplicationArtifact(
         artifacts, planRef, planDigest, -1, "plan"
     )) {
@@ -1860,14 +1865,29 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        productFilePlanResultMetadata204(prepared, { plan, call =>
-            executeFilePlanFrame204(context, prepared, plan, call) })
+        match (prepared.retainMetadataConsumer204()) {
+            case Some(consumer) =>
+                let result = consumer.withCanonicalCallInput({ call => executeRecoveryFrame(context, prepared, call) })
+                productFilePlanResultAfterConsumer204(result, consumer)
+            case None => prepared.withCanonicalCallInput({ call => executeRecoveryFrame(context, prepared, call) })
+        }
     }
-    private func executeFilePlanFrame204(context: ToolInvocationContext,
-        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolResolverInput): Result<ToolResult> {
-        let stored = match (loadProductStoredFileApplicationPlan(
-            plan.canonicalArguments, workspace, artifacts
-        )) {
+    private func artifactHandleText(call: ToolResolverInput, name: String): Result<String> {
+        match (call.kind([ToolResolverStep.Field(name)])) {
+            case None => applicationPlanError<String>(AgentErrorKind.InvalidInput,
+                "application_plan.structure_invalid", "application_plan is missing a required text field")
+            case Some(kind) => if (kind == JsonKind.String) { Result.Ok(call.stringField(name)) }
+                else { applicationPlanError<String>(AgentErrorKind.InvalidInput,
+                    "application_plan.structure_invalid", "application_plan field must be text") }
+        }
+    }
+    private func executeRecoveryFrame(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, call: ToolResolverInput): Result<ToolResult> {
+        let reference = match (artifactHandleText(call, "plan_ref")) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let digest = match (artifactHandleText(call, "plan_digest")) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let stored = match (loadProductStoredFileApplicationPlan(reference, digest, workspace, artifacts)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }

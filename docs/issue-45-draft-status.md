@@ -5196,3 +5196,7 @@ All 16 selected release stages passed across Minimal, Coding and Full. On the ma
 ### E2359: narrow the parent read during derived preparation
 
 Both `ToolPipeline.prepareDerived` entry points now ask the live parent whether nesting is allowed and, after normalization, whether the actual child and request key match. Neither passes the raw parent plan into child preparation. An authorized Direct Native read, a failed child with three durable receipts, and a configuration change all passed their original contracts. In the full Core run the same 40 derived admission edges remained intact, but the read-view output still exceeded capacity. The wider Prepared API migration is not complete.
+
+### E2360: recover a stored file plan without exporting its Prepared plan
+
+`recover_file_plan` now reads only the frozen artifact reference, digest and call ID. Recovery still opens the actual stored artifact and checks the originating operation. The installed AST plugin recovered a continuation without writing the file; only a subsequent one-time approval applied the replacement. The changed executor retains its counted reader through output acknowledgement. This is a recovery-path result, not a full Core pass.

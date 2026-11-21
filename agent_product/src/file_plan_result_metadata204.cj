@@ -3,7 +3,7 @@ package agent_product
 import agent_domain.*
 import tool_runtime.*
 
-// Only the three concrete file-plan executors call this private DATA helper.
+// Apply and preview still require the whole frozen plan.
 // The original invocation and Source stay untouched. Its independently paid
 // metadata consumer follows the real result to the original canonical ACK.
 func productFilePlanResultMetadata204(prepared: PreparedToolInvocation,
@@ -17,6 +17,11 @@ func productFilePlanResultMetadata204(prepared: PreparedToolInvocation,
     }
     let result = consumer.withOperationPlan204({ plan =>
         consumer.withCallInput({ input => action(plan, input) }) })
+    productFilePlanResultAfterConsumer204(result, consumer)
+}
+
+func productFilePlanResultAfterConsumer204(result: Result<ToolResult>,
+    consumer: PreparedMetadataConsumer204): Result<ToolResult> {
     match (result) {
         // A typed error is not proof its external consumers returned.
         case Result.Err(error) => Result.Err(error)
