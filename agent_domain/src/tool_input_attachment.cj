@@ -85,3 +85,19 @@ public func toolInputAttachmentEvidenceValid(value: AgentValue): Bool {
             bytes.toString() == count.asNumberText()
     } catch (_: Exception) { false }
 }
+
+// The attachment session has already funded its working buffer. Only independent
+// UTF-8 bytes and the exact frozen limit leave the scoped canonical input.
+public func copyFrozenAttachmentBytes(input: ToolResolverInput): (Array<Byte>, Int64) {
+    input.domainProjection({ call =>
+        let args = call.arguments
+        let profile = args.field("host_plan").getOrThrow().field("input_attachment").getOrThrow()
+        if (!toolInputAttachmentProfileValid(profile)) { throw IllegalArgumentException("invalid frozen attachment profile") }
+        let maximum = readonlyDelegationInteger(profile, "max_bytes")
+        let value = args.field("input").getOrThrow().field(httpIntentText(profile, "field")).getOrThrow()
+        if (value.unifiedKind != ValueKind.Text) { throw IllegalArgumentException("attachment must be UTF-8 text") }
+        let text = value.text
+        if (text.size > maximum) { throw IllegalArgumentException("attachment exceeds its frozen byte limit") }
+        (text.toArray(), maximum)
+    })
+}

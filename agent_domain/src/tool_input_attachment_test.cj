@@ -34,4 +34,22 @@ class ToolInputAttachmentTests {
         grant.put("artifact_ref", textValue("blob:sha256:" + modelPolicySha256Text("not an authority")))
         @Expect(!validToolInputAttachmentGrants(listValue([grant])))
     }
+    @TestCase
+    func frozenAttachmentOwnsLiteralUtf8BytesAtTheExactLimit(): Unit {
+        let data = objectValue([ValueField("body", textValue("a雪")), ValueField("other", textValue("unused"))])
+        let profile = objectValue([ValueField("field", textValue("body")), ValueField("max_bytes", integerValue(4))])
+        let args = objectValue([ValueField("input", data), ValueField("host_plan", objectValue([ValueField("input_attachment", profile)]))])
+        let call = ToolCall("attachment-call", "attachment-tool", args)
+        let (bytes, maximum) = withToolResolverInput(call, { input => copyFrozenAttachmentBytes(input) })
+        @Expect(maximum, 4); @Expect(String.fromUtf8(bytes), "a雪")
+        bytes[0] = b'b'; @Expect(data.field("body").getOrThrow().text, "a雪")
+        data.put("body", textValue("aa雪"))
+        var refused = false
+        try { let _ = withToolResolverInput(call, { input => copyFrozenAttachmentBytes(input) }) }
+        catch (_: IllegalArgumentException) { refused = true }
+        @Expect(refused); @Expect(String.fromUtf8(bytes), "b雪")
+        data.put("body", textValue(""))
+        let (empty, limit) = withToolResolverInput(call, { input => copyFrozenAttachmentBytes(input) })
+        @Expect(empty.size, 0); @Expect(limit, 4)
+    }
 }

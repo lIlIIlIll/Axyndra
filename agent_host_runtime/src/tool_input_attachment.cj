@@ -125,22 +125,19 @@ class HostToolInputAttachmentSession {
             if (started || terminal.load()) { return hostPluginResourceError("input_attachment.owner_reused", "input owner is one-shot") }
             started = true
             match (validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            let profile = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").getOrThrow()
-            let input = prepared.operationPlan.canonicalArguments.field("input").getOrThrow()
-            let text = input.field(httpIntentText(profile, "field")).getOrThrow().text
+            let (raw, maximum) = prepared.withCanonicalCallInput({ input => copyFrozenAttachmentBytes(input) })
             let selected = match (artifacts.openServiceArtifactWriter()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
             writer = Some(selected)
             match (selected.open()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            let raw = text.toArray()
             var offset: Int64 = 0
             while (offset < raw.size) {
                 match (validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                 let end = min(raw.size, offset + 16384)
-                match (selected.appendBytes(offset, raw[offset..end], readonlyDelegationInteger(profile, "max_bytes"))) {
+                match (selected.appendBytes(offset, raw[offset..end], maximum)) {
                     case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                 offset = end
             }
-            match (selected.finish(raw.size, modelPolicySha256Text(text))) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            match (selected.finish(raw.size, modelPolicySha256(raw))) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             match (validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let retained = match (artifacts.retainToolInputAttachment(context, prepared, selected, { => checkLifetime() })) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
