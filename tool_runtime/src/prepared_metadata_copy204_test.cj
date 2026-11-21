@@ -337,6 +337,35 @@ class PreparedMetadataCopy204Tests {
     }
 
     @TestCase
+    func brokerKeysSurviveReturnWithoutExportingTheParentCall(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("broker-run"), SessionId("session"), CapabilitySet())
+        let prepared = metadataFixture204(context, objectValue([ValueField("call_id", textValue("not-the-parent"))]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let (saved, keys) = prepared.withCallInput({ input =>
+            let call = PluginBrokerKey.ServiceCall.derive(input, "req:雪")
+            (input, [call, PluginBrokerKey.ReadonlyRequest.derive(input, call),
+                PluginBrokerKey.ChannelRequest.derive(input, "intent:1"),
+                PluginBrokerKey.HttpStreamRequest.derive(input, "intent:1"),
+                PluginBrokerKey.JavaScriptRequest.derive(input, "req:雪"),
+                PluginBrokerKey.UiQuestion.derive(input, "req:雪")])
+        })
+        owner.producerReturned204(); root.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+        var closed = false
+        try { let _ = PluginBrokerKey.ServiceCall.derive(saved, "later") }
+        catch (_: IllegalStateException) { closed = true }
+        @Expect(closed)
+        @Expect(keys[0], "copy-call:service:req:雪")
+        @Expect(keys[1], "readonly-delegation:copy-call:copy-call:service:req:雪")
+        @Expect(keys[2], "channel-service:copy-call:intent:1")
+        @Expect(keys[3], "http-stream-service:copy-call:intent:1")
+        @Expect(keys[4], "javascript-service:copy-call:req:雪")
+        @Expect(keys[5], "copy-call:ui:req:雪")
+    }
+
+    @TestCase
     func retiredProducerCannotPublishCallOrPlanThroughAnotherReadersPayment(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
         let root = bank.acquire(131072)

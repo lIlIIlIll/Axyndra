@@ -5212,3 +5212,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### File-plan preview and the cold local model request (E2365)
 
 [The real preview/recovery/apply contract](implementation/plan-execution-reliability.md#e2365-verify-a-file-plan-preview-without-exporting-digest-copies) passed on `a16c0566` plus the preview change. Earlier unsplit Core retained the failed read-view receipt. On `c8d896d5` the local model attempt reached dispatch but no POST arrived within five seconds. The matched CLI latency regressions remain open; neither the 606 endpoint cases nor the selected Product cases establish final release acceptance.
+
+### Derived service request keys (E2366)
+
+[All 98 Tool tests and five Native controls passed](implementation/plan-execution-reliability.md#e2366-derive-service-request-keys-without-exporting-the-parent-call). The six derived wire keys no longer require exporting a parent call; notifications that genuinely publish the original ID remain paid. Unsplit Core still failed read-view output reservation; the 3 + 37 derived admissions and their outcomes stayed intact. PR remains Draft.

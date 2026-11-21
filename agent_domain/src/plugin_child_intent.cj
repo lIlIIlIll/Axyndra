@@ -378,6 +378,26 @@ public func resolverChildServiceIds(input: ToolResolverInput, requestId: String)
     })
 }
 
+// Each result belongs to the request. No variant returns the parent's ID.
+public enum PluginBrokerKey {
+    ServiceCall | UiQuestion | ReadonlyRequest | ChannelRequest | HttpStreamRequest | JavaScriptRequest
+
+    public func derive(parentId: String, leaf: String): String {
+        match (this) {
+            case ServiceCall => parentId + ":service:" + leaf
+            case UiQuestion => parentId + ":ui:" + leaf
+            case ReadonlyRequest => readonlyDelegationRequestKey(parentId, leaf)
+            case ChannelRequest => "channel-service:" + parentId + ":" + leaf
+            case HttpStreamRequest => "http-stream-service:" + parentId + ":" + leaf
+            case JavaScriptRequest => "javascript-service:" + parentId + ":" + leaf
+        }
+    }
+
+    public func derive(input: ToolResolverInput, leaf: String): String {
+        input.domainProjection({ call => derive(call.callId, leaf) })
+    }
+}
+
 // Closed projections for a retained child selection. Only a generation or a
 // comparison result leaves the read; neither result authorizes a launch.
 public func resolverChildStartOrWaitGeneration(input: ToolResolverInput, namespace: String,

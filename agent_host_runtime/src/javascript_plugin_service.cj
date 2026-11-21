@@ -418,6 +418,10 @@ public class HostJavaScriptPluginServiceBroker {
         if (taskBorrowSelected204) { return taskCallIdentity.getOrThrow().callId }
         rootPrepared.call.callId
     } }
+    private func brokerKey(kind: PluginBrokerKey, leaf: String): String {
+        if (taskBorrowSelected204) { return kind.derive(taskCallIdentity.getOrThrow().callId, leaf) }
+        rootPrepared.withCallInput({ input => kind.derive(input, leaf) })
+    }
     private prop invocationName204: String { get() {
         if (taskBorrowSelected204) { return taskCallIdentity.getOrThrow().name }
         rootPrepared.call.name
@@ -1054,7 +1058,7 @@ public class HostJavaScriptPluginServiceBroker {
         )
         match (askRuntime.ask(
             rootContext,
-            invocationCallId204 + ":ui:" + requestId,
+            brokerKey(PluginBrokerKey.UiQuestion, requestId),
             [question],
             interactionKind: interactionKind,
             operationId: rootPrepared.operationId.value,
@@ -1159,7 +1163,7 @@ public class HostJavaScriptPluginServiceBroker {
             return hostExecutePluginDocument(catalog, pipeline, operations, actual, rootContext, rootPrepared,
                 invocationId, requestId, arguments)
         }
-        let callId = invocationCallId204 + ":service:" + requestId
+        let callId = brokerKey(PluginBrokerKey.ServiceCall, requestId)
         var execTarget: ?HostPluginReadOnlyExecTarget = None
         var returnsConcreteTarget159 = false
         let call = if (service == "tool.readonly") {
@@ -1244,15 +1248,13 @@ public class HostJavaScriptPluginServiceBroker {
             selected.call
         }
         let requestKey = if (service == "tool.readonly" ||
-            (service=="file.plan.propose" && readonlyDelegationFilePlanProposalsEnabled(invocationPlan204))) {
-            readonlyDelegationRequestKey(invocationCallId204, callId)
+            (service == "file.plan.propose" && matchesRootPlan(FrozenPluginPlanRule.ReadonlyFilePlanProposals))) {
+            brokerKey(PluginBrokerKey.ReadonlyRequest, callId)
         } else if (service == "process.channel.write") {
-            "channel-service:" + invocationCallId204 + ":" +
-                httpIntentText(call.arguments.field("intent").getOrThrow(), "id")
+            brokerKey(PluginBrokerKey.ChannelRequest, httpIntentText(call.arguments.field("intent").getOrThrow(), "id"))
         } else if (service == "network.http.stream") {
-            "http-stream-service:" + invocationCallId204 + ":" +
-                httpIntentText(call.arguments.field("intent").getOrThrow(), "id")
-        } else { "javascript-service:" + invocationCallId204 + ":" + requestId }
+            brokerKey(PluginBrokerKey.HttpStreamRequest, httpIntentText(call.arguments.field("intent").getOrThrow(), "id"))
+        } else { brokerKey(PluginBrokerKey.JavaScriptRequest, requestId) }
         let executionContext = match (execTarget) { case None => childContext
             case Some(target) => match (target.context(rootPrepared, rootContext, childContext)) {
                 case Result.Err(error) =>
@@ -1302,7 +1304,7 @@ public class HostJavaScriptPluginServiceBroker {
         if(service=="file.plan.propose" && matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)){
             if(identity.isNone() || channelBinding.isSome() || httpStreamBinding.isSome() ||
                 rootPrepared.source.kind==PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
-                !readonlyDelegationFilePlanProposalsEnabled(invocationPlan204)){
+                !matchesRootPlan(FrozenPluginPlanRule.ReadonlyFilePlanProposals)){
                 return hostPluginResourceError("readonly_delegation.file_plan_denied","actual operator has not granted file previews")}
             let frozen=invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
             if(requestCount>readonlyDelegationInteger(frozen,"max_calls")){
