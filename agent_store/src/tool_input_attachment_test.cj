@@ -56,19 +56,27 @@ class ToolInputAttachmentStoreTests {
         store.markExecutionHandoffWithSource(Some(source), operation, run, thread, 12).value().getOrThrow()
 
         let hash = modelPolicySha256Text(text); let mime = "text/plain; charset=utf-8"
-        let artifact = objectValue([ValueField("ref", textValue("blob:sha256:" + hash)), ValueField("sha256", textValue(hash)),
-            ValueField("bytes", integerValue(text.size)), ValueField("content_type", textValue(mime))])
+        let artifact = objectValue([ValueField("bytes", integerValue(text.size)), ValueField("ref", textValue("blob:sha256:" + hash)),
+            ValueField("content_type", textValue(mime)), ValueField("sha256", textValue(hash))])
         let recorded = objectValue([ValueField("version", integerValue(1)), ValueField("ref", textValue("blob:sha256:" + hash)),
             ValueField("sha256", textValue(hash)), ValueField("bytes", integerValue(text.size)), ValueField("content_type", textValue(mime))])
         db.transaction<Unit> { tx => tx.execute("INSERT INTO artifacts(hash,mime,size,metadata,relative_path) VALUES (?,?,?,?,?)",
             [SqlParameter.Text(hash), SqlParameter.Text(mime), SqlParameter.Int64Value(text.size),
             SqlParameter.Text(stringifyUnifiedJson(recorded)), SqlParameter.Text("blobs/" + hash + ".txt")]) }
         let evidence = db.transaction { tx => retainToolInputAttachment(tx, operation, run, thread, active.epoch, source, plan, artifact) }
+        let retained = evidence.field("artifact").getOrThrow()
+        // Field order is part of the existing durable encoding, including on replay.
+        @Expect(encodeStoredValue(retained), encodeStoredValue(artifact))
+        artifact.put("bytes", integerValue(0))
+        @Expect(retained.field("bytes").getOrThrow().asInt64(), text.size)
+        artifact.put("bytes", integerValue(text.size))
         let removed = evidence.field("profile").getOrThrow().asObject().remove("max_bytes")
         @Expect(removed.isSome())
         @Expect(readonlyDelegationInteger(plan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").getOrThrow(), "max_bytes"), 64)
         let replay = db.transaction { tx => retainToolInputAttachment(tx, operation, run, thread, active.epoch, source, plan, artifact) }
         @Expect(readonlyDelegationInteger(replay.field("profile").getOrThrow(), "max_bytes"), 64)
+        replay.field("artifact").getOrThrow().put("sha256", textValue("changed"))
+        @Expect(httpIntentText(artifact, "sha256"), hash)
         @Expect(db.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='tool_input_attached'"), 1)
     }
 }

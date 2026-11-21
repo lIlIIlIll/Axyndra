@@ -5228,3 +5228,11 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### File-plan size and local terminal flows (E2369)
 
 [Eleven selected Native cases and the independent installed AST contract passed](implementation/plan-execution-reliability.md#e2369-count-file-plan-wire-bytes-without-building-a-second-payload). The exact encoded proposal limit, stale-approval rejection and recover-before-apply path remain enforced. Ten real terminal flows passed on the earlier distribution-presence App. Neither those flows nor the nine-package inspection diagnostic establishes a five-second Coding response, adequate Core capacity or final release acceptance.
+
+### Eligible Product suite on `6d827fff10` (E2370)
+
+[436 of 436 eligible Native cases passed](implementation/plan-execution-reliability.md#e2370-all-eligible-product-cases-on-the-file-plan-wire-size-change). The same ELF enumerated 1,108; all 672 deferred cases stayed unrun. Whole Product and final release remain unaccepted.
+
+### Retained attachment isolation (E2371)
+
+[Complete Native Store: 263/263](implementation/plan-execution-reliability.md#e2371--retained-attachment-evidence-is-independent-of-the-submitted-artifact). The new regression failed in both mutation directions on the previous implementation. This fixes returned evidence, not the continuous Core capacity refusal or the five-second model gate.

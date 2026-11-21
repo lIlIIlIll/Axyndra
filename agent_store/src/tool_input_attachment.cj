@@ -40,15 +40,16 @@ public func retainToolInputAttachment(tx: SqliteTransaction, operation: Operatio
     let input = plan.canonicalArguments.field("input").getOrThrow()
     let value = input.field(httpIntentText(profile, "field")).getOrThrow()
     if (value.unifiedKind != ValueKind.Text || value.text.size > readonlyDelegationInteger(profile, "max_bytes") ||
-        !httpIntentExactFields(artifact, ["ref", "sha256", "bytes", "content_type"]) ||
-        httpIntentText(artifact, "sha256") != modelPolicySha256Text(value.text) ||
-        httpIntentText(artifact, "ref") != "blob:sha256:" + modelPolicySha256Text(value.text) ||
+        !httpIntentExactFields(artifact, ["ref", "sha256", "bytes", "content_type"])) {
+        throw IllegalStateException("input artifact differs from the complete actual canonical text")
+    }
+    let hash = modelPolicySha256Text(value.text)
+    if (httpIntentText(artifact, "sha256") != hash || httpIntentText(artifact, "ref") != "blob:sha256:" + hash ||
         artifact.field("bytes").getOrThrow().unifiedKind != ValueKind.Number ||
         artifact.field("bytes").getOrThrow().asNumberText() != value.text.size.toString() ||
         httpIntentText(artifact, "content_type") != "text/plain; charset=utf-8") {
         throw IllegalStateException("input artifact differs from the complete actual canonical text")
     }
-    let hash = httpIntentText(artifact, "sha256")
     let metadata = tx.query("SELECT mime,size,metadata,relative_path FROM artifacts WHERE hash=?", [SqlParameter.Text(hash)])
     if (metadata.size != 1 || metadata[0].required(0) != "text/plain; charset=utf-8" ||
         metadata[0].required(1) != value.text.size.toString() || metadata[0].required(3) != "blobs/" + hash + ".txt") {
@@ -60,10 +61,15 @@ public func retainToolInputAttachment(tx: SqliteTransaction, operation: Operatio
         recorded.field("version").getOrThrow().asNumberText() != "1") {
         throw IllegalStateException("input artifact metadata changed")
     }
+    let retainedArtifact: AgentValue = JsonObject()
     for (field in artifact.fields) {
-        if (canonicalAgentValue(recorded.field(field.name).getOrThrow()) != canonicalAgentValue(field.value)) {
+        let storedField = recorded.field(field.name).getOrThrow()
+        if (canonicalAgentValue(storedField) != canonicalAgentValue(field.value)) {
             throw IllegalStateException("input artifact metadata differs from the actual file")
         }
+        // Keep the submitted field order for historical audit rows. Neither
+        // the caller's mutable object nor its key storage enters the result.
+        retainedArtifact.put(String.fromUtf8(field.name.toArray()), storedField)
     }
     let reserved = tx.query("SELECT reserved_receipt_id FROM operation_effect_records WHERE operation_id=? AND run_id=? " +
         "AND tool_call_item_id=? AND normalized_plan=?", [SqlParameter.Text(operation.value), SqlParameter.Text(run.value),
@@ -72,7 +78,7 @@ public func retainToolInputAttachment(tx: SqliteTransaction, operation: Operatio
         throw IllegalStateException("input attachment has no original reserved Receipt identity")
     }
     let evidence = objectValue([ValueField("schema", textValue(TOOL_INPUT_ATTACHMENT_SCHEMA)),
-        ValueField("profile", profile), ValueField("artifact", artifact), ValueField("thread_id", textValue(thread.value)),
+        ValueField("profile", profile), ValueField("artifact", retainedArtifact), ValueField("thread_id", textValue(thread.value)),
         ValueField("run_id", textValue(run.value)), ValueField("epoch", integerValue(epoch)),
         ValueField("operation_id", textValue(operation.value)), ValueField("call_id", textValue(node.callId)),
         ValueField("namespace", host.field("plugin").getOrThrow()), ValueField("package_digest", host.field("package_digest").getOrThrow()),

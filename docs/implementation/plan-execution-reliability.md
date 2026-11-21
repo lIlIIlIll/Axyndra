@@ -12104,3 +12104,15 @@ On `02317fec` plus the six changes, eight Native Domain and three Host cases pas
 On the earlier distribution-presence App (`39e24e449586fa034f785cc8e54c0c625306394896e42bd6b99ffe49918c7700`), ten Linux tmux cases passed against local HTTP/SSE and MCP fixtures: rich Responses, Completions and Messages; cancel and Ctrl-C; HTTP failure, timeout, incomplete EOF, invalid UTF-8; and a real MCP tool request. The case directories retain key input, terminal output, timelines and process-exit evidence. These tests did not exercise the bundled Coding defaults, mouse or resize. Evidence: `presencereleasepty2364`.
 
 A separate Registry diagnostic at `956dfcfd` measured six paired inspections of all nine actual distribution packages. Median wall time was 457 ms serial and 309 ms with paired workers; both checked each package’s root, namespace, version and digest. It did not measure production high-water or equivalent refusal order, or make a model request. No additional worker or verification cache was shipped. Evidence: `distributioninspectionpair2368/qualified.json`.
+
+### E2370: all eligible Product cases on the file-plan wire-size change
+
+On the behavior sources published in `6d827fff10`, the fixed-SDK Native Product ELF (`49197138d4df14cb1bc3689ab0f3133f9f857de7ac56a67cbef1b7defa9116e1`) enumerated **1,108** cases. All **436 eligible cases passed** in individual processes under their original deadlines. The 672 deferred identities were excluded before execution. Eight dependency preparation stages ran and all 17 package fixture identities were checked. The results, per-case log hashes and physical process returns are recorded in `callbackproposalsproduct2368/qualified.json` and its `summary.json`.
+
+This qualifies the eligible Product set, not whole Product, the separate read-view candidate, the five-second local model request or final release. No deferred GC case was rerun or counted as a pass.
+
+### E2371 — Retained attachment evidence is independent of the submitted artifact
+
+`retainToolInputAttachment` now returns artifact values from the checked SQLite metadata row, in the submitted key order. The submitted object and the returned object no longer share mutable fields. The original Direct Root, executing Operation, reserved Receipt, canonical text digest and byte count, blob path, and exact replay checks still run. The persisted audit format is unchanged.
+
+On `6d827fff10` plus the regression alone, changing the submitted byte count also changed the returned evidence; changing the returned digest changed the submitted object. Both assertions failed in `ToolInputAttachmentStoreTests.retainedEvidenceCannotMutateTheExecutingPlan`. With the Store fix, all **263/263** Native Store tests passed on ELF `4a26514c6902b2731f0de98808a5b1b3f1bb00699425f12e68ec0364be637c2a`. The regression uses real SQLite, a non-default key order, and two calls to retain the same artifact; exactly one audit row remains. In a separate historical continuous-Core copy, all 14 attachment rows joined their original call, plan, artifact metadata and reserved Receipt. That historical check is not a new Core run or a DATA return.
