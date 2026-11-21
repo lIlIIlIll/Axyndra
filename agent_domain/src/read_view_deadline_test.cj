@@ -13,6 +13,26 @@ func finiteReadViewTestIntent(millis: Int64): AgentValue {
 @Test
 class ReadViewFiniteDeadlineTests {
     @TestCase
+    func callWindowKeepsIndependentExactProfileAndRechecksTheCurrentMaximum(): Unit {
+        let intent = finiteReadViewTestIntent(130)
+        let host = objectValue([ValueField("configuration_digest", textValue("config")), ValueField("intents", listValue([intent]))])
+        let call = ToolCall("window", "worker", objectValue([ValueField("host_plan", host)]))
+        @Expect(withToolResolverInput(call, frozenReadViewDeadlineText).isNone())
+        let profile = objectValue([ValueField("version", textValue(READ_VIEW_FINITE_DEADLINE_VERSION)),
+            ValueField("maximum_ms", integerValue(130)), ValueField("schema_digest", textValue(modelPolicySha256Text("schema")))])
+        intent.put("deadline_profile", profile)
+        let held = withToolResolverInput(call, frozenReadViewDeadlineText).getOrThrow()
+        @Expect(held, canonicalAgentValue(profile))
+        let current = { key: String => withToolResolverInput(call, { input => matchingReadViewDeadlineMillis(input, key, held) }) }
+        @Expect(current("config").getOrThrow(), 130)
+        @Expect(current("other").isNone())
+        profile.put("maximum_ms", integerValue(131))
+        @Expect(current("config").isNone())
+        profile.put("maximum_ms", integerValue(130)); profile.put("schema_digest", textValue(modelPolicySha256Text("changed")))
+        @Expect(current("config").isNone())
+    }
+
+    @TestCase
     func defaultSixtySecondLimitIsStillExact(): Unit {
         @Expect(validateReadViewIntent(finiteReadViewTestIntent(60000)).isOk(), true)
         @Expect(validateReadViewIntent(finiteReadViewTestIntent(60001)).isError(), true)

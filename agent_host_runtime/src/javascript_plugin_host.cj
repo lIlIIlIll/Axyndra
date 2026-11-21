@@ -586,8 +586,7 @@ public open class HostJavaScriptPluginHost {
         match (readViewInput(prepared, namespace, tool, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let configuration = match (loadHostPluginHttpConfiguration(settingsRoot, namespace, descriptor.contentDigest)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        let intent = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("intents").getOrThrow().items[0]
-        match (intent.field("deadline_profile")) { case None => Result<?HostReadViewCallWindow>.Ok(Option<HostReadViewCallWindow>.None)
+        match (prepared.withCanonicalCallInput(frozenReadViewDeadlineText)) { case None => Result<?HostReadViewCallWindow>.Ok(Option<HostReadViewCallWindow>.None)
             case Some(value) => Result<?HostReadViewCallWindow>.Ok(Some(HostReadViewCallWindow(this, context, prepared,
                 namespace, tool, generation, configuration.digest, value))) }
     }

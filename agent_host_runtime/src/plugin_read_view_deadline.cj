@@ -60,10 +60,10 @@ class HostReadViewCallWindow {
     private let namespace: String; private let contribution: String; private let generation: UInt64
     private let configurationDigest: String; private let profileText: String
     init(host: HostJavaScriptPluginHost, context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        namespace: String, contribution: String, generation: UInt64, configurationDigest: String, profile: AgentValue) {
+        namespace: String, contribution: String, generation: UInt64, configurationDigest: String, profileText: String) {
         this.host = host; this.context = context; this.prepared = prepared; this.namespace = namespace
         this.contribution = contribution; this.generation = generation; this.configurationDigest = configurationDigest
-        this.profileText = canonicalAgentValue(profile)
+        this.profileText = profileText
     }
     func scope(): String { configurationDigest + ":" + profileText }
     func validate(actualHost: HostJavaScriptPluginHost, identity: JavaScriptHostInvocationIdentity,
@@ -71,15 +71,14 @@ class HostReadViewCallWindow {
         match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         if (!refEq(host, actualHost) || expectedGeneration != generation || identity.kind != "tool" ||
             identity.threadId != context.sessionId.value || identity.runId != context.runId.value || identity.epoch != context.epoch ||
-            identity.operationId != prepared.operationId.value || identity.callId != prepared.call.callId ||
-            prepared.source.operationRoot.isNone() || prepared.operationPlan.toolName != "plugin." + namespace + "." + contribution ||
+            identity.operationId != prepared.operationId.value || !prepared.textEquals(PreparedMetadataText.CallId, identity.callId) ||
+            prepared.source.operationRoot.isNone() || !prepared.textEquals(PreparedMetadataText.PlanToolName, "plugin." + namespace + "." + contribution) ||
             !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewParent)) {
             return hostPluginResourceError("read_view.deadline_owner_changed", "finite call window belongs to another actual Root invocation") }
         match (host.readViewInput(prepared, namespace, contribution, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        let frozen = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow()
-        let profile = frozen.field("intents").getOrThrow().items[0].field("deadline_profile") ?? nullValue()
-        if (httpIntentText(frozen, "configuration_digest") != configurationDigest || canonicalAgentValue(profile) != profileText) {
-            return hostPluginResourceError("read_view.deadline_owner_changed", "finite call window lost its exact current frozen profile") }
-        Result.Ok(Int64.parse(profile.field("maximum_ms").getOrThrow().asNumberText()))
+        match (prepared.withCanonicalCallInput({ input => matchingReadViewDeadlineMillis(input, configurationDigest, profileText) })) {
+            case Some(millis) => Result.Ok(millis)
+            case None => hostPluginResourceError("read_view.deadline_owner_changed", "finite call window lost its exact current frozen profile")
+        }
     }
 }

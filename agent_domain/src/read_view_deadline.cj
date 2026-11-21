@@ -60,3 +60,28 @@ public func validateReadViewIntent(intent: AgentValue): Result<Unit> {
         return Result.Err(AgentError(AgentErrorKind.PermissionDenied, "read_view.intent_invalid", "view exceeds total metadata bound")) }
     Result.Ok(())
 }
+
+// The call window retains only the same canonical text it previously generated
+// at construction. Neither the profile DOM nor its source strings escape.
+public func frozenReadViewDeadlineText(input: ToolResolverInput): ?String {
+    input.domainProjection({ call =>
+        let host = call.arguments.field("host_plan").getOrThrow()
+        let intent = host.field("intents").getOrThrow().items[0]
+        match (intent.field("deadline_profile")) {
+            case Some(profile) => Some(canonicalAgentValue(profile))
+            case None => None<String>
+        }
+    })
+}
+
+// Re-read the actual frozen profile after Host has checked its live grant.
+// Only its finite maximum leaves the reader on an exact configuration/profile match.
+public func matchingReadViewDeadlineMillis(input: ToolResolverInput, digest: String, expected: String): ?Int64 {
+    input.domainProjection({ call =>
+        let host = call.arguments.field("host_plan").getOrThrow()
+        let profile = host.field("intents").getOrThrow().items[0].field("deadline_profile") ?? nullValue()
+        if (httpIntentText(host, "configuration_digest") != digest || canonicalAgentValue(profile) != expected) {
+            None<Int64>
+        } else { Some(Int64.parse(profile.field("maximum_ms").getOrThrow().asNumberText())) }
+    })
+}
