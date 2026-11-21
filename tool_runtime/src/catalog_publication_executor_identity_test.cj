@@ -23,6 +23,53 @@ private func catalogPublicationIdentityDescriptor110(name: String): ToolDescript
 @Test
 class CatalogPublicationExecutorIdentityTests110 {
     @TestCase
+    func revokingAnIdleToolDropsNoExternalReference(): Unit {
+        let catalog = ToolCatalog()
+        let executor = CatalogPublicationIdentityExecutor110()
+        let name = "test.idle"
+        @Expect(catalog.register(catalogPublicationIdentityDescriptor110(name), executor).isOk())
+        @Expect(!catalog.revoke("test.missing"))
+        @Expect(catalog.revoke(name))
+        @Expect(!catalog.publicationRetainsExecutor(name, executor))
+        @Expect(catalog.retireCatalogData159())
+        let later = catalog.register(catalogPublicationIdentityDescriptor110("test.after"), executor)
+        let code = match (later) { case Result.Err(error) => error.code; case Result.Ok(_) => "" }
+        @Expect(code, "tool.catalog_closed")
+        @Expect(executor.calls, 0)
+    }
+
+    @TestCase
+    func missingRegistrationsDoNotPreventClosingTheCatalog(): Unit {
+        let catalog = ToolCatalog()
+        let executor = CatalogPublicationIdentityExecutor110()
+        let name = "test.present"
+        @Expect(catalog.register(catalogPublicationIdentityDescriptor110(name), executor).isOk())
+        let missing = ToolCall("missing", "test.absent", objectValue([]))
+        @Expect(catalog.publishedDescriptor(missing.name).isNone())
+        @Expect(catalog.resolvedDescriptor(missing).isNone())
+        @Expect(catalog.findRegistered(missing.name).isNone())
+        @Expect(catalog.retireCatalogData159())
+        let after = catalog.register(catalogPublicationIdentityDescriptor110("test.after"), executor)
+        let code = match (after) { case Result.Err(error) => error.code; case Result.Ok(_) => "" }
+        @Expect(code, "tool.catalog_closed")
+        @Expect(executor.calls, 0)
+    }
+
+    @TestCase
+    func aReturnedDescriptorStillPreventsClosingAfterAMiss(): Unit {
+        let catalog = ToolCatalog()
+        let executor = CatalogPublicationIdentityExecutor110()
+        let name = "test.present"
+        @Expect(catalog.register(catalogPublicationIdentityDescriptor110(name), executor).isOk())
+        @Expect(catalog.publishedDescriptor("test.absent").isNone())
+        let held = catalog.publishedDescriptor(name).getOrThrow()
+        @Expect(!catalog.retireCatalogData159())
+        @Expect(held.definition.name, name)
+        @Expect(catalog.publicationRetainsExecutor(name, executor))
+        @Expect(executor.calls, 0)
+    }
+
+    @TestCase
     func actualPublicationIdentityRejectsDifferentInactiveRevokedAndForeignThreadWithoutCalling(): Unit {
         let catalog = ToolCatalog()
         let original = CatalogPublicationIdentityExecutor110()

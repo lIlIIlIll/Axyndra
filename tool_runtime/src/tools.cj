@@ -1412,14 +1412,19 @@ public class ToolCatalog {
         }
     }
 
+    // A miss exports nothing. Mark positive and exceptional lookups under the
+    // registration lock, before a receiver or resolver can retain the result.
     func find(name: String, threadId!: ?ThreadId = None): ?ToolRegistration {
-        recordRawCatalogAlias159()
         lock.lock()
         try {
             for (item in registrations where item.active && !item.revoked && item.descriptor.nameForData204() == name && toolRegistrationVisible(item, threadId)) {
+                rawAliases159 = true
                 return Some(item)
             }
             None
+        } catch (error: Exception) {
+            if (!dataClosed159) { rawAliases159 = true }
+            throw error
         } finally {
             lock.unlock()
         }
@@ -1429,7 +1434,6 @@ public class ToolCatalog {
     // after lifecycle deactivation. New preparation uses find() and therefore
     // cannot see inactive registrations.
     func findRegistered(name: String, threadId!: ?ThreadId = None): ?ToolRegistration {
-        recordRawCatalogAlias159()
         lock.lock()
         try {
             var selected: ?ToolRegistration = None
@@ -1442,7 +1446,11 @@ public class ToolCatalog {
                     selected = Some(item)
                 }
             }
+            if (selected.isSome()) { rawAliases159 = true }
             selected
+        } catch (error: Exception) {
+            if (!dataClosed159) { rawAliases159 = true }
+            throw error
         } finally {
             lock.unlock()
         }
@@ -1666,7 +1674,6 @@ public class ToolCatalog {
         } finally { lock.unlock() }
     }
     public func publishedDescriptor(name: String, threadId!: ?ThreadId = None): ?ToolDescriptor {
-        recordRawCatalogAlias159()
         match (find(name, threadId: threadId)) {
             case Some(value) => Some(value.descriptor)
             case None => None
@@ -1674,7 +1681,6 @@ public class ToolCatalog {
     }
 
     public func resolvedDescriptor(call: ToolCall, threadId!: ?ThreadId = None): ?ToolDescriptor {
-        recordRawCatalogAlias159()
         match (find(call.name, threadId: threadId)) {
             case Some(value) => Some(value.descriptor.resolved(call))
             case None => None
@@ -2017,7 +2023,6 @@ public class ToolCatalog {
 
     // Revocation is an immediate security boundary, unlike ordinary retirement.
     public func revoke(name: String, threadId!: ?ThreadId = None): Bool {
-        recordRawCatalogAlias159()
         let targets = ArrayList<ToolRevocationTarget>()
         let owned = ArrayList<ToolCatalogOwner>()
         var found = false
@@ -2031,6 +2036,7 @@ public class ToolCatalog {
                 item.active = false
                 item.revoked = true
                 found = true
+                if (item.activeExecutions.isEmpty()) { continue }
                 let runIds = ArrayList<RunId>()
                 for (execution in item.activeExecutions) {
                     var present = false
@@ -2044,6 +2050,12 @@ public class ToolCatalog {
                     targets.add(ToolRevocationTarget(item.executor, runIds.toArray()))
                 }
             }
+            // Only these branches carry Catalog data beyond this locked scan.
+            // A miss or idle unowned registration returns only the found bit.
+            if (!owned.isEmpty() || !targets.isEmpty()) { rawAliases159 = true }
+        } catch (error: Exception) {
+            if (!dataClosed159) { rawAliases159 = true }
+            throw error
         } finally {
             lock.unlock()
         }
