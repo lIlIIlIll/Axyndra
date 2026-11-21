@@ -153,6 +153,11 @@ Stored rows and the SQLite schema do not change.
 
 ## Read a prepared call without exporting its arguments
 
+For a command result, replace `prepared.withApproval204` with
+`prepared.copyApprovalArgumentHash()`. It returns an independent string (empty
+when no approval exists), not an approval decision. Read it before returning
+the prepared producer; the result string may outlive that producer.
+
 Host executors can use `prepared.withCallInput` for the display call. Use
 `prepared.withCanonicalCallInput` for execution: it supplies the call ID and
 name from the original call, but the arguments from the frozen operation plan.

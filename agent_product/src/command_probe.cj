@@ -331,12 +331,12 @@ class CommandProbeTool <: ToolExecutor {
     }
     public func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
         prepared.withOperationPlan204({ plan =>
-            prepared.withApproval204({ approval => executePlanFrame204(context, prepared, plan, approval) })
+            executePlanFrame204(context, prepared, plan)
         })
     }
 
     private func executePlanFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        plan: NormalizedOperationPlan, approval: ?ApprovalRequest): Result<ToolResult> {
+        plan: NormalizedOperationPlan): Result<ToolResult> {
         if (!commandProbeAuthorizationAllowed(prepared.authorization)) {
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
                 "probe.authorization_mode_denied", "command probes require their own canonical operation authorization"))
@@ -387,9 +387,7 @@ class CommandProbeTool <: ToolExecutor {
             ValueField("actual_network_mode", textValue(networkPolicyModeName(policy.mode))),
             ValueField("policy_source", textValue("frozen_operation_plan")),
             ValueField("authorization_source", textValue(commandProbeAuthorizationSource(prepared.authorization))),
-            ValueField("approval_argument_hash", textValue(match (approval) {
-                case Some(approval) => commandProbeResultString204(approval.argumentHash); case None => ""
-            })),
+            ValueField("approval_argument_hash", textValue(prepared.copyApprovalArgumentHash())),
             ValueField("operation_id", textValue(commandProbeResultString204(prepared.operationId.value))),
             ValueField("actual_isolation", textValue("workspace_sandbox")),
             ValueField("failure_class", textValue(if (!result.started) { "dependency_unavailable" }

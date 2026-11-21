@@ -67,6 +67,29 @@ class PreparedMetadataCopy204Tests {
     }
 
     @TestCase
+    func copiedApprovalHashSurvivesItsProducerButReturnedProducerRefusesNewReads(): Unit {
+        let context = ToolInvocationContext(RunId("hash-run"), SessionId("session"), CapabilitySet())
+        let bare = metadataFixture204(context, objectValue([]))
+        @Expect(bare.copyApprovalArgumentHash(), "")
+        let id = bare.operationId
+        let call = ToolCall("approval-call", "approved-tool", objectValue([]))
+        let hash = "hash-λ-雪"
+        let review = ApprovalRequest(id, call.callId, call.name, Capability(CapabilityKind.WorkspaceRead), argumentHash: hash)
+        let prepared = PreparedToolInvocation(id, call, exclusiveToolConcurrency(), PreparedAuthorization.StaticPolicy,
+            NormalizedOperationPlan(call.name, call.arguments, [], OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "binding"),
+            PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context), approval: Some(review))
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let result = prepared.copyApprovalArgumentHash()
+        owner.producerReturned204(); root.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+        @Expect(result, hash)
+        var refused = false
+        try { let _ = prepared.copyApprovalArgumentHash() } catch (_: IllegalStateException) { refused = true }
+        @Expect(refused)
+    }
+
+    @TestCase
     func saturatedMetadataCanAnswerClosedQueriesButStillRefusesAnotherExternalReader(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
         let context = ToolInvocationContext(RunId("read-run"), SessionId("read-session"), CapabilitySet())

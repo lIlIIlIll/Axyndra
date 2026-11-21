@@ -244,13 +244,26 @@ public class PreparedToolInvocation {
             operationPlanData204.getOrThrow().canonicalArguments), body) }
         withToolResolverInput(call, body)
     }
-    public func withApproval204<T>(body: (?ApprovalRequest) -> T): T {
-        requireMetadataBorrow204()
-        try { body(approvalData204) }
-        catch (error: Exception) {
-            match (detachedMetadata204) { case Some(value) => value.holdUnknown204()
-                case None => match (catalogConsumer204) { case Some(value) => value.holdUnknown204(); case None => () } }
-            throw error
+    // An independent result field, not an approval or an authorization decision.
+    public func copyApprovalArgumentHash(): String {
+        match (detachedMetadata204) {
+            case Some(owner) =>
+                owner.beginScopedRead204(this)
+                try { copyApprovalArgumentHashFrame() } finally { owner.consumerReturned204() }
+            case None =>
+                requireMetadataBorrow204()
+                match (catalogConsumer204) {
+                    case Some(owner) =>
+                        let frame = owner.beginFrame204()
+                        try { copyApprovalArgumentHashFrame() } finally { frame.returnedWholeAction204() }
+                    case None => copyApprovalArgumentHashFrame()
+                }
+        }
+    }
+    private func copyApprovalArgumentHashFrame(): String {
+        match (approvalData204) {
+            case Some(approval) => copyTextData204(approval.argumentHash)
+            case None => ""
         }
     }
     public func borrowCallForCore204(actual: PaidExecutionFailureSink173): ToolCall {
