@@ -211,6 +211,11 @@ or `Http` from `FrozenPluginChildRelation`. This compares the plans while each
 reader is live, without asking either invocation for its raw plan. A Task
 already holding a plan can use `rule.matches(plan)`. For classification only,
 `ReadonlyDelegatedChild`, `HttpStreamParent` and `ChannelParent` return Booleans.
+`DerivableParent(alreadyDerived, readViewTarget)` checks the nesting restriction.
+`PermitsDerivedIntent(childPlan, parentCallId, childCallId, requestKey)` checks the
+frozen relationship and the exact request key together. The pipeline obtains
+those inputs from its prepared parent, authenticated source and normalized child.
+Neither rule lets a caller grant itself a child operation.
 Rebuild consumers and update any exhaustive matches for the new enum cases.
 A match does not replace Source, approval or current capability checks.
 

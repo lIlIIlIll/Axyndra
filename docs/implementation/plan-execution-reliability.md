@@ -12030,3 +12030,9 @@ The 16 selected release stages cover Minimal assembly, clean environment and emp
 | Declarative inspection, ms | 20 | 147.509 | 471.103 |
 
 Both packaged absolute gates passed. The two relative CLI regressions remain; these are not model-profile, whole Product or final-source results. Evidence: `primitiveboundpackages2355/qualified.json`, `primitiveboundmatched2356/qualified.json`.
+
+### E2359: answer derived preparation questions without exporting the parent plan
+
+The same-context and separate-parent-context `ToolPipeline.prepareDerived` paths use closed predicates on the live parent. The first checks the original restriction on nested read-view children. The second matches the freshly normalized child using the existing exact-service or read-only-delegation predicate **and** its corresponding request key. The caller still validates the child target and current policy; an approval-required parent still cannot supply parent intent. Source creation still obtains its parent call ID through the existing bound access. This does not close that raw call path or acknowledge any earlier export.
+
+The rebuilt Native Core ELF (`e4c355bdfd23f2bbe1ad38d15e7dafbb02c9b36ffd5eac3043a1d32d92faa113`) passed the original Program budget and cancellation/recovery checks. The Direct Native positive, failed-child and changed-configuration contracts passed on the same ELF. The positive case read the sentinel through a three-call budget; the failed-child case verified all three durable receipts and a failed Run. All processes returned without forced cleanup. The unsplit Core exited 1. Six unchanged SQLite files produced two `quick_check`-clean copies; their 3 and 37 derived admission edges, parent identities and request keys match E2356. The grep and read-view receipts still say `read_view.output_capacity`. Evidence: `derivedparentquestions2358/qualified.json` and `actual-derived-pairs/qualified.json` in that directory.

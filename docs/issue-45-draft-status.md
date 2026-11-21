@@ -5192,3 +5192,7 @@ The new Native regression kept one real reader live after its producer returned.
 The fixed-SDK Product ELF naturally enumerated 1,108 tests. The 437 eligible tests actually ran: 436 passed and one crashed. The 671 previously deferred tests were not rerun. The new crash reached the pinned runtime’s GC root traversal instruction during plugin package inspection; the capability assertion did not pass. This classification applies to this execution only.
 
 All 16 selected release stages passed across Minimal, Coding and Full. On the matched Coding packages, disabled-plugin CLI cold-start P95 increased from 137.161 to 412.936 ms; declarative inspection increased from 147.509 to 471.103 ms. Both absolute gates passed. Neither result is final release acceptance or evidence for a later source revision. The non-GC Core capacity failure, first model request and Prepared API migration remain open.
+
+### E2359: narrow the parent read during derived preparation
+
+Both `ToolPipeline.prepareDerived` entry points now ask the live parent whether nesting is allowed and, after normalization, whether the actual child and request key match. Neither passes the raw parent plan into child preparation. An authorized Direct Native read, a failed child with three durable receipts, and a configuration change all passed their original contracts. In the full Core run the same 40 derived admission edges remained intact, but the read-view output still exceeded capacity. The wider Prepared API migration is not complete.

@@ -28,12 +28,18 @@ public enum FrozenPluginPlanRule {
     ReadonlyTargetOf(NormalizedOperationPlan) | FilePlanPreviewOf(NormalizedOperationPlan) |
     HttpStreamChildOf(NormalizedOperationPlan) | ChannelChildOf(NormalizedOperationPlan) |
     HttpChildOf(NormalizedOperationPlan) | CapabilitiesWithin(CapabilitySet) |
-    ReadonlyDelegatedChild | HttpStreamParent | ChannelParent | AllowsChild(FrozenPluginChildRelation, PreparedToolInvocation)
+    ReadonlyDelegatedChild | HttpStreamParent | ChannelParent | AllowsChild(FrozenPluginChildRelation, PreparedToolInvocation) |
+    DerivableParent(Bool, Bool) | PermitsDerivedIntent(NormalizedOperationPlan, String, String, String)
 
     // A broker may already own the parent plan (Task or durable Store).
     // Otherwise both Prepared participants pin their own DATA for this call.
     public func matches(plan: NormalizedOperationPlan): Bool {
         match (this) {
+            case DerivableParent(alreadyDerived, readViewTarget) =>
+                !alreadyDerived || (isReadonlyDelegatedChildPlan(plan) && readViewTarget)
+            case PermitsDerivedIntent(child, parentCallId, childCallId, requestKey) =>
+                (exactServiceChildAllowed(plan, child) && requestKey == exactServiceRequestKey(parentCallId, child)) ||
+                (readonlyDelegationChildAllowed(plan, child) && requestKey == readonlyDelegationRequestKey(parentCallId, childCallId))
             case AllowsChild(relation, child) => child.matchesFrozenPlan(relation.against(plan))
             case ReadonlyDelegatedChild => isReadonlyDelegatedChildPlan(plan)
             case HttpStreamParent => isFrozenHttpStreamParentPlan(plan)

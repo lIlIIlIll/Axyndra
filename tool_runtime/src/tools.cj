@@ -3556,7 +3556,7 @@ public class ToolPipeline {
         // No parent plan is supplied. The concrete child goes through the
         // complete ordinary capability / permanent-denial / policy / approval
         // evaluation. A parent ceiling cannot become ParentIntent approval.
-        let preparation=match(prepareResolved(context,call,None,source,parentIntentPlan:None)){
+        let preparation=match(prepareResolved(context,call,None,source,parentIntent:None)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         let prepared:?PreparedToolInvocation=match(preparation){
             case ToolPreparation.Ready(value)=>Some(value)
@@ -3736,7 +3736,7 @@ public class ToolPipeline {
             parentCallId:parent.call.callId,managedJobCeiling:parent.source.managedJobCeiling)
         match(validatePreparedSourceContext(context,source)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-        let preparation=match(prepareResolved(context,call,None,source,parentIntentPlan:None)){
+        let preparation=match(prepareResolved(context,call,None,source,parentIntent:None)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         match(preparation){
             case ToolPreparation.Denied(_) | ToolPreparation.Completed(_)=>
@@ -4528,7 +4528,7 @@ public class ToolPipeline {
             parentCallId:parent.call.callId,managedJobCeiling:parent.source.managedJobCeiling)
         match(validatePreparedSourceContext(context,source)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-        let preparation=match(prepareResolved(context,call,None,source,parentIntentPlan:None)){
+        let preparation=match(prepareResolved(context,call,None,source,parentIntent:None)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         let selected:?PreparedToolInvocation=match(preparation){case ToolPreparation.Ready(value)=>Some(value)
             case ToolPreparation.NeedsApproval(value,_)=>Some(value);case _=>None}
@@ -4583,9 +4583,8 @@ public class ToolPipeline {
         parent: PreparedToolInvocation,
         requestKey: String
     ): Result<ToolPreparation> {
-        parent.withOperationPlan204<Result<ToolPreparation>>({ parentPlan =>
-        if ((parent.source.kind == PreparedInvocationSourceKind.Derived &&
-                (!isReadonlyDelegatedChildPlan(parentPlan) || call.name != HOST_READ_VIEW_TOOL)) ||
+        if (!parent.matchesFrozenPlan(FrozenPluginPlanRule.DerivableParent(
+                parent.source.kind == PreparedInvocationSourceKind.Derived, call.name == HOST_READ_VIEW_TOOL)) ||
             parent.source.operationRoot.isNone() || requestKey.trimAscii() == "" ||
             context.trustedControl) {
             return Result.Err(AgentError(
@@ -4604,10 +4603,9 @@ public class ToolPipeline {
             parentOperationId: Some(parent.operationId),
             requestKey: requestKey, parentCallId: pipelineCall204(context, parent).callId,
             managedJobCeiling: parent.source.managedJobCeiling
-        ), parentIntentPlan: if (parent.authorization == PreparedAuthorization.ApprovalRequired) {
+        ), parentIntent: if (parent.authorization == PreparedAuthorization.ApprovalRequired) {
             None
-        } else { Some(parentPlan) })
-        })
+        } else { Some(parent) })
     }
 
     // A trusted host broker retains the actual root context while its child
@@ -4620,9 +4618,8 @@ public class ToolPipeline {
         parent: PreparedToolInvocation,
         requestKey: String
     ): Result<ToolPreparation> {
-        parent.withOperationPlan204<Result<ToolPreparation>>({ parentPlan =>
-        if ((parent.source.kind == PreparedInvocationSourceKind.Derived &&
-                (!isReadonlyDelegatedChildPlan(parentPlan) || call.name != HOST_READ_VIEW_TOOL)) ||
+        if (!parent.matchesFrozenPlan(FrozenPluginPlanRule.DerivableParent(
+                parent.source.kind == PreparedInvocationSourceKind.Derived, call.name == HOST_READ_VIEW_TOOL)) ||
             parent.source.operationRoot.isNone() || requestKey.trimAscii() == "" ||
             context.trustedControl) {
             return Result.Err(AgentError(
@@ -4656,10 +4653,9 @@ public class ToolPipeline {
             case Result.Ok(_) => ()
         }
         prepareResolved(context, call, None, source,
-            parentIntentPlan: if (parent.authorization == PreparedAuthorization.ApprovalRequired) {
+            parentIntent: if (parent.authorization == PreparedAuthorization.ApprovalRequired) {
                 None
-            } else { Some(parentPlan) })
-        })
+            } else { Some(parent) })
     }
 
     // The sealed source supplies every origin argument to the existing
@@ -4888,7 +4884,7 @@ public class ToolPipeline {
         requestedCall: ToolCall,
         committedOperationId: ?OperationId,
         source: PreparedInvocationSource,
-        parentIntentPlan!: ?NormalizedOperationPlan = None
+        parentIntent!: ?PreparedToolInvocation = None
     ): Result<ToolPreparation> {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
@@ -5098,12 +5094,10 @@ public class ToolPipeline {
         // actual canonical parent, active epoch and durable handoff before any
         // HTTP exchange or channel write. No user approval is fabricated.
         if (policyDecision.requirement != PermissionRequirement.Deny &&
-            source.kind == PreparedInvocationSourceKind.Derived && parentIntentPlan.isSome() &&
+            source.kind == PreparedInvocationSourceKind.Derived && parentIntent.isSome() &&
             source.operationRoot.isSome() && source.parentCallId != "" &&
-            ((exactServiceChildAllowed(parentIntentPlan.getOrThrow(), plan) &&
-                source.requestKey == exactServiceRequestKey(source.parentCallId, plan)) ||
-             (readonlyDelegationChildAllowed(parentIntentPlan.getOrThrow(), plan) &&
-                source.requestKey == readonlyDelegationRequestKey(source.parentCallId, call.callId))) &&
+            parentIntent.getOrThrow().matchesFrozenPlan(FrozenPluginPlanRule.PermitsDerivedIntent(
+                plan, source.parentCallId, call.callId, source.requestKey)) &&
             exactServiceChildTargetAllowed(context, source, plan)) {
             return Result.Ok(ToolPreparation.Ready(PreparedToolInvocation(
                 ids.nextOperationId(), call, effective.concurrency,
