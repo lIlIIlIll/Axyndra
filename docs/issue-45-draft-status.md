@@ -5224,3 +5224,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### Prepared plan callback retention (E2368)
 
 [Two Native RED regressions and all 100 Tool cases GREEN](implementation/plan-execution-reliability.md#e2368-a-returned-plan-is-still-a-live-reference) verify the raw plan stays paid beyond callback and reader return. A stale producer cannot borrow another reader’s lifetime. These results do not establish whole-Core capacity, final release acceptance or completion of the Prepared migration.
+
+### File-plan size and local terminal flows (E2369)
+
+[Eleven selected Native cases and the independent installed AST contract passed](implementation/plan-execution-reliability.md#e2369-count-file-plan-wire-bytes-without-building-a-second-payload). The exact encoded proposal limit, stale-approval rejection and recover-before-apply path remain enforced. Ten real terminal flows passed on the earlier distribution-presence App. Neither those flows nor the nine-package inspection diagnostic establishes a five-second Coding response, adequate Core capacity or final release acceptance.

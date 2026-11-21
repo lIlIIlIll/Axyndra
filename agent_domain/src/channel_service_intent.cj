@@ -129,7 +129,7 @@ public func channelServiceChildArguments(parent: AgentValue, id: String): Result
     let artifactMode = httpIntentText(host, "version") == HOST_CHANNEL_PAYLOAD_INTENT_VERSION
     if (artifactMode && payloadLimits.isNone()) { return channelIntentError("channel.payload_not_granted", "artifact intent version requires a payload profile") }
     let canonicalLimit = if (artifactMode) { payloadLimits.getOrThrow().maxInputBytes + 262144 } else { limits.canonicalBytes }
-    if (channelParentJsonByteSize(parent) > canonicalLimit) { return channelIntentError("channel.parent_invalid", "frozen parent exceeds the approved profile") }
+    if (encodedAgentValueSize(parent) > canonicalLimit) { return channelIntentError("channel.parent_invalid", "frozen parent exceeds the approved profile") }
     let intents = host.field("intents").getOrThrow()
     if (intents.unifiedKind != ValueKind.List || intents.items.isEmpty() || intents.items.size > 16) {
         return channelIntentError("channel.intent_bounds", "channel parent must declare from 1 to 16 writes")

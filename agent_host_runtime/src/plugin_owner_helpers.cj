@@ -215,18 +215,26 @@ public func hostValidatePluginFilePlanProposal(proposal: AgentValue): Result<Uni
     }
     let operations = proposal.field("operations").getOrThrow()
     if (operations.unifiedKind != ValueKind.List || operations.items.isEmpty() ||
-        operations.items.size > HOST_FILE_APPLICATION_MAX_OPERATIONS ||
-        (stringifyUnifiedJson(proposal).toArray().size > PLUGIN_FILE_PLAN_PROPOSAL_BYTES &&
-            !hostBoundedSingleFileProposal(proposal))) {
-        return hostApplicationPlanError<Unit>(AgentErrorKind.InvalidInput,
-            "application_plan.limit_exceeded", "plugin proposal requires 1..32 operations and at most 64 KiB of encoded JSON")
+        operations.items.size > HOST_FILE_APPLICATION_MAX_OPERATIONS) {
+        return hostPluginProposalLimitExceeded()
     }
-    for(operation in operations.items where operation.field("expected_sha256").isSome()){
-        if(!hostBoundedSingleFileProposal(proposal)){
-            return hostApplicationPlanError<Unit>(AgentErrorKind.InvalidInput,
-                "application_plan.limit_exceeded","Digest precondition is restricted to one bounded file proposal")}
+    let encodedBytes = encodedAgentValueSize(proposal)
+    if (encodedBytes > PLUGIN_FILE_PLAN_PROPOSAL_BYTES) {
+        if (!hostBoundedSingleFileProposal(operations, encodedBytes)) { return hostPluginProposalLimitExceeded() }
+    } else {
+        for (operation in operations.items where operation.field("expected_sha256").isSome()) {
+            if (!hostBoundedSingleFileProposal(operations, encodedBytes)) {
+                return hostApplicationPlanError<Unit>(AgentErrorKind.InvalidInput,
+                    "application_plan.limit_exceeded", "Digest precondition is restricted to one bounded file proposal")
+            }
+        }
     }
     Result.Ok(())
+}
+
+private func hostPluginProposalLimitExceeded(): Result<Unit> {
+    hostApplicationPlanError<Unit>(AgentErrorKind.InvalidInput,
+        "application_plan.limit_exceeded", "plugin proposal requires 1..32 operations and at most 64 KiB of encoded JSON")
 }
 
 public func hostLifecycleText(value: AgentValue, name: String): String {
@@ -259,20 +267,18 @@ public func hostCompactionDiagnosticRecord(phase: String, started: MonoTime): Un
 
 // A bounded transport exception for one small file. This does not authorize a
 // file operation; the original source, read/write gates and atomic CAS remain.
-func hostBoundedSingleFileProposal(proposal: AgentValue): Bool {
-    if(stringifyUnifiedJson(proposal).toArray().size>229376){return false}
-    let operations=proposal.field("operations").getOrThrow()
-    if(operations.items.size!=1){return false}
+private func hostBoundedSingleFileProposal(operations: AgentValue, encodedBytes: Int64): Bool {
+    if (encodedBytes > 229376 || operations.items.size != 1) { return false }
     let operation=operations.items[0];let kind=hostPluginReceiptText(operation,"kind")
     let fields=if(kind=="create"){["kind","path","content"]}
         else if(kind=="replace" && operation.field("expected_sha256").isSome()){
             ["kind","path","expected_sha256","expected_bytes","content"]}
         else if(kind=="replace"){["kind","path","expected_content","content"]}else{return false}
     if(!hostApplicationPlanObjectShape(operation,fields,fields) || operation.field("content").getOrThrow().unifiedKind!=ValueKind.Text ||
-        operation.field("path").getOrThrow().unifiedKind!=ValueKind.Text || operation.field("content").getOrThrow().text.toArray().size>32768){return false}
+        operation.field("path").getOrThrow().unifiedKind!=ValueKind.Text || operation.field("content").getOrThrow().text.size>32768){return false}
     if(operation.field("expected_content").isSome()){
         let expected=operation.field("expected_content").getOrThrow()
-        if(expected.unifiedKind!=ValueKind.Text || expected.text.toArray().size>65536){return false}
+        if(expected.unifiedKind!=ValueKind.Text || expected.text.size>65536){return false}
     }
     if(operation.field("expected_sha256").isSome()){
         let digest=operation.field("expected_sha256").getOrThrow();let bytes=operation.field("expected_bytes").getOrThrow()

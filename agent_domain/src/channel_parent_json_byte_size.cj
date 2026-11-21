@@ -6,7 +6,7 @@ import yjson_support.*
 
 // This counts the current tree's original default JSON encoding. It does not
 // cache a value, identify a Source, grant a capability, or skip any field.
-func channelParentJsonByteSize(value: AgentValue): Int64 {
+public func encodedAgentValueSize(value: AgentValue): Int64 {
     let options = JsonWriteOptions.defaults
     if (!options.indent.isEmpty() || options.htmlSafe || options.maxOutputBytes != 0 ||
         options.maxDepth != 256) {

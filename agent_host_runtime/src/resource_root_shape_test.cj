@@ -26,6 +26,22 @@ class BoundedSingleFileProposalTests {
         @Expect(hostValidatePluginFilePlanProposal(proposal).isError())
     }
     @TestCase
+    func boundedReplaceChecksTheExactEscapedWireByteLimit(): Unit {
+        let operation = objectValue([ValueField("kind", textValue("replace")),
+            ValueField("path", textValue("file.txt")), ValueField("expected_content", textValue("")),
+            ValueField("content", textValue(String.fromUtf8(Array<Byte>(32768, repeat: 1))))])
+        let proposal = objectValue([ValueField("schema", textValue(HOST_FILE_APPLICATION_PROPOSAL_SCHEMA)),
+            ValueField("operations", listValue([operation]))])
+        let remaining = 229376 - stringifyUnifiedJson(proposal).size
+        let expected = "雪" + String.fromUtf8(Array<Byte>(remaining - "雪".size, repeat: b'x'))
+        operation.put("expected_content", textValue(expected))
+        @Assert(stringifyUnifiedJson(proposal).size, 229376)
+        @Expect(hostValidatePluginFilePlanProposal(proposal).isOk())
+        operation.put("expected_content", textValue(expected + "x"))
+        @Expect(hostValidatePluginFilePlanProposal(proposal).isError())
+    }
+
+    @TestCase
     func digestShapeAndIndependentRawByteCeilingCannotBeReplacedByJsonSize(): Unit {
         let digest=modelPolicySha256("before".toArray())
         for(invalid in [textValue("6"),integerValue(-1),integerValue(65537)]){
