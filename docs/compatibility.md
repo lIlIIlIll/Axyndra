@@ -177,6 +177,21 @@ owns the reader. One reader cannot acknowledge another. Earlier raw exports
 remain charged; the rest of the Prepared call/plan migration is still open.
 Neither the plugin wire protocol nor the database format changes.
 
+## Migrate a Host scheduler's derived-frame callback
+
+The third parameter of `ToolInvocationContext.setDerivedToolFrameHandler` is
+now a `DerivedToolFrameName`, not a `String`. Rebuild custom Host schedulers.
+Use `name.matches("plugin.workspace.read")` for an exact match, or
+`name.startsWith("plugin.")` for a prefix. A scheduler using
+`NestedToolSlotFrames` can pass `name` directly to `frames.enter(parent, child, name)`;
+on exit, call `frames.leave(child)`. The handle reads the actual display name
+and expires when that particular callback returns or throws. Enter and leave
+receive separate handles. Keep a classification if needed, not the handle.
+
+This changes the Host source API, not Native plugin messages or stored plans.
+Frame checks schedule an already-admitted child; they do not authorize it or
+acknowledge its result. Roll back a custom scheduler and Host library together.
+
 ## Persisted state and inspection
 
 The current SQLite format is **schema v29**. It is independent of the Native

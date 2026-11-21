@@ -5,19 +5,25 @@ import std.collection.*
 import std.deriving.*
 import std.sync.*
 
+// The scheduler can classify the actual display name only during its callback.
+// Saving this view does not retain the call, arguments or a name string.
+public struct DerivedToolFrameName {
+    private let input: ToolResolverInput
+    init(input: ToolResolverInput) { this.input = input }
+    public func matches(expected: String): Bool { input.textEquals(ToolResolverText.Name, expected) }
+    public func startsWith(prefix: String): Bool { input.nameStartsWith(prefix) }
+}
+
 @Derive[Equatable]
 enum NestedToolFrameStage { Ready | Yielded | Child }
 
 class NestedToolFrame {
     let operationId: OperationId
-    let toolName: String
     var stage = NestedToolFrameStage.Ready
     var executorReturned = false
     var actionReturned = false
     var calls: Int64 = 0
-    init(operationId: OperationId, toolName: String) {
-        this.operationId = operationId; this.toolName = toolName
-    }
+    init(operationId: OperationId) { this.operationId = operationId }
 }
 
 // Host scheduler bookkeeping only. This object never admits an Operation or
@@ -27,6 +33,7 @@ public class NestedToolSlotFrames {
     public let rootOperationId: OperationId
     private let lock = Mutex()
     private let frames = ArrayList<NestedToolFrame>()
+    private let rootMayYield: Bool
     private let identities = HashSet<String>()
     private var rootFinished = false
     private var releasePending = false
@@ -36,7 +43,8 @@ public class NestedToolSlotFrames {
 
     public init(rootOperationId: OperationId, toolName: String) {
         this.rootOperationId = rootOperationId
-        frames.add(NestedToolFrame(rootOperationId, toolName))
+        rootMayYield = toolName == "run_program" || toolName.startsWith("plugin.")
+        frames.add(NestedToolFrame(rootOperationId))
         identities.add(rootOperationId.value)
     }
 
@@ -54,7 +62,7 @@ public class NestedToolSlotFrames {
             if (frame.executorReturned || frame.stage != NestedToolFrameStage.Ready) {
                 return denied("run.tool_slot_transition_invalid")
             }
-            if (frame.toolName != "run_program" && !frame.toolName.startsWith("plugin.")) {
+            if (index == 0 && !rootMayYield) {
                 return denied("run.tool_slot_parent_denied")
             }
             // Ordinary root quotas remain enforced by their existing broker.
@@ -116,6 +124,14 @@ public class NestedToolSlotFrames {
     }
 
     public func enter(parent: OperationId, child: OperationId, toolName: String): Result<Unit> {
+        enterPluginFrame(parent, child, toolName.startsWith("plugin."))
+    }
+
+    public func enter(parent: OperationId, child: OperationId, name: DerivedToolFrameName): Result<Unit> {
+        enterPluginFrame(parent, child, name.startsWith("plugin."))
+    }
+
+    private func enterPluginFrame(parent: OperationId, child: OperationId, isPlugin: Bool): Result<Unit> {
         lock.lock()
         try {
             let index = indexOf(parent)
@@ -123,8 +139,8 @@ public class NestedToolSlotFrames {
                 frames[index].stage != NestedToolFrameStage.Child || frames[index].executorReturned ||
                 frames[index].actionReturned || calls > HOST_DERIVED_MAX_OPERATIONS || frames[index].calls > HOST_DERIVED_MAX_WIDTH ||
                 identities.contains(child.value) || identities.size >= HOST_DERIVED_MAX_OPERATIONS + 1 ||
-                !toolName.startsWith("plugin.")) { return denied("run.tool_frame_invalid") }
-            bounded = true; identities.add(child.value); frames.add(NestedToolFrame(child, toolName))
+                !isPlugin) { return denied("run.tool_frame_invalid") }
+            bounded = true; identities.add(child.value); frames.add(NestedToolFrame(child))
             Result.Ok(())
         } finally { lock.unlock() }
     }

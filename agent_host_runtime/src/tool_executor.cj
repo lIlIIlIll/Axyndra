@@ -40,7 +40,7 @@ class HostDirectToolSchedule {
         if (release) { let _ = context.budget.releaseTools() }
     }
 
-    func frame(parent: OperationId, child: OperationId, name: String, entering: Bool): Result<Unit> {
+    func frame(parent: OperationId, child: OperationId, name: DerivedToolFrameName, entering: Bool): Result<Unit> {
         let result = if (entering) { frames.enter(parent, child, name) } else { frames.leave(child) }
         releaseReturnedSlot(); result
     }

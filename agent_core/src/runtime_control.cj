@@ -1057,7 +1057,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 & PlanCopyDataConsumer204 {
     func returnNestedToolSlot(operationId: OperationId): Result<Unit> {
         transitionNested(operationId, { owner => owner.returnChild(operationId) })
     }
-    func derivedToolFrame(parent: OperationId, child: OperationId, name: String, entering: Bool): Result<Unit> {
+    func derivedToolFrame(parent: OperationId, child: OperationId, name: DerivedToolFrameName, entering: Bool): Result<Unit> {
         transitionNested(if (entering) { parent } else { child }, { owner =>
             if (entering) { owner.enter(parent, child, name) } else { owner.leave(child) }
         })

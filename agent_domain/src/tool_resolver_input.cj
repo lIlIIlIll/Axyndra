@@ -79,6 +79,9 @@ public class ToolResolverInput {
     public func textEquals(text: ToolResolverText, expected: String): Bool {
         lock.lock(); try { selected(text) == expected } finally { lock.unlock() }
     }
+    public func nameStartsWith(prefix: String): Bool {
+        lock.lock(); try { current().name.startsWith(prefix) } finally { lock.unlock() }
+    }
     public func hasKind(path: Array<ToolResolverStep>, expected: JsonKind): Bool {
         lock.lock(); try { match (at(path)) { case Some(value) => value.kind() == expected; case None => false } }
         finally { lock.unlock() }

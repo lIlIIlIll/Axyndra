@@ -558,7 +558,7 @@ public class ToolInvocationContext {
     private var budgetChargeHandler: ?(BudgetCharge) -> Result<ExecutionUsage> = None
     private var ownedTaskHandler: ?(String, Future<Unit>) -> Result<Unit> = None
     private var nestedToolScheduler: ?(OperationId, () -> Result<Unit>) -> Result<Unit> = None
-    private var derivedToolFrameHandler: ?(OperationId, OperationId, String, Bool) -> Result<Unit> = None
+    private var derivedToolFrameHandler: ?(OperationId, OperationId, DerivedToolFrameName, Bool) -> Result<Unit> = None
     private var paidExecutionFailureSink173: ?PaidExecutionFailureSink173 = None<PaidExecutionFailureSink173>
     public init(
         runId: RunId,
@@ -1019,7 +1019,7 @@ public class ToolInvocationContext {
             budgetChargeHandler = None<(BudgetCharge) -> Result<ExecutionUsage>>
             ownedTaskHandler = None<(String, Future<Unit>) -> Result<Unit>>
             nestedToolScheduler = None<(OperationId, () -> Result<Unit>) -> Result<Unit>>
-            derivedToolFrameHandler = None<(OperationId, OperationId, String, Bool) -> Result<Unit>>
+            derivedToolFrameHandler = None<(OperationId, OperationId, DerivedToolFrameName, Bool) -> Result<Unit>>
             paidExecutionFailureSink173 = None<PaidExecutionFailureSink173>
         } finally { executionControlLock.unlock() }
         // sequenceOwner links only bounded counters after owner retirement.
@@ -1284,12 +1284,12 @@ public class ToolInvocationContext {
         }
     }
 
-    public func setDerivedToolFrameHandler(handler: (OperationId, OperationId, String, Bool) -> Result<Unit>): Unit {
+    public func setDerivedToolFrameHandler(handler: (OperationId, OperationId, DerivedToolFrameName, Bool) -> Result<Unit>): Unit {
         beginInvocationAction159()
         try { setDerivedToolFrameHandlerAction159(handler) } finally { endInvocationAction159() }
     }
 
-    private func setDerivedToolFrameHandlerAction159(handler: (OperationId, OperationId, String, Bool) -> Result<Unit>): Unit {
+    private func setDerivedToolFrameHandlerAction159(handler: (OperationId, OperationId, DerivedToolFrameName, Bool) -> Result<Unit>): Unit {
         requireLiveInvocationView159()
         executionControlLock.lock()
         try {
@@ -1316,14 +1316,14 @@ public class ToolInvocationContext {
                 "tool.scheduler_unavailable", "derived parent requires its actual scheduler frame"))
         }
         let parent = prepared.source.parentOperationId.getOrThrow()
-        match (enter(parent, prepared.operationId, prepared.call.name, true)) {
+        match (prepared.withCallInput({ input => enter(parent, prepared.operationId, DerivedToolFrameName(input), true) })) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
         }
         let outcome: Result<ToolResult> = try { action() } catch (_: Exception) {
             Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "tool.derived_executor_failed",
                 "derived executor escaped after its actual handoff"))
         }
-        match (enter(parent, prepared.operationId, prepared.call.name, false)) {
+        match (prepared.withCallInput({ input => enter(parent, prepared.operationId, DerivedToolFrameName(input), false) })) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
         }
         outcome

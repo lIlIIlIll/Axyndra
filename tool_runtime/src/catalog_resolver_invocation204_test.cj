@@ -139,6 +139,51 @@ class CatalogResolverInvocation204Tests {
     }
 
     @TestCase
+    func derivedSchedulerReadsOnlyTheLiveNameAndReleasesItsMetadata(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("frame-run"), SessionId("frame-thread"), CapabilitySet())
+        let parent = OperationId("parent")
+        let frames = NestedToolSlotFrames(parent, "run_program")
+        let names = ArrayList<DerivedToolFrameName>()
+        let seen = ArrayList<Bool>()
+        context.setDerivedToolFrameHandler({ actualParent, child, name, entering =>
+            names.add(name); seen.add(name.matches("plugin.x.雪"))
+            if (entering) { frames.enter(actualParent, child, name) } else { frames.leave(child) }
+        })
+        for (toolName in ["run_program", "plugin.x.雪"]) {
+            let child = OperationId(toolName)
+            let call = ToolCall("display", toolName, objectValue([]))
+            let plan = NormalizedOperationPlan(toolName, objectValue([]), [], OperationEffectClass.ReadOnly,
+                OperationRetryDisposition.Never, "frame-binding")
+            let prepared = PreparedToolInvocation(child, call, exclusiveToolConcurrency(),
+                PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Derived,
+                    context, parentOperationId: Some(parent)))
+            let owner = PreparedMetadataOwner204(root.deriveRetainedLease(), ResolverDataConsumer204(root))
+            owner.installFrame204(prepared)
+            @Assert(frames.begin(parent).isOk() && frames.activate(parent).isOk())
+            let ran = [false]; let enterClosed = [false]
+            let outcome = context.executeDerivedFrame(prepared, { =>
+                ran[0] = true
+                try { let _ = names[names.size - 1].startsWith("plugin.") }
+                catch (_: IllegalStateException) { enterClosed[0] = true }
+                Result.Ok(ToolResult("display", textValue("returned")))
+            })
+            let allowed = toolName == "plugin.x.雪"
+            @Expect(outcome.isOk(), allowed); @Expect(ran[0], allowed); @Expect(enterClosed[0], allowed)
+            @Assert(frames.returnChild(parent).isOk()); owner.producerReturned204()
+        }
+        @Assert(seen.size, 3); @Expect(!seen[0] && seen[1] && seen[2])
+        for (name in names) {
+            var closed = false
+            try { let _ = name.matches("plugin.x.雪") } catch (_: IllegalStateException) { closed = true }
+            @Expect(closed)
+        }
+        frames.finishRoot(); @Expect(frames.takeRelease() && !frames.takeRelease())
+        root.close(); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func serviceComparisonResolvesDisplayArgumentsWithoutExportingPreparedData(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
         let root = bank.acquire(131072); let paid = root.deriveRetainedLease()
