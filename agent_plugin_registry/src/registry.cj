@@ -597,6 +597,22 @@ public open class PluginRegistry {
     }
 
     public func inspect(root: String): PluginRegistryResult<OwnedPluginPackageDescriptor> {
+        inspectCurrentPackage(root, { value => ownDescriptor78(value) })
+    }
+
+    // Inspect the actual bytes on every call. Only the Boolean escapes the parser
+    // frame; no public descriptor, view payment or retained backing is needed.
+    public func inspectedPackageMatches(root: String, namespace!: ?String = None, version!: ?String = None,
+        digest!: ?String = None, entrypoint!: ?String = None): PluginRegistryResult<Bool> {
+        inspectCurrentPackage(root, { value => value.root == root &&
+            (namespace.isNone() || value.namespace == namespace.getOrThrow()) &&
+            (version.isNone() || value.version == version.getOrThrow()) &&
+            (digest.isNone() || value.contentDigest == digest.getOrThrow()) &&
+            (entrypoint.isNone() || value.entrypoint == entrypoint.getOrThrow())
+        })
+    }
+
+    private func inspectCurrentPackage<T>(root: String, project: (PluginPackageDescriptor) -> T): PluginRegistryResult<T> {
         let memory = try {
             registryLock.lock()
             try { requireOpenLocked(); PluginRegistryStateMemory(metadataCustody) }
@@ -604,7 +620,7 @@ public open class PluginRegistry {
         } catch (_: LogicalJsonPayloadError) {
             return pluginRegistryStaticFailure78("plugin.registry_metadata_capacity")
         }
-        try { inspectCurrentPackageFrame78(root, memory) }
+        try { inspectCurrentPackageFrame78(root, memory, project) }
         catch (_: LogicalJsonPayloadError) {
             pluginRegistryStaticFailure78("plugin.registry_metadata_capacity")
         } finally {
@@ -614,8 +630,8 @@ public open class PluginRegistry {
         }
     }
 
-    private func inspectCurrentPackageFrame78(root: String,
-        memory: PluginRegistryStateMemory): PluginRegistryResult<OwnedPluginPackageDescriptor> {
+    private func inspectCurrentPackageFrame78<T>(root: String,
+        memory: PluginRegistryStateMemory, project: (PluginPackageDescriptor) -> T): PluginRegistryResult<T> {
         // Pure current-byte inspection owns call-local DATA in the same
         // custody. Hashing must not block another invocation behind a watcher.
         let observed = inspectPluginPackage(root, metadataAccounting: Some(memory))
@@ -623,7 +639,7 @@ public open class PluginRegistry {
         try {
             requireOpenLocked()
             match (observed) {
-                case PluginPackageResult.Ok(value) => PluginRegistryResult.Ok(ownDescriptor78(value))
+                case PluginPackageResult.Ok(value) => PluginRegistryResult.Ok(project(value))
                 case PluginPackageResult.Err(error) => PluginRegistryResult.Err(ownError78(error))
             }
         } finally { registryLock.unlock() }

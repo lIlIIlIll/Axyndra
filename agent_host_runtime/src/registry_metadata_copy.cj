@@ -201,28 +201,12 @@ func hostRegistryJavaScriptError81(error: PluginRegistryOwnedError): JavaScriptH
 func hostRegistryPackageMatches81(registry: PluginRegistry, root: String,
     namespace!: ?String = None, version!: ?String = None, digest!: ?String = None,
     entrypoint!: ?String = None): Result<Bool> {
-    let actual = match (registry.inspect(root)) {
+    match (registry.inspectedPackageMatches(root, namespace: namespace, version: version, digest: digest, entrypoint: entrypoint)) {
+        case PluginRegistryResult.Ok(matches) => Result.Ok(matches)
         case PluginRegistryResult.Err(error) =>
-            // These callers previously ignored the inspection error graph.
-            // Preserve its fixed category without exporting its dynamic data.
             let code = error.code; error.close()
-            return hostPluginResourceError(code, "registry package inspection failed")
-        case PluginRegistryResult.Ok(value) => value
+            hostPluginResourceError(code, "registry package inspection failed")
     }
-    try {
-        let wrapper = actual.deriveCopiedDataPayment(4096)
-        try { Result.Ok(hostRegistryPackageMatchesFrame81(actual, root, namespace, version, digest, entrypoint)) }
-        finally { wrapper.close() }
-    } finally { actual.close() }
-}
-private func hostRegistryPackageMatchesFrame81(actual: OwnedPluginPackageDescriptor, root: String,
-    namespace: ?String, version: ?String, digest: ?String, entrypoint: ?String): Bool {
-    if (!actual.textEquals(PluginDescriptorText.Root, root)) { return false }
-    match (namespace) { case Some(value) => if (!actual.textEquals(PluginDescriptorText.Namespace, value)) { return false }; case None => () }
-    match (version) { case Some(value) => if (!actual.textEquals(PluginDescriptorText.Version, value)) { return false }; case None => () }
-    match (digest) { case Some(value) => if (!actual.textEquals(PluginDescriptorText.ContentDigest, value)) { return false }; case None => () }
-    match (entrypoint) { case Some(value) => if (!actual.textEquals(PluginDescriptorText.Entrypoint, value)) { return false }; case None => () }
-    true
 }
 
 private func hostRegistryText81(value: AgentValue, field: String): String {

@@ -76,6 +76,36 @@ private func fillRegistryBankToCapacity(): ArrayList<LogicalJsonOwnerReservation
 @Test
 class RegistryMetadataGenerationTests {
     @TestCase
+    func currentPackageComparisonRereadsChangedBytesAndChecksEverySelectedField(): Unit {
+        let fixture = RegistryGenerationFixture(0)
+        try {
+            let path = registryFixturePackage(fixture.root, "3.2.1")
+            let script = path + "/extensions/index.js"
+            File.writeTo(script, "// original".toArray())
+            let original = match (inspectPluginPackage(path)) {
+                case PluginPackageResult.Ok(value) => value.contentDigest
+                case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+            }
+            let reg = fixture.registry
+            @Expect(generationRequire(reg.inspectedPackageMatches(path, namespace: Some("pi:minimal-fixture"),
+                version: Some("3.2.1"), digest: Some(original), entrypoint: Some("extensions/index.js"))))
+            @Expect(!generationRequire(reg.inspectedPackageMatches(path, namespace: Some("other"))))
+            @Expect(!generationRequire(reg.inspectedPackageMatches(path, version: Some("3.2.0"))))
+            @Expect(!generationRequire(reg.inspectedPackageMatches(path, entrypoint: Some("different.js"))))
+            @Expect(!generationRequire(reg.inspectedPackageMatches(path + "/.")))
+            File.writeTo(script, "// modified".toArray())
+            @Expect(!generationRequire(reg.inspectedPackageMatches(path, digest: Some(original))))
+            @Expect(generationRequire(reg.inspectedPackageMatches(path)))
+            File.writeTo(path + "/package.json", "{".toArray())
+            let malformed = reg.inspectedPackageMatches(path)
+            match (malformed) {
+                case PluginRegistryResult.Ok(_) => @Expect(false)
+                case PluginRegistryResult.Err(error) => error.close()
+            }
+        } finally { fixture.close() }
+    }
+
+    @TestCase
     func seventeenActualInstalledPinsShareOneRealAllocationWithNearEightMibAndSessionOwners(): Unit {
         let fixture = RegistryGenerationFixture(17)
         let pins = ArrayList<PluginRegistryExecutionPin>()
