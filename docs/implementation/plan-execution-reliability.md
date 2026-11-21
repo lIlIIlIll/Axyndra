@@ -11836,3 +11836,25 @@ E2301 stopped the E2297 Native Core executable (`d74769912d09`) at the rejected 
 | Fault | 4 | 520,064 | 16 | 3,214,848 |
 
 All 59 leases were distinct, open and on the same bank. Every identity had completed construction but still had one Catalog share. Twelve recorded original configuration aliases; **none** recorded an actual legacy-alias retirement refusal. These are holders, not proven leaks or refundable bytes. The 37 opaque Prepared owners separately accounted for 10,049,208 bytes. All six original SQLite files remained unchanged and all 40 durable derived edges matched E2297, including the two failed reserved Receipts. Evidence: `brokercatalogrefusal2301/qualified.json`. No limits or return conditions changed.
+
+### Measured release commands, concurrent output and cancellation
+
+E2305 compared the packaged Coding executable `eadffca25d8a` (behavior `de166288de`) with the fixed baseline `a85907b7df0b`. Both ran the original seven-record performance gate, with the same two fixture hashes, pinned SDK, clean state and verified yjson revision. Both passed its absolute ceilings; the product commands still regressed in relative startup latency. Values below are P95, not maxima. Evidence: `brokermatchedoriginal2305/qualified.json`.
+
+| Original metric | Samples per arm | Baseline | Coding |
+| --- | ---: | ---: | ---: |
+| Extension activation (µs) | 12 | 60,940 | 50,045 |
+| Extension first call (µs) | 12 | 2,336 | 504 |
+| Extension steady IPC (µs) | 240 | 7,488 | 237 |
+| Extension host RSS (bytes) | 12 | 29,077,504 | 20,930,560 |
+| Extension cancellation, including 100 ms trigger (µs) | 12 | 126,964 | 125,232 |
+| Disabled-plugin `/help` startup (µs) / peak RSS (bytes) | 20 | 142,288 / 94,257,152 | 429,045 / 50,937,856 |
+| Declarative plugin inspect startup (µs) / peak RSS (bytes) | 20 | 141,847 / 94,273,536 | 442,024 / 50,601,984 |
+
+E2302 separately exercised two live workers. The original baseline completed all 24 output pairs. The candidate completed five 256-byte pairs before the fixture rejected a pair with no witnessed overlap. There is **no candidate output P95**. In E2309, with both progress callbacks required to witness each other, each arm completed 12 pairs at 256 bytes and 12 at 32,768 bytes with original payload checks, distinct workers and physical reaping. That proves the calls can overlap; the rendezvous changes timing and does not convert E2302 to a pass. Both original cancellation arms completed 12 samples. From the actual trigger, P95 to result was 26,381/26,186 µs and P95 to observed physical reap was 26,403/26,201 µs (baseline/candidate). Evidence: `brokerpairedworkers2302/qualified.json`, `brokeroverlapwitness2309/qualified.json`.
+
+### Existing installation: no HTTP request before the deadline
+
+E2306 ran the published Coding package against the retained nine-plugin installation with its original grants and credentials, without reinstalling or enabling anything. None of its installed package digests equaled the corresponding bundled digest. The first request timed out after **5,002.831 ms**; the local HTTP fixture received zero POSTs. No second request ran. Process custody closed without forced cleanup; 242 original plugin, credential and configuration files were unchanged.
+
+SQLite recorded a new failed Run, one committed `host.context.read` Operation with a completed Receipt (+575 ms from admission), and no new model attempt or approval. It recorded `model.started` at +1,868 ms and `runtime.run_stale` at +1,869 ms. That error covers settling, owner/epoch mismatch or cancellation. The stored evidence does not distinguish them or order the failure against the client deadline. Neither the event nor the Receipt proves a provider call. Evidence: `brokerinstalledprofile2306/{qualified.json,terminal-reason.json}`.
