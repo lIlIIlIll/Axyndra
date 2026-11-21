@@ -54,6 +54,19 @@ private class PlanRuleObservationNode <: JsonNode {
 @Test
 class PreparedMetadataCopy204Tests {
     @TestCase
+    func documentVersionSelectsValidationButDoesNotValidateThePlan(): Unit {
+        let context = ToolInvocationContext(RunId("protocol-run"), SessionId("session"), CapabilitySet())
+        for (version in [PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA, PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA, "other"]) {
+            let arguments = objectValue([ValueField("host_plan", objectValue([ValueField("version", textValue(version))]))])
+            let prepared = metadataFixture204(context, arguments)
+            @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentPayloadProtocol), version != "other")
+            @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentParent))
+            @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyInputAttachment))
+            @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyFilePlanProposals))
+        }
+    }
+
+    @TestCase
     func saturatedMetadataCanAnswerClosedQueriesButStillRefusesAnotherExternalReader(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
         let context = ToolInvocationContext(RunId("read-run"), SessionId("read-session"), CapabilitySet())
@@ -121,6 +134,8 @@ class PreparedMetadataCopy204Tests {
             ValueField("configuration_digest", textValue("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")),
             ValueField("tool_set_id", textValue("snapshot")), ValueField("tools", listValue([])),
             ValueField("max_calls", integerValue(1)), ValueField("max_depth", integerValue(2))])
+        host.put("file_plan_proposals", boolValue(true))
+        host.put("input_attachment", objectValue([ValueField("field", textValue("code")), ValueField("max_bytes", integerValue(16))]))
         let name = "plugin.axyndra:program.run"
         let plan = NormalizedOperationPlan(name, objectValue([ValueField("input", objectValue([])), ValueField("host_plan", host)]),
             [Capability(CapabilityKind.ExtensionInvoke, resource: name)], OperationEffectClass.ReadOnly,
@@ -131,6 +146,11 @@ class PreparedMetadataCopy204Tests {
         let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
         let reader = prepared.retainMetadataConsumer204().getOrThrow()
         host.put("max_calls", integerValue(0))
+        @Expect(!FrozenPluginPlanRule.ReadonlyInputAttachment.matches(plan))
+        @Expect(!FrozenPluginPlanRule.ReadonlyFilePlanProposals.matches(plan))
+        @Expect(reader.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyInputAttachment))
+        @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyFilePlanProposals))
+        @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentPayloadProtocol))
         @Expect(!isFrozenReadonlyDelegationParentPlan(plan))
         @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent))
         @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.CapabilitiesWithin(context.capabilities)))

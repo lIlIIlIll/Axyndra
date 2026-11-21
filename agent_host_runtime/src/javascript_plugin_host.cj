@@ -242,8 +242,7 @@ public open class HostJavaScriptPluginHost {
     }
     func prepareToolInputAttachment(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         namespace: String, contribution: String, generation: UInt64): Result<?HostToolInputAttachmentSession> {
-        if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent) ||
-            prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").isNone()) { return Result.Ok(Option<HostToolInputAttachmentSession>.None) }
+        if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyInputAttachment)) { return Result.Ok(Option<HostToolInputAttachmentSession>.None) }
         lock.lock()
         let actual: ?HostToolInputAttachmentOwner = try { if (closed) { None } else { toolInputAttachmentOwner } } finally { lock.unlock() }
         let owner = match (actual) { case Some(value) => value
@@ -2894,8 +2893,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         plan: NormalizedOperationPlan, call: HostTaskCallIdentity, invocationArguments: AgentValue, toolPayload: ?OrdinaryToolPayloadLimits,
         identity: JavaScriptHostInvocationIdentity, dataOnly: Bool, preparedCompletion152: Bool,
         observer: HostJavaScriptPluginInvocationObserver): Result<ToolResult> {
-        if(httpIntentText(plan.canonicalArguments.field("host_plan") ?? nullValue(),"version")==PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA ||
-            httpIntentText(plan.canonicalArguments.field("host_plan")??nullValue(),"version")==PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA){
+        if (FrozenPluginPlanRule.DocumentPayloadProtocol.matches(plan)) {
             return hostExecuteFrozenDocument(host,extensionId,toolName,instanceGeneration,context,prepared,observer)
         }
         try {
@@ -3013,8 +3011,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         invocationArguments: AgentValue, toolPayload: ?OrdinaryToolPayloadLimits,
         identity: JavaScriptHostInvocationIdentity, dataOnly: Bool, preparedCompletion152: Bool,
         observer: HostJavaScriptPluginInvocationObserver): Result<ToolResult> {
-        if(httpIntentText(prepared.operationPlan.canonicalArguments.field("host_plan") ?? nullValue(),"version")==PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA ||
-            httpIntentText(prepared.operationPlan.canonicalArguments.field("host_plan")??nullValue(),"version")==PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA){
+        if (prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentPayloadProtocol)) {
             return hostExecuteFrozenDocument(host,extensionId,toolName,instanceGeneration,context,prepared,observer)
         }
         try {

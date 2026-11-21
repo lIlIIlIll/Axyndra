@@ -1,6 +1,8 @@
 package tool_runtime
 
 import agent_domain.*
+import yjson.*
+import yjson_support.*
 
 // Closed questions about the frozen plan. A match neither exports the plan nor
 // grants execution; Source, capability and durable admission checks are separate.
@@ -21,6 +23,7 @@ public enum FrozenPluginChildRelation {
 
 public enum FrozenPluginPlanRule {
     LivePolicyParent | ReadonlyDelegationParent | DocumentParent | ReadViewParent |
+    ReadonlyInputAttachment | ReadonlyFilePlanProposals | DocumentPayloadProtocol |
     PrimitiveChildParent | PreparedCompletion | ReadViewChild | ReadViewChildOf(NormalizedOperationPlan) |
     ReadonlyTargetOf(NormalizedOperationPlan) | FilePlanPreviewOf(NormalizedOperationPlan) |
     HttpStreamChildOf(NormalizedOperationPlan) | ChannelChildOf(NormalizedOperationPlan) |
@@ -37,6 +40,13 @@ public enum FrozenPluginPlanRule {
             case ChannelParent => isFrozenChannelParentPlan(plan)
             case LivePolicyParent => isPluginLivePolicyParentPlan(plan)
             case ReadonlyDelegationParent => isFrozenReadonlyDelegationParentPlan(plan)
+            case ReadonlyInputAttachment => isFrozenReadonlyDelegationParentPlan(plan) &&
+                plan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").isSome()
+            case ReadonlyFilePlanProposals => readonlyDelegationFilePlanProposalsEnabled(plan)
+            case DocumentPayloadProtocol =>
+                // Select the validator, not its result. A version tag alone grants no effect.
+                httpIntentText(plan.canonicalArguments.field("host_plan") ?? nullValue(), "version") == PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA ||
+                    httpIntentText(plan.canonicalArguments.field("host_plan") ?? nullValue(), "version") == PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA
             case DocumentParent => isFrozenPluginDocumentParentPlan(plan)
             case ReadViewParent => isFrozenReadViewParentPlan(plan)
             case PrimitiveChildParent => isFrozenPluginChildParent111(plan)

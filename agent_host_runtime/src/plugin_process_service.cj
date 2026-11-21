@@ -80,7 +80,7 @@ public class HostPluginServiceIdentity {
         if (pluginPrimitiveService111(service)) { return hostPluginResourceError("child.profile_missing", "this contribution has no operator-selected child profile") }
         if (descriptor.requestedCapabilities.contains("tool.readonly")) {
             if (service == "tool.readonly" && prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) { return Result.Ok(()) }
-            if(service=="file.plan.propose" && readonlyDelegationFilePlanProposalsEnabled(prepared.operationPlan) &&
+            if(service=="file.plan.propose" && prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyFilePlanProposals) &&
                 prepared.source.kind!=PreparedInvocationSourceKind.Derived && prepared.source.operationRoot.isSome()){
                 return Result.Ok(())}
             return hostPluginResourceError("readonly_delegation.service_denied", "delegation endpoint has only the exact readonly child service")
