@@ -18,6 +18,52 @@ import agent_host_runtime.*
 import agent_store.*
 import tool_runtime.*
 
+private let nativeActivationCapabilities = ["workspace.read", "workspace.write", "network.http", "process.channel",
+    "process.readview", "tool.readonly", "document.store"]
+
+func checkNativeActivationTrust(descriptor: OwnedPluginPackageDescriptor, root: String,
+    extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier): Result<Unit> {
+    for (index in 0..descriptor.capabilityCount) {
+        var allowed = false
+        for (kind in nativeActivationCapabilities) {
+            if (descriptor.capabilityEquals(index, kind)) { allowed = true; break }
+        }
+        if (!allowed) { return Result.Err(AgentError(AgentErrorKind.Configuration, "plugin.capability_unsupported",
+            "executable plugin capability is outside the product ceiling")) }
+    }
+    let verifier = match (extensionSignatureVerifier) {
+        case Some(value) => value
+        case None =>
+            if (!descriptor.textEquals(PluginDescriptorText.Signature, "")) {
+                return Result.Err(AgentError(AgentErrorKind.Configuration, "plugin.signature_trust_root_missing",
+                    "a signed plugin requires its configured signature trust root"))
+            }
+            return Result.Ok(())
+    }
+    // The verifier may retain the manifest. Only this branch needs independent
+    // copies; the verifier's separate capability ceiling must not alias its manifest.
+    let manifest = SignedExtensionPackageManifest(
+        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id)),
+        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)),
+        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.SdkRange)),
+        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ProtocolRange)),
+        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Entrypoint)),
+        [],
+        [],
+        productRegistryCapabilities83(descriptor),
+        1u32,
+        "restart-does-not-replay",
+        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)),
+        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Signature))
+    )
+    match (validateIsolatedPluginPackage(manifest, ExtensionExecutionKind.ProcessPlugin, 1u64,
+        productRegistryCapabilities83(descriptor), verifier, packageRoot: root)) {
+        case SafeLifecycleResult.Ok(_) => Result.Ok(())
+        case SafeLifecycleResult.Err(message) => Result.Err(AgentError(AgentErrorKind.Configuration,
+            "plugin.activation_rejected", message))
+    }
+}
+
 // Descriptive metadata only. Construction and use stay inside Product;
 // no catalog, executor callback, source, admission or grant is exposed.
 class ProductPublishedToolIdentity {
@@ -905,55 +951,9 @@ public class ProductVnextControl <: HostServiceToolControl {
                 "executable plugin snapshots must remain inside managed package storage"
             ))
         }
-        for (capability in productRegistryCapabilities83(descriptor)) {
-            if (capability != "workspace.read" && capability != "workspace.write" && capability != "network.http" &&
-                capability != "process.channel" && capability != "process.readview" && capability != "tool.readonly" && capability != "document.store") {
-                return Result.Err(AgentError(
-                    AgentErrorKind.Configuration,
-                    "plugin.capability_unsupported",
-                    "executable plugin capability is outside the product ceiling"
-                ))
-            }
-        }
-        let manifest = SignedExtensionPackageManifest(
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id)),
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)),
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.SdkRange)),
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ProtocolRange)),
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Entrypoint)),
-            [],
-            [],
-            productRegistryCapabilities83(descriptor),
-            1u32,
-            "restart-does-not-replay",
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)),
-            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Signature))
-        )
-        // Package trust is checked before initialization. Declared capabilities
-        // remain requests; the isolated process receives no ambient grants.
-        match (extensionSignatureVerifier) {
-            case Some(verifier) => match (validateIsolatedPluginPackage(
-                manifest,
-                ExtensionExecutionKind.ProcessPlugin,
-                1u64,
-                productRegistryCapabilities83(descriptor),
-                verifier,
-                packageRoot: root
-            )) {
-                case SafeLifecycleResult.Ok(_) => ()
-                case SafeLifecycleResult.Err(message) => return Result.Err(AgentError(
-                    AgentErrorKind.Configuration,
-                    "plugin.activation_rejected",
-                    message
-                ))
-            }
-            case None => if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Signature)) != "") {
-                return Result.Err(AgentError(
-                    AgentErrorKind.Configuration,
-                    "plugin.signature_trust_root_missing",
-                    "a signed plugin requires its configured signature trust root"
-                ))
-            }
+        match (checkNativeActivationTrust(descriptor, root, extensionSignatureVerifier)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
         }
         if (serialize) { javascriptPluginLifecycleLock.lock() }
         try {

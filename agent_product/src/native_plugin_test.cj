@@ -50,8 +50,97 @@ func nativePluginTestRecord(root: String, registry: ProductPluginRuntime): agent
     }
 }
 
+private class RecordingNativeTrustVerifier <: ExtensionPackageSignatureVerifier {
+    var received: ?SignedExtensionPackageManifest = None
+    public func verify(manifest: SignedExtensionPackageManifest): Bool {
+        received = Some(manifest)
+        manifest.signature == "fixture-signature"
+    }
+}
+
+private func nativeTrustSource(root: String, signed: Bool): String {
+    let source = nativePluginTestSource(root, command: "echo", tool: true)
+    let path = source + "/axyndra.plugin.json"
+    let manifest = parseUnifiedJson(String.fromUtf8(File.readFrom(path)))
+    if (signed) { manifest.put("signature", textValue("fixture-signature")) }
+    else { manifest.put("capabilities", listValue([textValue("workspace.read")])) }
+    File.writeTo(path, stringifyUnifiedJson(manifest).toArray())
+    source
+}
+
 @Test
 class NativePluginContractTests {
+    @TestCase
+    func unsignedActivationTrustLeavesNoManifestOrCapabilityCopyInTheInstalledBank(): Unit {
+        let root = pluginContractTemp("unsigned-activation-trust")
+        let registry = ProductPluginRuntime(root + "/settings", root)
+        try {
+            let source = nativeTrustSource(root, false)
+            let record = match (registry.importLocal(source)) {
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+            }
+            try {
+                let descriptor = record.descriptor
+                let probe = descriptor.deriveCopiedDataPayment(8192)
+                try {
+                    let before = probe.retainedCustodyUsage113()
+                    for (_ in 0..2) {
+                        @Expect(checkNativeActivationTrust(descriptor, source, None).isOk())
+                        let after = probe.retainedCustodyUsage113()
+                        @Expect(after[0], before[0]); @Expect(after[2], before[2])
+                    }
+                } finally { probe.close() }
+            } finally { record.close() }
+        } finally { registry.close(); remove(root, recursive: true) }
+    }
+
+    @TestCase
+    func signedNativeToolNeedsItsConfiguredVerifierBeforePublication(): Unit {
+        let root = pluginContractTemp("signed-activation-trust")
+        let verifier = RecordingNativeTrustVerifier()
+        try {
+            let source = nativeTrustSource(root, true)
+            for (configured in [false, true]) {
+                let home = root + (if (configured) { "/trusted" } else { "/untrusted" })
+                let product = match (openProduct(config: ProductConfig(settingsRoot: home + "/settings",
+                    stateRoot: home + "/state", workspaceRoot: root, fixture: true, approvalMode: ApprovalMode.Yolo,
+                    extensionSignatureVerifier: if (configured) { Some<ExtensionPackageSignatureVerifier>(verifier) } else { None }))) {
+                    case Result.Ok(value) => value
+                    case Result.Err(error) => throw IllegalStateException(error.code)
+                }
+                try {
+                    let record = match (product.importLocalPlugin(source)) {
+                        case PluginRegistryResult.Ok(value) => value
+                        case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                    }
+                    try {
+                        let enabled = product.setPluginEnabled("axyndra:native-command-fixture", true)
+                        let name = "plugin.axyndra:native-command-fixture.echo"
+                        match (enabled) {
+                            case PluginRegistryResult.Err(error) =>
+                                try { @Expect(!configured); @Expect(error.code, "plugin.signature_trust_root_missing") }
+                                finally { error.close() }
+                                @Expect(verifier.received.isNone())
+                                @Expect(!product.invokeLocalTool(SessionId("unsigned-scope"), name, objectValue([])).isOk())
+                            case PluginRegistryResult.Ok(value) =>
+                                try { @Expect(configured); @Expect(value.enabled) } finally { value.close() }
+                                let manifest = verifier.received.getOrThrow()
+                                @Expect(manifest.id, "native-command-fixture"); @Expect(manifest.version, "1.0.0")
+                                @Expect(manifest.entrypoint, "native-plugin-tool")
+                                @Expect(record.descriptor.textEquals(PluginDescriptorText.ContentDigest, manifest.contentDigest))
+                                let result = match (product.invokeLocalTool(SessionId("signed-scope"), name, objectValue([]))) {
+                                    case Result.Ok(actual) => actual; case Result.Err(error) => throw IllegalStateException(error.code)
+                                }
+                                try { @Expect(result.output.field("runtime").getOrThrow().text, "native"); @Expect(result.receiptId != "") }
+                                finally { result.releasePayload() }
+                        }
+                    } finally { record.close() }
+                } finally { let _ = product.close() }
+            }
+        } finally { remove(root, recursive: true) }
+    }
+
     @TestCase
     func nativeToolExecutesWithCanonicalReceiptFromDirectProductEntry(): Unit {
         let root = pluginContractTemp("native-tool-product")
