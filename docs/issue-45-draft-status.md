@@ -5216,3 +5216,11 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### Derived service request keys (E2366)
 
 [All 98 Tool tests and five Native controls passed](implementation/plan-execution-reliability.md#e2366-derive-service-request-keys-without-exporting-the-parent-call). The six derived wire keys no longer require exporting a parent call; notifications that genuinely publish the original ID remain paid. Unsplit Core still failed read-view output reservation; the 3 + 37 derived admissions and their outcomes stayed intact. PR remains Draft.
+
+### Cold local provider and standalone Memory (E2367)
+
+[Eleven production stages and selected Coding entrypoints passed](implementation/plan-execution-reliability.md#e2367-distinguish-a-dispatch-claim-from-arrival-at-the-local-provider) on the distribution-presence source. Its original five-second local request still failed: dispatch was claimed at +4,592 ms, but the listener received no POST. The two standalone Memory contracts passed on the earlier `c8d896d5` source, not on the final PR. Neither result changes the GC deferral or Draft status.
+
+### Prepared plan callback retention (E2368)
+
+[Two Native RED regressions and all 100 Tool cases GREEN](implementation/plan-execution-reliability.md#e2368-a-returned-plan-is-still-a-live-reference) verify the raw plan stays paid beyond callback and reader return. A stale producer cannot borrow another reader’s lifetime. These results do not establish whole-Core capacity, final release acceptance or completion of the Prepared migration.

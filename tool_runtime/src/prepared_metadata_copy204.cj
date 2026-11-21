@@ -186,12 +186,19 @@ public class PreparedMetadataConsumer204 {
     }
     public func matchesFrozenPlan(rule: FrozenPluginPlanRule): Bool {
         // The existing loan pins this reader against return during validation.
-        withOperationPlan204<Bool>({ plan => rule.matches(plan) })
+        let actual = beginLoan()
+        try { rule.matches(actual.plan204()) }
+        catch (error: Exception) { actual.holdUnknown204(); throw error }
+        finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
     }
     public func withOperationPlan204<T>(body: (NormalizedOperationPlan) -> T): T {
         let actual = beginLoan()
-        try { body(actual.plan204()) }
-        catch (error: Exception) { actual.holdUnknown204(); throw error }
+        try {
+            // Returning this handle accounts for the reader, not for a plan
+            // handed to arbitrary code. Register that export before calling it.
+            actual.holdUnknown204()
+            body(actual.plan204())
+        }
         finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
     }
     public func withCallInput<T>(body: (ToolResolverInput) -> T): T {

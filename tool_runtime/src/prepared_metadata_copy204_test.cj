@@ -37,7 +37,8 @@ private func installMetadataFixtureFrame204(root:LogicalJsonOwnerReservation,cor
     let owner = PreparedMetadataOwner204(paid,core); owner.installFrame204(prepared); owner
 }
 private func consumeMetadataFixtureFrame204(consumer:PreparedMetadataConsumer204):Bool {
-    consumer.withOperationPlan204<Bool>({ plan => plan.canonicalArguments.field("value").getOrThrow().text == "original" })
+    consumer.withCanonicalCallInput({ input =>
+        input.textEquals(ToolResolverText.Scalar([ToolResolverStep.Field("value")]), "original") })
 }
 
 // A caller-provided parent may contain a nonstandard JSON leaf. Its kind()
@@ -334,6 +335,51 @@ class PreparedMetadataCopy204Tests {
         @Expect(stale); @Expect(bank.usage()[1] > 0)
         reader.returnConsumerFrame204(); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
         @Expect(childId, "task-call:child:step:雪"); @Expect(requestKey, "child-service:task-call:step:雪")
+    }
+
+    @TestCase
+    func returningAPlanFromACallbackKeepsItsDataPaid(): Unit {
+        for (throughReader in [false, true]) {
+            let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+            let root = bank.acquire(131072)
+            let context = ToolInvocationContext(RunId("plan-run"), SessionId("session"), CapabilitySet())
+            let prepared = metadataFixture204(context, objectValue([ValueField("value", textValue("retained"))]))
+            let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+            let reader = prepared.retainMetadataConsumer204().getOrThrow()
+            let exported = if (throughReader) {
+                owner.producerReturned204()
+                reader.withOperationPlan204({ plan => plan })
+            } else {
+                let result = prepared.withOperationPlan204({ plan => plan })
+                owner.producerReturned204()
+                result
+            }
+            reader.returnConsumerFrame204()
+            root.close()
+            @Expect(exported.canonicalArguments.field("value").getOrThrow().text, "retained")
+            @Expect(bank.usage()[0] > 0)
+            @Expect(bank.usage()[1] > 0)
+        }
+    }
+
+    @TestCase
+    func aReturnedProducerCannotEnterAPlanCallbackThroughAnotherReader(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("plan-run"), SessionId("session"), CapabilitySet())
+        let prepared = metadataFixture204(context, objectValue([]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        owner.producerReturned204()
+        let entered = [false]
+        var denied = false
+        try { prepared.withOperationPlan204({ _ => entered[0] = true }) }
+        catch (_: IllegalStateException) { denied = true }
+        @Expect(denied && !entered[0])
+        reader.returnConsumerFrame204()
+        root.close()
+        @Expect(bank.usage()[0], 0)
+        @Expect(bank.usage()[1], 0)
     }
 
     @TestCase

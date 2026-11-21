@@ -188,6 +188,13 @@ When the producer of an independently paid Prepared copy returns, reading
 consumer must outlive the producer, acquire its counted reader while the
 producer is live and read through that reader instead.
 
+`withOperationPlan204` passes the raw plan to its callback. On a paid
+Prepared value or reader, that export keeps the metadata charged even if
+the callback returns normally and the reader is later returned. A returned
+producer cannot enter the callback through another live reader. For a
+Boolean check, use `matchesFrozenPlan`; to inspect argument fields, use
+`withCanonicalCallInput`. Neither exposes the original plan.
+
 `recoverableToolResult` now takes a call ID (`String`) instead of a `ToolCall`.
 Change `recoverableToolResult(call, error, receiptId: id)` to
 `recoverableToolResult(call.callId, error, receiptId: id)` and rebuild. If you

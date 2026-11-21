@@ -280,13 +280,9 @@ public class PreparedToolInvocation {
     }
     func borrowDetachedCall204(): ToolCall { callData204.getOrThrow() }
     public func withOperationPlan204<T>(body: (NormalizedOperationPlan) -> T): T {
-        requireMetadataBorrow204()
-        try { body(operationPlanData204.getOrThrow()) }
-        catch (error: Exception) {
-            match (detachedMetadata204) { case Some(value) => value.holdUnknown204()
-                case None => match (catalogConsumer204) { case Some(value) => value.holdUnknown204(); case None => () } }
-            throw error
-        }
+        // The receiver may keep the plan, including on a normal return.
+        requireMetadataExport204(requireCatalogFrame: true)
+        body(operationPlanData204.getOrThrow())
     }
     // Only the independently prepaid copy may be borrowed by the exact Core
     // DATA consumer which owns its whole Run frame. No Source is exported.
@@ -362,10 +358,12 @@ public class PreparedToolInvocation {
             case None => catalogConsumer204 = Some(value); true
         }
     }
-    private func requireMetadataExport204(): Unit {
+    private func requireMetadataExport204(requireCatalogFrame!: Bool = false): Unit {
         if (metadataReturned204) { throw IllegalStateException("prepared metadata has returned") }
         match (detachedMetadata204) { case Some(value) => value.exportFromProducer204(this)
-            case None => match (catalogConsumer204) { case Some(value) => value.holdPreparedExport204(this); case None => () } }
+            case None => match (catalogConsumer204) {
+                case Some(value) => value.holdPreparedExport204(this, requireFrame: requireCatalogFrame)
+                case None => () } }
     }
     func borrowPlanStepIdFrame204(): String { requireMetadataBorrow204(); planStepIdData204.getOrThrow() }
     func borrowPlanActionIdFrame204(): String { requireMetadataBorrow204(); planActionIdData204.getOrThrow() }

@@ -125,10 +125,11 @@ public class ToolCatalogHostConsumer204 {
         lock.lock(); try { callerReturned = true } finally { lock.unlock() }
         collectReturned204()
     }
-    func holdPreparedExport204(prepared: PreparedToolInvocation): Unit {
+    func holdPreparedExport204(prepared: PreparedToolInvocation, requireFrame!: Bool = false): Unit {
         lock.lock()
         let actual = try {
             if (returned || collecting) { throw IllegalStateException("prepared metadata owner has returned") }
+            if (requireFrame && frames == 0) { throw IllegalStateException("prepared metadata has no actual private consumer") }
             held = true; catalog
         } finally { lock.unlock() }
         match (actual) { case Some(value) => value.recordUnknownConsumer204(); case None => () }

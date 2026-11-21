@@ -311,8 +311,8 @@ class PrivateApprovalMetadataMove1201Tests {
         @Expect(oldReturned, true)
         let consumer = next.retainMetadataConsumer204().getOrThrow()
         @Expect(scope.returnWholeCoreFrame204(), true)
-        @Expect(consumer.withOperationPlan204({ plan =>
-            plan.canonicalArguments.field("payload").getOrThrow().text == "actual-move-data"
+        @Expect(consumer.withCanonicalCallInput({ input =>
+            input.textEquals(ToolResolverText.Scalar([ToolResolverStep.Field("payload")]), "actual-move-data")
         }), true)
         let beforeLast = fixture.root.retainedCustodyUsage113()
         consumer.returnConsumerFrame204()
@@ -334,8 +334,8 @@ class PrivateApprovalMetadataMove1201Tests {
         @Expect(consumer.withCallInput({ input => input.textEquals(ToolResolverText.Name, "resolver.data") }), true)
         consumer.returnConsumerFrame204()
         let next = scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).getOrThrow()
-        @Expect(next.withOperationPlan204({ plan =>
-            plan.canonicalArguments.field("payload").getOrThrow().text == "actual-move-data"
+        @Expect(next.withCanonicalCallInput({ input =>
+            input.textEquals(ToolResolverText.Scalar([ToolResolverStep.Field("payload")]), "actual-move-data")
         }), true)
         @Expect(scope.returnWholeCoreFrame204(), true)
     }
