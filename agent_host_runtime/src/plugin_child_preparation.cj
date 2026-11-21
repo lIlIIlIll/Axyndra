@@ -342,7 +342,7 @@ func hostVerifyTaskPreparedCompletionFrame204(host: HostJavaScriptPluginHost, na
 func hostChildInvocationInput111(host: HostJavaScriptPluginHost, context: ToolInvocationContext,
     prepared: PreparedToolInvocation, namespace: String, localTool: String, generation: UInt64): Result<AgentValue> {
     if (prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
-        (!isFrozenPluginChildParent111(prepared.operationPlan) && !isFrozenPluginPreparedCompletion152(prepared.operationPlan)) ||
+        (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent) && !prepared.matchesFrozenPlan(FrozenPluginPlanRule.PreparedCompletion)) ||
         !prepared.textEquals(PreparedMetadataText.CallName, prepared.operationPlan.toolName) ||
         !prepared.textEquals(PreparedMetadataText.CallName, "plugin." + namespace + "." + localTool)) {
         return hostPluginResourceError("child.parent_invalid", "child-start requires its own actual frozen canonical parent") }

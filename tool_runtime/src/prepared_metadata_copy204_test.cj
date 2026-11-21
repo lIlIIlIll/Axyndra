@@ -40,8 +40,77 @@ private func consumeMetadataFixtureFrame204(consumer:PreparedMetadataConsumer204
     consumer.withOperationPlan204<Bool>({ plan => plan.canonicalArguments.field("value").getOrThrow().text == "original" })
 }
 
+// A caller-provided parent may contain a nonstandard JSON leaf. Its kind()
+// runs synchronously during comparison; it is not part of the paid child.
+private class PlanRuleObservationNode <: JsonNode {
+    private let observe: () -> Unit
+    init(observe: () -> Unit) { this.observe = observe }
+    public func kind(): JsonKind { observe(); JsonKind.Null }
+    public func size(): Int64 { 0 }
+    public func toString(): String { "null" }
+    public func toPrettyString(_: String): String { "null" }
+}
+
 @Test
 class PreparedMetadataCopy204Tests {
+    @TestCase
+    func callerParentCanReturnTheProducerWithoutRetiringTheActiveComparison(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("caller-run"), SessionId("caller-session"), CapabilitySet())
+        let child = metadataFixture204(context, objectValue([]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), child)
+        let arguments = objectValue([])
+        let parent = NormalizedOperationPlan("parent", arguments, [], OperationEffectClass.ReadOnly,
+            OperationRetryDisposition.Never, "parent-binding")
+        let observed = [false]
+        arguments.put("host_plan", PlanRuleObservationNode({ =>
+            if (!observed[0]) {
+                observed[0] = true; owner.producerReturned204(); root.close()
+                @Expect(bank.usage()[1] > 0)
+            }
+        }))
+        @Expect(!child.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChildOf(parent)))
+        @Expect(observed[0]); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
+    func planRulesReadOnlyTheFrozenCopyUntilThisReaderReturns(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("rule-run"), SessionId("rule-session"), CapabilitySet())
+        let digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        let host = objectValue([ValueField("version", textValue(HOST_READONLY_DELEGATION_VERSION)),
+            ValueField("plugin", textValue("axyndra:program")), ValueField("package_digest", textValue(digest)),
+            ValueField("generation", textValue("1")), ValueField("contribution", textValue("run")),
+            ValueField("configuration_digest", textValue("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")),
+            ValueField("tool_set_id", textValue("snapshot")), ValueField("tools", listValue([])),
+            ValueField("max_calls", integerValue(1)), ValueField("max_depth", integerValue(2))])
+        let name = "plugin.axyndra:program.run"
+        let plan = NormalizedOperationPlan(name, objectValue([ValueField("input", objectValue([])), ValueField("host_plan", host)]),
+            [Capability(CapabilityKind.ExtensionInvoke, resource: name)], OperationEffectClass.ReadOnly,
+            OperationRetryDisposition.Never, "binding", implementationFingerprint: "axyndra:program:" + digest,
+            replayDisposition: Some(ReplayDisposition.NeverReplay))
+        let prepared = PreparedToolInvocation(OperationId("rule-operation"), ToolCall("id", name, objectValue([])),
+            exclusiveToolConcurrency(), PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        host.put("max_calls", integerValue(0))
+        @Expect(!isFrozenReadonlyDelegationParentPlan(plan))
+        @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent))
+        @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChildOf(plan)))
+        owner.producerReturned204(); root.close()
+        var closed = false
+        try { let _ = prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent) }
+        catch (_: IllegalStateException) { closed = true }
+        @Expect(closed); @Expect(bank.usage()[1] > 0)
+        @Expect(reader.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent))
+        @Expect(!reader.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent))
+        reader.returnConsumerFrame204()
+        var stale = false
+        try { let _ = reader.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent) }
+        catch (_: IllegalStateException) { stale = true }
+        @Expect(stale); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
     @TestCase
     func separateReadersReturnOnlyTheirOwnPreparedData(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)

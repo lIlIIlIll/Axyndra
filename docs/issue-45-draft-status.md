@@ -5090,3 +5090,9 @@ E2241/E2246: `63d4816ade` passed all 11 production builds and three external Too
 E2243 on `63d4816ade`: Product enumerated 1,106 cases. All 437 non-deferred cases passed individually with closed process custody; the 669 deferred GC cases did not run. No whole Product or later-source credit. [Evidence and artifact](implementation/plan-execution-reliability.md#which-prepared-owners-still-held-the-bank-at-the-read-view-refusal).
 
 E2245 on `63d4816ade`: Minimal/Coding/Full passed their 3/6/7 packaging and selected entry checks. Coding and Full have the same packaged host, not the same plugin tree. [Artifacts and scope](implementation/plan-execution-reliability.md#which-prepared-owners-still-held-the-bank-at-the-read-view-refusal).
+
+E2252/E2263: the closed frozen-plan checks preserve the real reader across a reentrant parent and reject reads after return. The final fixed-SDK Tool suite passed 87/87. Raw-consuming Host paths and continuous Core remain open. [Changed contract and regression](implementation/plan-execution-reliability.md#checking-frozen-plugin-rules-without-exporting-the-plan).
+
+E2258/E2266 on `63d4816ade`: the actual Full package protocols passed 602/606. Only the MCP client failure has a binary-matched GC stack; the LSP, DAP and MCP Server failures are not deferred on that basis. [Cases, artifacts and classification](implementation/plan-execution-reliability.md#four-failures-in-the-full-package-protocol-suite).
+
+E2265: on the E2263 candidate, the Program budget and cancellation/recovery controls passed; continuous Core still failed `read_view.output_capacity` in both reserved Receipts. No bank amount or release credit on this ELF. Evidence: `returnedreadercore2265/qualified.json`.

@@ -104,7 +104,7 @@ class HostToolInputAttachmentSession {
         if (prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
             prepared.source.parentOperationId.isSome() || prepared.source.requestKey != "" ||
             prepared.source.runId.value != context.runId.value || prepared.source.sessionId.value != context.sessionId.value ||
-            prepared.source.epoch != context.epoch || !isFrozenReadonlyDelegationParentPlan(prepared.operationPlan)) {
+            prepared.source.epoch != context.epoch || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) {
             return hostPluginResourceError("input_attachment.source_invalid", "attachment requires its actual ordinary Root")
         }
         match (prepared.source.operationRoot.getOrThrow()) {

@@ -124,7 +124,7 @@ private class HostLivePolicyFinalSelection263 {
 func hostExecutePluginLivePolicyParent(host:HostJavaScriptPluginHost,namespace:String,bareTool:String,
     generation:UInt64,context:ToolInvocationContext,parent:PreparedToolInvocation,
     control:OwnedToolExecutionControl):Result<OwnedToolExecutionProgress>{
-    if(!isPluginLivePolicyParentPlan(parent.operationPlan) || parent.call.name!="plugin."+namespace+"."+bareTool ||
+    if(!parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) || parent.call.name!="plugin."+namespace+"."+bareTool ||
         parent.source.runId.value!=context.runId.value || parent.source.sessionId.value!=context.sessionId.value || parent.source.epoch!=context.epoch){
         return hostPluginResourceError("plugin.live_owned_scope","actual original prepared Parent and published Tool are required")}
     let packageDescriptor=match(host.servicePackageData81(namespace,generation)){
@@ -473,7 +473,7 @@ private func hostInitializeLiveParent312(context:ToolInvocationContext,custody:H
 func hostExecutePluginLivePolicyParent312(host:HostJavaScriptPluginHost,namespace:String,bareTool:String,
     generation:UInt64,context:ToolInvocationContext,parent:PreparedToolInvocation,
     control:OwnedToolExecutionControl):Result<OwnedToolExecutionProgress>{
-    if(!isPluginLivePolicyParentPlan(parent.operationPlan) || parent.call.name!="plugin."+namespace+"."+bareTool ||
+    if(!parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) || parent.call.name!="plugin."+namespace+"."+bareTool ||
         parent.source.runId.value!=context.runId.value || parent.source.sessionId.value!=context.sessionId.value || parent.source.epoch!=context.epoch){
         return hostPluginResourceError("plugin.live_owned_scope","actual original prepared parent and published tool are required")}
     let packageDescriptor=match(host.servicePackageData81(namespace,generation)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
@@ -875,7 +875,7 @@ func hostRetainOuterErrorFrame334(parent:PreparedToolInvocation,
 private func hostCreateInitialPreparedCustody332(host:HostJavaScriptPluginHost,namespace:String,bareTool:String,
     generation:UInt64,context:ToolInvocationContext,parent:PreparedToolInvocation,
     input:HostLivePreparationData340):Result<HostLiveInitialPreparedCustody332>{
-    if(!isPluginLivePolicyParentPlan(parent.operationPlan) || parent.call.name!="plugin."+namespace+"."+bareTool ||
+    if(!parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) || parent.call.name!="plugin."+namespace+"."+bareTool ||
         parent.source.runId.value!=context.runId.value || parent.source.sessionId.value!=context.sessionId.value || parent.source.epoch!=context.epoch){
         return hostPluginResourceError("plugin.live_owned_scope","actual original prepared parent and published tool are required")}
     let descriptor=match(host.servicePackageData81(namespace,generation)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}

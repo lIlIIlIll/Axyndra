@@ -37,7 +37,7 @@ func hostFreezePreparedCompletion152(host: HostJavaScriptPluginHost,
 func hostVerifyPreparedCompletion152(host: HostJavaScriptPluginHost, namespace: String,
     localTool: String, generation: UInt64, context: ToolInvocationContext,
     prepared: PreparedToolInvocation, output: AgentValue, isError: Bool): Result<Unit> {
-    if (!isFrozenPluginPreparedCompletion152(prepared.operationPlan)) {
+    if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.PreparedCompletion)) {
         return hostPluginResourceError("primitive.completion_plan_changed", "data-only completion lost its frozen parent") }
     match (hostChildInvocationInput111(host, context, prepared, namespace, localTool, generation)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }

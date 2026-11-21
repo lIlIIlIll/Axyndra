@@ -73,6 +73,19 @@ class PreparedMetadataOwner204 {
             data.textEqualsFrame(field, expected)
         } finally { lock.unlock() }
     }
+    func matchesFrozenPlan(producer: PreparedToolInvocation, rule: FrozenPluginPlanRule): Bool {
+        lock.lock()
+        try {
+            if (returned || producerReturned || consumers == Int64.Max || !refEq(prepared.getOrThrow(), producer)) {
+                throw IllegalStateException("prepared DATA producer has returned")
+            }
+            // One stack-scoped reader; no external handle or handle header.
+            consumers++
+        } finally { lock.unlock() }
+        try { producer.matchFrozenPlanFrame(rule) }
+        catch (error: Exception) { holdUnknown204(); throw error }
+        finally { consumerReturned204() }
+    }
     func call204(): ToolCall {
         lock.lock(); try {
             if (returned) { throw IllegalStateException("prepared DATA has returned") }
@@ -147,11 +160,24 @@ public class PreparedMetadataConsumer204 {
             actual.textEquals(field, expected)
         } finally { lock.unlock() }
     }
-    public func withOperationPlan204<T>(body: (NormalizedOperationPlan) -> T): T {
-        let actual = try { lock.lock(); let value = owner.getOrThrow()
+    private func beginLoan(): PreparedMetadataOwner204 {
+        lock.lock()
+        try {
+            let actual = match (owner) {
+                case Some(value) => value
+                case None => throw IllegalStateException("prepared DATA handle has returned")
+            }
             if (loans == Int64.Max) { throw IllegalStateException("prepared DATA loan count overflow") }
-            loans++; value
+            loans++
+            actual
         } finally { lock.unlock() }
+    }
+    public func matchesFrozenPlan(rule: FrozenPluginPlanRule): Bool {
+        // The existing loan pins this reader against return during validation.
+        withOperationPlan204<Bool>({ plan => rule.matches(plan) })
+    }
+    public func withOperationPlan204<T>(body: (NormalizedOperationPlan) -> T): T {
+        let actual = beginLoan()
         try { body(actual.plan204()) }
         catch (error: Exception) { actual.holdUnknown204(); throw error }
         finally { lock.lock(); try { loans-- } finally { lock.unlock() } }
@@ -163,10 +189,7 @@ public class PreparedMetadataConsumer204 {
         withCallProjection(true, body)
     }
     private func withCallProjection<T>(canonical: Bool, body: (ToolResolverInput) -> T): T {
-        let actual = try { lock.lock(); let value = owner.getOrThrow()
-            if (loans == Int64.Max) { throw IllegalStateException("prepared DATA loan count overflow") }
-            loans++; value
-        } finally { lock.unlock() }
+        let actual = beginLoan()
         // The view is invalidated before lowering the loan count, even on unwind.
         try {
             let call = actual.call204()

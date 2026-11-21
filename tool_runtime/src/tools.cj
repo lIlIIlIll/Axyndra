@@ -3480,7 +3480,7 @@ public class ToolPipeline {
     ):Result<ToolPreparation>{
         if(parent.source.kind==PreparedInvocationSourceKind.Derived || parent.source.operationRoot.isNone() ||
             parent.authorization==PreparedAuthorization.ApprovalRequired || context.trustedControl ||
-            !isPluginLivePolicyParentPlan(parent.operationPlan) || call.name!=HOST_PLUGIN_LIVE_EFFECT_TOOL ||
+            !parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) || call.name!=HOST_PLUGIN_LIVE_EFFECT_TOOL ||
             !pluginLivePolicyChildValueValid(call.arguments)){
             return livePolicyPreparationError<ToolPreparation>("tool.live_policy_parent_invalid")}
         let sequence=call.arguments.field("sequence").getOrThrow().asNumberText()
@@ -4457,7 +4457,7 @@ public class ToolPipeline {
         call:ToolCall,parent:PreparedToolInvocation,requestKey:String):Result<ToolPreparation>{
         if(context.trustedControl || parent.source.kind==PreparedInvocationSourceKind.Derived ||
             parent.source.operationRoot.isNone() || parent.authorization==PreparedAuthorization.ApprovalRequired ||
-            !isPluginLivePolicyParentPlan(parent.operationPlan) || call.name!=HOST_PLUGIN_LIVE_EFFECT_TOOL ||
+            !parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) || call.name!=HOST_PLUGIN_LIVE_EFFECT_TOOL ||
             !pluginLivePolicyStreamingChildValueValid(call.arguments) || context.runId.value!=parent.source.runId.value ||
             context.sessionId.value!=parent.source.sessionId.value || context.epoch!=parent.source.epoch){
             return livePolicyPreparationError<ToolPreparation>("tool.live_policy_parent_invalid")}

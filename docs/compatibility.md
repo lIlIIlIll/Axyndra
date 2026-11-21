@@ -177,6 +177,13 @@ owns the reader. One reader cannot acknowledge another. Earlier raw exports
 remain charged; the rest of the Prepared call/plan migration is still open.
 Neither the plugin wire protocol nor the database format changes.
 
+When a Host only needs to classify a plugin plan, use a closed predicate, for
+example `prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChild)`.
+`ReadViewChildOf(parent)` also checks that the frozen child matches the parent
+intent. Both return a Boolean, not a plan or its arguments. A reader retained
+before the producer returns can make the same comparisons until its own return.
+A match does not replace Source, approval or current capability checks.
+
 ## Migrate a Host scheduler's derived-frame callback
 
 The third parameter of `ToolInvocationContext.setDerivedToolFrameHandler` is

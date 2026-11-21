@@ -65,8 +65,8 @@ public class HostPluginServiceIdentity {
         let localTool = if (prepared.call.name.startsWith(prefix)) { prepared.call.name[prefix.size..] } else { "" }
         let primitive = match (host.primitiveConfiguration111(namespace, localTool, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        if (primitive.isSome() || isFrozenPluginChildParent111(prepared.operationPlan)) {
-            if (primitive.isNone() || !primitive.getOrThrow().permitsService(localTool, service) || !isFrozenPluginChildParent111(prepared.operationPlan) ||
+        if (primitive.isSome() || prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent)) {
+            if (primitive.isNone() || !primitive.getOrThrow().permitsService(localTool, service) || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent) ||
                 prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone()) {
                 return hostPluginResourceError("child.service_denied", "only this exact selected canonical Tool may request its frozen child service") }
             let binding = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow()
@@ -79,7 +79,7 @@ public class HostPluginServiceIdentity {
         }
         if (pluginPrimitiveService111(service)) { return hostPluginResourceError("child.profile_missing", "this contribution has no operator-selected child profile") }
         if (descriptor.requestedCapabilities.contains("tool.readonly")) {
-            if (service == "tool.readonly" && isFrozenReadonlyDelegationParentPlan(prepared.operationPlan)) { return Result.Ok(()) }
+            if (service == "tool.readonly" && prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) { return Result.Ok(()) }
             if(service=="file.plan.propose" && readonlyDelegationFilePlanProposalsEnabled(prepared.operationPlan) &&
                 prepared.source.kind!=PreparedInvocationSourceKind.Derived && prepared.source.operationRoot.isSome()){
                 return Result.Ok(())}

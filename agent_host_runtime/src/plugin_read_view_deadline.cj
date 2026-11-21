@@ -73,7 +73,7 @@ class HostReadViewCallWindow {
             identity.threadId != context.sessionId.value || identity.runId != context.runId.value || identity.epoch != context.epoch ||
             identity.operationId != prepared.operationId.value || identity.callId != prepared.call.callId ||
             prepared.source.operationRoot.isNone() || prepared.operationPlan.toolName != "plugin." + namespace + "." + contribution ||
-            !isFrozenReadViewParentPlan(prepared.operationPlan)) {
+            !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewParent)) {
             return hostPluginResourceError("read_view.deadline_owner_changed", "finite call window belongs to another actual Root invocation") }
         match (host.readViewInput(prepared, namespace, contribution, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let frozen = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow()

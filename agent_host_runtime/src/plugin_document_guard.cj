@@ -45,7 +45,7 @@ public class HostPluginDocumentGuard {
         if (context.sessionId.value != httpIntentText(binding, "thread_id") || context.runId.value != httpIntentText(binding, "run_id") ||
             context.epoch.toString() != binding.field("epoch").getOrThrow().asNumberText() ||
             !context.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: configuration.namespace) ||
-            !isFrozenPluginDocumentParentPlan(root.operationPlan) ||
+            !root.matchesFrozenPlan(FrozenPluginPlanRule.DocumentParent) ||
             canonicalAgentValue(root.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow()) != bindingDigest ||
             root.call.callId != httpIntentText(binding, "parent_call_id") || root.call.name != httpIntentText(binding, "contribution")) {
             return hostPluginResourceError("plugin.document_scope_changed", "document invocation lost its exact Run or frozen parent") }
@@ -136,7 +136,7 @@ public class HostPluginDocumentGuard {
 
 public func hostOpenPluginDocumentGuard(identity: HostPluginServiceIdentity, context: ToolInvocationContext,
     prepared: PreparedToolInvocation): Result<HostPluginDocumentGuard> {
-    if (!isFrozenPluginDocumentParentPlan(prepared.operationPlan)) {
+    if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentParent)) {
         return hostPluginResourceError("plugin.document_parent_invalid", "document service requires its exact prepared parent") }
     let binding = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow()
     if (httpIntentText(binding, "namespace") != identity.namespace || httpIntentText(binding, "generation") != identity.generation.toString()) {

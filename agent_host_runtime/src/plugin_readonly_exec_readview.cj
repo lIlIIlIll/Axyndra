@@ -37,7 +37,7 @@ public class HostReadOnlyExecReadView {
     }
     func validate(catalog: ToolCatalog, context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<Unit> {
         match (current(catalog, context, prepared.call)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        if (!isFrozenReadViewParentPlan(prepared.operationPlan) || prepared.operationPlan.effectClass != OperationEffectClass.ReadOnly ||
+        if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewParent) || prepared.operationPlan.effectClass != OperationEffectClass.ReadOnly ||
             prepared.operationPlan.toolName != "plugin." + namespace + "." + contribution) {
             return hostPluginResourceError("extension.exec_plan_changed", "readonly exec did not produce its exact frozen read-view plan") }
         match (host.readViewInput(prepared, namespace, contribution, generation)) {

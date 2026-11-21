@@ -31,6 +31,7 @@ public class ToolCatalogHostConsumer204 {
     private var context: ?ToolInvocationContext
     private var payment: ?LogicalJsonOwnerReservation
     private var frames: Int64 = 0
+    private var planReaders: Int64 = 0
     private var actionHeaders204: Int64 = 0
     private var firstPrepared204: ?PreparedToolInvocation = None<PreparedToolInvocation>
     private var preparedHeaders204: Int64 = 0
@@ -145,6 +146,21 @@ public class ToolCatalogHostConsumer204 {
             prepared.textEqualsFrame(field, expected)
         } finally { lock.unlock() }
     }
+    func matchesFrozenPlan(prepared: PreparedToolInvocation, rule: FrozenPluginPlanRule): Bool {
+        lock.lock()
+        try {
+            if (returned || collecting || frames == 0 || planReaders == Int64.Max) {
+                throw IllegalStateException("prepared metadata has no actual private consumer")
+            }
+            planReaders++
+        } finally { lock.unlock() }
+        try { prepared.matchFrozenPlanFrame(rule) }
+        catch (error: Exception) { holdUnknown204(); throw error }
+        finally {
+            lock.lock(); try { planReaders-- } finally { lock.unlock() }
+            collectReturned204()
+        }
+    }
     func retainPrepared204(prepared: PreparedToolInvocation): Unit {
         lock.lock()
         try {
@@ -253,7 +269,7 @@ public class ToolCatalogHostConsumer204 {
     private func collectReturned204(): Unit {
         lock.lock()
         let claimed = try {
-            if (!callerReturned || !resultObserved || frames != 0 || firstAction204.isSome() || pendingActionPayment204.isSome() || pendingWirePayment204.isSome() || held || returned || collecting || context.isNone() || !context.getOrThrow().hasReturnedCatalogContextFrame204()) { false }
+            if (!callerReturned || !resultObserved || frames != 0 || planReaders != 0 || firstAction204.isSome() || pendingActionPayment204.isSome() || pendingWirePayment204.isSome() || held || returned || collecting || context.isNone() || !context.getOrThrow().hasReturnedCatalogContextFrame204()) { false }
             else { collecting = true; true }
         } finally { lock.unlock() }
         if (!claimed) { return }

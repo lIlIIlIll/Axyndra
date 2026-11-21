@@ -829,7 +829,7 @@ public class HostArtifactStore {
         try{
             match(ensureArtifactRoot()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             let rootSource=match(parent.source.operationRoot){case Some(value)=>value;case None=>return hostResourceError("plugin.live_step_root_missing")}
-            if(database.isNone() || selected.isEmpty() || !isPluginLivePolicyParentPlan(parent.operationPlan) ||
+            if(database.isNone() || selected.isEmpty() || !parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) ||
                 parent.source.runId.value!=context.runId.value || parent.source.sessionId.value!=context.sessionId.value || parent.source.epoch!=context.epoch){
                 return hostResourceError("plugin.live_step_parent_changed")}
             let payloads=descriptor.field("payloads").getOrThrow()

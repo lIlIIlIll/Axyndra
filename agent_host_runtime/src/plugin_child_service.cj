@@ -1238,7 +1238,7 @@ func hostChildTaskServiceContextFrame204(root: PreparedToolInvocation, context: 
 }
 
 func hostChildServiceContext111(root: PreparedToolInvocation, context: ToolInvocationContext): Result<ToolInvocationContext> {
-    if (!isFrozenPluginChildParent111(root.operationPlan) ||
+    if (!root.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent) ||
         !context.capabilities.allows(pluginPrimitiveRequiredCapability111(pluginPrimitivePlanService111(root.operationPlan)))) {
         return hostPluginResourceError("child.capability_denied", "original parent lacks delegation authority") }
     // These are the real parent's capabilities, not a plugin grant. The actual

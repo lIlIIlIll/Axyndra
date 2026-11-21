@@ -242,7 +242,7 @@ public open class HostJavaScriptPluginHost {
     }
     func prepareToolInputAttachment(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         namespace: String, contribution: String, generation: UInt64): Result<?HostToolInputAttachmentSession> {
-        if (!isFrozenReadonlyDelegationParentPlan(prepared.operationPlan) ||
+        if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent) ||
             prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").isNone()) { return Result.Ok(Option<HostToolInputAttachmentSession>.None) }
         lock.lock()
         let actual: ?HostToolInputAttachmentOwner = try { if (closed) { None } else { toolInputAttachmentOwner } } finally { lock.unlock() }
@@ -543,7 +543,7 @@ public open class HostJavaScriptPluginHost {
         }
         let primitive = match (primitiveSelected191(namespace, tool, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        if (primitive || isFrozenPluginChildParent111(prepared.operationPlan)) {
+        if (primitive || prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent)) {
             return hostChildInvocationInput111(this, context, prepared, namespace, tool, generation) }
         if (descriptor.requestedCapabilities.contains("tool.readonly")) { return delegationInput(context, prepared, namespace, tool, generation) }
         readViewInput(prepared, namespace, tool, generation)
@@ -2827,7 +2827,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         prepared: PreparedToolInvocation,
         executionObservation!: ?HostToolExecutionCancellationObservation = None
     ): Result<ToolResult> {
-        if(isPluginLivePolicyParentPlan(prepared.operationPlan)){
+        if(prepared.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent)){
             return hostPluginResourceError("plugin.live_owned_entry_required","live Parent requires the actual typed owned Pipeline entry")}
         if (instanceGeneration == 0u64) {
             return Result.Err(AgentError(
@@ -2853,9 +2853,9 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         let invocationArguments = match (host.ordinaryToolInput(context, prepared, extensionId, toolName, instanceGeneration)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
         }
-        let toolPayload: ?OrdinaryToolPayloadLimits = if (isFrozenReadonlyDelegationParentPlan(prepared.operationPlan)) {
+        let toolPayload: ?OrdinaryToolPayloadLimits = if (prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) {
             ordinaryToolPayloadLimitsFromValue(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
-        } else if (isFrozenPluginDocumentParentPlan(prepared.operationPlan) || isFrozenReadViewParentPlan(prepared.operationPlan)) {
+        } else if (prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentParent) || prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewParent)) {
             ordinaryToolPayloadLimitsFromValue(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
         } else { None }
         let identity = JavaScriptHostInvocationIdentity(
@@ -2868,7 +2868,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         let profile = match (host.toolExecutionProfile(extensionId, toolName, instanceGeneration)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         let dataOnly = profile == PluginToolExecutionProfile.DataOnly
-        let preparedCompletion152 = isFrozenPluginPreparedCompletion152(prepared.operationPlan)
+        let preparedCompletion152 = prepared.matchesFrozenPlan(FrozenPluginPlanRule.PreparedCompletion)
         let observer: HostJavaScriptPluginInvocationObserver = if (dataOnly || preparedCompletion152) {
             // Denies every service request. No raw or ordinary broker fallback.
             HostJavaScriptPluginInvocationObserver(context, prepared, Option<HostJavaScriptPluginServiceBroker>.None)
@@ -3044,7 +3044,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
                 prepared.operationPlan.implementation.implementationFingerprint } else {
                 hostPluginInvocationAuthorityScope(context) },
             toolPayloadLimits: toolPayload,
-            documentToolPayload: toolPayload.isSome() && isFrozenPluginDocumentParentPlan(prepared.operationPlan),
+            documentToolPayload: toolPayload.isSome() && prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentParent),
             executionObservation: executionObservation,
             inputAttachment: match (attachment) { case Some(value) => value.descriptor(); case None => Option<AgentValue>.None },
             inputAttachmentCurrent: match (attachment) { case Some(value) => Some({ => value.validate() }); case None => Option<() -> Result<Unit>>.None }

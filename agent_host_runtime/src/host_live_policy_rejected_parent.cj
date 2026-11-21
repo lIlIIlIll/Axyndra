@@ -88,7 +88,7 @@ func hostWriteLivePolicyRejectedParent(actual:HostDocumentDataSession,parent:Pre
 func hostRejectPluginLivePolicyParent(host:HostJavaScriptPluginHost,namespace:String,bareTool:String,
     generation:UInt64,context:ToolInvocationContext,parent:PreparedToolInvocation,decision:ApprovalDecision,
     control:OwnedToolExecutionControl):Result<OwnedToolExecutionProgress>{
-    if(!isPluginLivePolicyParentPlan(parent.operationPlan) || parent.approval.isNone() ||
+    if(!parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) || parent.approval.isNone() ||
         parent.call.name!="plugin."+namespace+"."+bareTool || parent.source.runId.value!=context.runId.value ||
         parent.source.sessionId.value!=context.sessionId.value || parent.source.epoch!=context.epoch){
         return hostPluginResourceError("plugin.live_rejected_parent_scope","actual same prepared Parent/approval and published Tool are required")}

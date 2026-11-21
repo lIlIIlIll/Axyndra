@@ -1944,7 +1944,7 @@ public func hostMakeJavaScriptPluginChildContext(
     let capabilities = ArrayList<Capability>()
     for (required in rootPrepared.operationPlan.requiredCapabilities) {
         if ((required.kind == CapabilityKind.WorkspaceRead || required.kind == CapabilityKind.NetworkAccess ||
-                (required.kind == CapabilityKind.ExtensionInvoke && isFrozenReadonlyDelegationParentPlan(rootPrepared.operationPlan))) &&
+                (required.kind == CapabilityKind.ExtensionInvoke && rootPrepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent))) &&
             rootContext.capabilities.allows(required.kind, resource: required.resource)) {
             capabilities.add(Capability(required.kind, resource: required.resource))
         }

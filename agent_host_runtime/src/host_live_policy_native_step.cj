@@ -116,7 +116,7 @@ func hostRunPluginLivePolicyNativeStep(host:HostJavaScriptPluginHost,configurati
     generation:UInt64,context:ToolInvocationContext,parent:PreparedToolInvocation,through:Int64,ledger:AgentValue,
     nowMillis:Int64,bareTool:String,localCurrent:()->Result<Unit>,fullCurrent:()->Result<Unit>,
     uploadKnown:(HostDocumentDataSession,HostLivePolicyDataRPC)->Result<Unit>):Result<HostLivePolicySessionCustody>{
-    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !isPluginLivePolicyParentPlan(parent.operationPlan) ||
+    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) ||
         !pluginLivePolicyLedgerReferenceValid(ledger,parent.operationId.value,through)){
         return hostPluginResourceError("plugin.live_step_scope","actual live parent and exact original prefix required")}
     match(fullCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
@@ -256,7 +256,7 @@ func hostRunPluginLivePolicyNativeStep312(host:HostJavaScriptPluginHost,configur
     uploadKnown:(HostDocumentDataSession,HostLivePolicyDataRPC)->Result<Unit>,
     uploadKnownOwned!:?((HostDocumentDataSession,HostLivePolicyDataRPC,LogicalJsonOwnerReservation,Int64)->Result<Unit>)=None<((HostDocumentDataSession,HostLivePolicyDataRPC,LogicalJsonOwnerReservation,Int64)->Result<Unit>)>,
     retirePrevious291!:?(() -> Result<Unit>)=None<(() -> Result<Unit>)>):Result<HostLivePolicySessionCustody>{
-    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !isPluginLivePolicyParentPlan(parent.operationPlan) ||
+    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) ||
         !pluginLivePolicyLedgerReferenceValid(ledger,parent.operationId.value,through)){
         return hostPluginResourceError("plugin.live_step_scope","actual live parent and exact original prefix required")}
     match(fullCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
@@ -403,7 +403,7 @@ func hostRunPluginLivePolicyNativeInitialStep332(session:HostDocumentDataSession
     uploadKnown:(HostDocumentDataSession,HostLivePolicyDataRPC)->Result<Unit>,
     uploadKnownOwned!:?((HostDocumentDataSession,HostLivePolicyDataRPC,LogicalJsonOwnerReservation,Int64)->Result<Unit>)=None<((HostDocumentDataSession,HostLivePolicyDataRPC,LogicalJsonOwnerReservation,Int64)->Result<Unit>)>,
     retirePrevious291!:?(() -> Result<Unit>)=None<(() -> Result<Unit>)>):Result<HostLivePolicySessionCustody>{
-    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !isPluginLivePolicyParentPlan(parent.operationPlan) ||
+    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) ||
         !pluginLivePolicyLedgerReferenceValid(ledger,parent.operationId.value,through)){
         return hostPluginResourceError("plugin.live_step_scope","actual live parent and exact original prefix required")}
     match(fullCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
@@ -548,7 +548,7 @@ func hostRunPluginLivePolicyNativeSuccessorStep336(session:HostDocumentDataSessi
     uploadKnown:(HostDocumentDataSession,HostLivePolicyDataRPC)->Result<Unit>,
     uploadKnownOwned!:?((HostDocumentDataSession,HostLivePolicyDataRPC,LogicalJsonOwnerReservation,Int64)->Result<Unit>)=None<((HostDocumentDataSession,HostLivePolicyDataRPC,LogicalJsonOwnerReservation,Int64)->Result<Unit>)>,
     retirePrevious291!:?(() -> Result<Unit>)=None<(() -> Result<Unit>)>):Result<HostLivePolicySessionCustody>{
-    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !isPluginLivePolicyParentPlan(parent.operationPlan) ||
+    if(through<0 || through==Int64.Max || nowMillis<1 || bareTool=="" || !parent.matchesFrozenPlan(FrozenPluginPlanRule.LivePolicyParent) ||
         !pluginLivePolicyLedgerReferenceValid(ledger,parent.operationId.value,through)){
         return hostPluginResourceError("plugin.live_step_scope","actual live parent and exact original prefix required")}
     match(fullCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}

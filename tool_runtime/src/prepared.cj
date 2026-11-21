@@ -135,6 +135,22 @@ public class PreparedToolInvocation {
             }
         }
     }
+    // A closed rule returns only Bool. Domain validation can inspect caller-owned
+    // JSON, so do not hold a custody mutex while it runs.
+    public func matchesFrozenPlan(rule: FrozenPluginPlanRule): Bool {
+        match (detachedMetadata204) {
+            case Some(owner) => owner.matchesFrozenPlan(this, rule)
+            case None => match (catalogConsumer204) {
+                case Some(owner) => owner.matchesFrozenPlan(this, rule)
+                case None =>
+                    if (metadataReturned204) { throw IllegalStateException("prepared DATA has returned") }
+                    matchFrozenPlanFrame(rule)
+            }
+        }
+    }
+    func matchFrozenPlanFrame(rule: FrozenPluginPlanRule): Bool {
+        rule.matches(operationPlanData204.getOrThrow())
+    }
     // Resolve the actual display call. None means the registration is absent.
     public func resolvedHostServiceMatches(catalog: ToolCatalog, fingerprint: String, threadId: ThreadId): ?Bool {
         compareResolvedDescriptor(catalog, threadId, PreparedDescriptorCheck.DisplayService(fingerprint))

@@ -138,13 +138,13 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
     }
     private func executeActual(context: ToolInvocationContext, prepared: PreparedToolInvocation, cleanupData: Array<String>): Result<ToolResult> {
         if (prepared.source.kind != PreparedInvocationSourceKind.Derived || prepared.source.parentOperationId.isNone() ||
-            prepared.source.operationRoot.isNone() || !isReadViewServiceChildPlan(prepared.operationPlan)) {
+            prepared.source.operationRoot.isNone() || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChild)) {
             return hostPluginResourceError("read_view.source_invalid", "read view requires an admitted exact ParentIntent child")
         }
         let parent = match (operations.loadPlan(prepared.source.parentOperationId.getOrThrow(), context.runId)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
         }
-        if (!readViewServiceChildAllowed(parent, prepared.operationPlan)) {
+        if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChildOf(parent))) {
             return hostPluginResourceError("read_view.intent_changed", "read view differs from its actual parent intent")
         }
         let args = prepared.operationPlan.canonicalArguments
