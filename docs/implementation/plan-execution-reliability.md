@@ -11934,3 +11934,24 @@ E2346 ran the full Native Tool suite on this change over `87c8cd853a`: **93 of 9
 E2344 and E2345 each passed 11 production build stages and rebuilt 22 outputs on the fixed SDK. The App and Minimal ELFs were `dfdd4a7240c3` and `fcaf4cbcc2cb` on `f087b978f5`, then `9ac34bd2839a` and `c048d9292500` on `87c8cd853a`. Neither build includes the snapshot change. E2343's separate Core check stopped before compilation because the private source copy contained the unit-test lock instead of the production lock. It produced no Core result. Evidence: `stackscopedrelease2344/summary.json`, `verifiedinspectionrelease2345/summary.json`, and `stackscopedcore2343/preflight-unqualified.json`.
 
 E2341 measured the earlier `b19468480b` Coding package against the fixed base. Both arms passed the original absolute performance gate. The disabled-plugin `/help` P95 regressed from 127,328 to 451,308 µs; declarative inspection regressed from 139,990 to 441,587 µs. Both used 20 samples per arm. The other five records, separate process checks and both package hashes are in `closedcatalogmatched2341/qualified.json`. This is not a comparison of `87c8cd853a` or the snapshot change.
+
+### E2349: eligible Product cases pass; nested read-view output still fails
+
+The `f087b978f5` Product executable enumerated 1,108 cases. All 437 eligible cases passed with 17 actual fixture packages. Each invocation ran exactly its selected case and closed without forced cleanup or unknown process identity. The 671 GC-deferred cases did not run. This is not a whole-Product pass. Product ELF SHA-256: `56daed59ff07eb15ad17bc67237347c1def15fa69aa4faf7974c41321c7cda64`.
+
+The original two-worker test passed on both `4d88fa6072` and `87c8cd853a`, without adding a synchronization barrier. Each output size used 12 pairs. The two workers overlapped and returned the expected bytes and progress. The candidate alone explicitly returned its consumed payload after checking the bytes and recording the end time. The separate cancellation workload was byte-identical. Both arms observed physical process exit without forced cleanup.
+
+| P95, microseconds | Base | `87c8cd853a` |
+|---|---:|---:|
+| Output span, 256 bytes | 10,073 | 1,093 |
+| Output span, 32 KiB | 85,140 | 2,877 |
+| Normal reap, 256 bytes | 10,378 | 20,056 |
+| Normal reap, 32 KiB | 11,737 | 20,059 |
+| Cancellation trigger to result, 12 calls | 27,125 | 26,564 |
+| Cancellation trigger to observed reap, 12 calls | 27,146 | 26,578 |
+
+Normal reap was slower on the candidate. These measurements cover the two-worker fixture, not cold activation, whole-release performance, or the return of DATA references.
+
+At `87c8cd853a`, both standalone Program controls passed: budget and cancellation/recovery. The unsplit Core executable exited 1 at the Program inspection assertion. The selected Run completed, but the Program Receipt reported `tool_program.subcall_failed`. Its grep child and the underlying `host.process.readview` Receipt recorded `read_view.output_capacity`. The refusal was before opening the read-view worker channel. The inspection assertion requires a successful tool result; do not fill its missing fields from a failed Receipt.
+
+Two detached SQLite projections passed `quick_check` and preserved all 3 and 37 canonical Source edges from the earlier comparison. The six original database, WAL and SHM files kept their hashes. This identifies the rejecting operation, not the live owner preventing its allocation. Core ELF SHA-256: `39911845bd26e540074ae77feac735ed8f53b8cb3221b4b19071b584c4d6c420`. None of these results transfers to the later `d9c97d3573` behavior change without a source check.
