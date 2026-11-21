@@ -54,6 +54,22 @@ private class PlanRuleObservationNode <: JsonNode {
 @Test
 class PreparedMetadataCopy204Tests {
     @TestCase
+    func fileApplicationContentsBindOperationOrderAndTheExactPatchMetadata(): Unit {
+        let context = ToolInvocationContext(RunId("file-run"), SessionId("session"), CapabilitySet())
+        let operation = { path: String => objectValue([ValueField("path", textValue(path))]) }
+        let patch = { digest: String, bytes: String => objectValue([ValueField("ref", textValue("patch")),
+            ValueField("sha256", textValue(digest)), ValueField("bytes", numberValue(bytes))]) }
+        let operations = listValue([operation("first"), operation("second")])
+        let prepared = metadataFixture204(context, objectValue([ValueField("operations", operations),
+            ValueField("patch_artifact", patch("digest", "5"))]))
+        let matches = { items: AgentValue, metadata: AgentValue =>
+            prepared.matchesFrozenPlan(FrozenPluginPlanRule.FileApplicationContentsMatch(items, metadata)) }
+        @Expect(matches(listValue([operation("first"), operation("second")]), patch("digest", "5")))
+        @Expect(!matches(listValue([operation("second"), operation("first")]), patch("digest", "5")))
+        @Expect(!matches(operations, patch("other", "5")))
+        @Expect(!matches(operations, patch("digest", "5.0")))
+    }
+    @TestCase
     func documentVersionSelectsValidationButDoesNotValidateThePlan(): Unit {
         let context = ToolInvocationContext(RunId("protocol-run"), SessionId("session"), CapabilitySet())
         for (version in [PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA, PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA, "other"]) {

@@ -863,6 +863,25 @@ func loadProductStoredFileApplicationPlan(
     loadProductStoredFileApplicationPlan(planRef, planDigest, workspace, artifacts)
 }
 
+private func artifactHandleText(call: ToolResolverInput, name: String): Result<String> {
+    match (call.kind([ToolResolverStep.Field(name)])) {
+        case None => applicationPlanError<String>(AgentErrorKind.InvalidInput,
+            "application_plan.structure_invalid", "application_plan is missing a required text field")
+        case Some(kind) => if (kind == JsonKind.String) { Result.Ok(call.stringField(name)) }
+            else { applicationPlanError<String>(AgentErrorKind.InvalidInput,
+                "application_plan.structure_invalid", "application_plan field must be text") }
+    }
+}
+
+private func loadProductStoredFileApplicationPlan(call: ToolResolverInput, workspace: LocalWorkspace,
+    artifacts: ProductArtifactStore): Result<ProductStoredFileApplicationPlan> {
+    let reference = match (artifactHandleText(call, "plan_ref")) {
+        case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    let digest = match (artifactHandleText(call, "plan_digest")) {
+        case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    loadProductStoredFileApplicationPlan(reference, digest, workspace, artifacts)
+}
+
 private func loadProductStoredFileApplicationPlan(planRef: String, planDigest: String,
     workspace: LocalWorkspace, artifacts: ProductArtifactStore): Result<ProductStoredFileApplicationPlan> {
     let planText = match (readProductApplicationArtifact(
@@ -1644,13 +1663,11 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        productFilePlanResultMetadata204(prepared, { plan, call =>
-            executeFilePlanFrame204(context, prepared, plan, call) })
+        withFilePlanCanonicalInput(prepared, { input, consumer => executeApplyFrame(context, prepared, input, consumer) })
     }
-    private func executeFilePlanFrame204(context: ToolInvocationContext,
-        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolResolverInput): Result<ToolResult> {
-        let arguments = plan.canonicalArguments
-        let stored = match (loadProductStoredFileApplicationPlan(arguments, workspace, artifacts)) {
+    private func executeApplyFrame(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        call: ToolResolverInput, consumer: ?PreparedMetadataConsumer204): Result<ToolResult> {
+        let stored = match (loadProductStoredFileApplicationPlan(call, workspace, artifacts)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -1658,28 +1675,25 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor & ToolApprovalTargetVal
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
-        let planRef = match (applicationPlanRequiredText(arguments, "plan_ref")) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
+        let planRef = stored.planRef; let planDigest = stored.planDigest
+        let planOperations = stored.planOperations
+        if (!call.hasKind([ToolResolverStep.Field("operations")], JsonKind.Array)) {
+            return applicationPlanError<ToolResult>(AgentErrorKind.Conflict,
+                "application_plan.operation_list_invalid", "the prepared application operation list is missing")
         }
-        let planDigest = match (applicationPlanRequiredText(arguments, "plan_digest")) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
+        // Execute only the immutable operations that are equal to the frozen input.
+        // Reopen and hash the patch after the Store check just as before.
+        let rule = FrozenPluginPlanRule.FileApplicationContentsMatch(planOperations, stored.plan.field("patch_artifact").getOrThrow())
+        let matches = match (consumer) {
+            case Some(reader) => reader.matchesFrozenPlan(rule)
+            case None => prepared.matchesFrozenPlan(rule)
         }
-        let planOperations = match (arguments.field("operations")) {
-            case Some(value) => if (value.unifiedKind == ValueKind.List) { value } else {
-                return applicationPlanError<ToolResult>(
-                    AgentErrorKind.Conflict, "application_plan.operation_list_invalid",
-                    "the prepared application operation list is missing"
-                )
-            }
-            case None => return applicationPlanError<ToolResult>(
-                AgentErrorKind.Conflict, "application_plan.operation_list_invalid",
-                "the prepared application operation list is missing"
-            )
+        if (!matches) {
+            return applicationPlanError<ToolResult>(AgentErrorKind.Conflict, "application_plan.canonical_arguments_changed",
+                "the canonical application arguments no longer match the immutable plan")
         }
         let patchOperations = match (loadProductApplicationPatchOperations(
-            arguments, planOperations.items.size, artifacts
+            stored.plan, planOperations.items.size, artifacts
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1865,29 +1879,11 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        match (prepared.retainMetadataConsumer204()) {
-            case Some(consumer) =>
-                let result = consumer.withCanonicalCallInput({ call => executeRecoveryFrame(context, prepared, call) })
-                productFilePlanResultAfterConsumer204(result, consumer)
-            case None => prepared.withCanonicalCallInput({ call => executeRecoveryFrame(context, prepared, call) })
-        }
-    }
-    private func artifactHandleText(call: ToolResolverInput, name: String): Result<String> {
-        match (call.kind([ToolResolverStep.Field(name)])) {
-            case None => applicationPlanError<String>(AgentErrorKind.InvalidInput,
-                "application_plan.structure_invalid", "application_plan is missing a required text field")
-            case Some(kind) => if (kind == JsonKind.String) { Result.Ok(call.stringField(name)) }
-                else { applicationPlanError<String>(AgentErrorKind.InvalidInput,
-                    "application_plan.structure_invalid", "application_plan field must be text") }
-        }
+        withFilePlanCanonicalInput(prepared, { input, _ => executeRecoveryFrame(context, prepared, input) })
     }
     private func executeRecoveryFrame(context: ToolInvocationContext,
         prepared: PreparedToolInvocation, call: ToolResolverInput): Result<ToolResult> {
-        let reference = match (artifactHandleText(call, "plan_ref")) {
-            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-        let digest = match (artifactHandleText(call, "plan_digest")) {
-            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-        let stored = match (loadProductStoredFileApplicationPlan(reference, digest, workspace, artifacts)) {
+        let stored = match (loadProductStoredFileApplicationPlan(call, workspace, artifacts)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }

@@ -29,12 +29,20 @@ public enum FrozenPluginPlanRule {
     HttpStreamChildOf(NormalizedOperationPlan) | ChannelChildOf(NormalizedOperationPlan) |
     HttpChildOf(NormalizedOperationPlan) | CapabilitiesWithin(CapabilitySet) |
     ReadonlyDelegatedChild | HttpStreamParent | ChannelParent | AllowsChild(FrozenPluginChildRelation, PreparedToolInvocation) |
-    DerivableParent(Bool, Bool) | PermitsDerivedIntent(NormalizedOperationPlan, String, String, String)
+    DerivableParent(Bool, Bool) | PermitsDerivedIntent(NormalizedOperationPlan, String, String, String) |
+    FileApplicationContentsMatch(AgentValue, AgentValue)
 
     // A broker may already own the parent plan (Task or durable Store).
     // Otherwise both Prepared participants pin their own DATA for this call.
     public func matches(plan: NormalizedOperationPlan): Bool {
         match (this) {
+            case FileApplicationContentsMatch(operations, patch) =>
+                let arguments = plan.canonicalArguments
+                match ((arguments.field("operations"), arguments.field("patch_artifact"))) {
+                    case (Some(actual), Some(metadata)) =>
+                        canonicalAgentValuesEqual(actual, operations) && canonicalAgentValuesEqual(metadata, patch)
+                    case _ => false
+                }
             case DerivableParent(alreadyDerived, readViewTarget) =>
                 !alreadyDerived || (isReadonlyDelegatedChildPlan(plan) && readViewTarget)
             case PermitsDerivedIntent(child, parentCallId, childCallId, requestKey) =>

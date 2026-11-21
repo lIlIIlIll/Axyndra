@@ -5200,3 +5200,7 @@ Both `ToolPipeline.prepareDerived` entry points now ask the live parent whether 
 ### E2360: recover a stored file plan without exporting its Prepared plan
 
 `recover_file_plan` now reads only the frozen artifact reference, digest and call ID. Recovery still opens the actual stored artifact and checks the originating operation. The installed AST plugin recovered a continuation without writing the file; only a subsequent one-time approval applied the replacement. The changed executor retains its counted reader through output acknowledgement. This is a recovery-path result, not a full Core pass.
+
+### E2361: bind file application to the frozen operations and patch
+
+The [file application check](implementation/plan-execution-reliability.md#e2361-apply-the-stored-operations-only-if-they-match-the-frozen-request) passed all 97 Native Tool Runtime cases and the real AST recovery and approved-write contract. Core capacity, the first five-second model request, and final release remain open.

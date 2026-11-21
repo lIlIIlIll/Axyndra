@@ -3,7 +3,7 @@ package agent_product
 import agent_domain.*
 import tool_runtime.*
 
-// Apply and preview still require the whole frozen plan.
+// The plugin preview still reads the whole frozen plan.
 // The original invocation and Source stay untouched. Its independently paid
 // metadata consumer follows the real result to the original canonical ACK.
 func productFilePlanResultMetadata204(prepared: PreparedToolInvocation,
@@ -18,6 +18,16 @@ func productFilePlanResultMetadata204(prepared: PreparedToolInvocation,
     let result = consumer.withOperationPlan204({ plan =>
         consumer.withCallInput({ input => action(plan, input) }) })
     productFilePlanResultAfterConsumer204(result, consumer)
+}
+
+func withFilePlanCanonicalInput(prepared: PreparedToolInvocation,
+    action: (ToolResolverInput, ?PreparedMetadataConsumer204) -> Result<ToolResult>): Result<ToolResult> {
+    match (prepared.retainMetadataConsumer204()) {
+        case Some(consumer) =>
+            let result = consumer.withCanonicalCallInput({ call => action(call, Some(consumer)) })
+            productFilePlanResultAfterConsumer204(result, consumer)
+        case None => prepared.withCanonicalCallInput({ call => action(call, None) })
+    }
 }
 
 func productFilePlanResultAfterConsumer204(result: Result<ToolResult>,
