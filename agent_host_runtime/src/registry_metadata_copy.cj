@@ -1372,13 +1372,24 @@ class HostRegistryCatalogDataLease159 <: ToolCatalogDataLease159 & ToolCatalogOr
         } finally { lock.unlock() }
     }
 }
-class HostRegistryCatalogBacking159 <: ToolCatalogBackingData159 & ToolCatalogRetirableBacking159 {
+open class HostRegistryUnknownBacking159 {
+    var nextUnknown: ?HostRegistryUnknownBacking159 = None
+}
+
+// External Process/inspection/result consumers accept raw strings and offer no
+// DATA return. Keep only its payment; the consumers own the text, not the Prepared graph.
+class HostReadViewPublishedText <: HostRegistryUnknownBacking159 {
+    private let payment: LogicalJsonOwnerReservation
+    init(payment: LogicalJsonOwnerReservation) { this.payment = payment }
+    func publish(): Unit { hostRegistryUnknownBackings159.retain159(this) }
+}
+
+class HostRegistryCatalogBacking159 <: HostRegistryUnknownBacking159 & ToolCatalogBackingData159 & ToolCatalogRetirableBacking159 {
     private let lock159 = Mutex()
     private var payment159: ?LogicalJsonOwnerReservation
     private var producerReturned159: ?HostRegistryCatalogProducer159
     private var unknown159 = false
     private var listed159 = false
-    var next159: ?HostRegistryCatalogBacking159 = Option<HostRegistryCatalogBacking159>.None
     init(payment: LogicalJsonOwnerReservation, producerReturned: HostRegistryCatalogProducer159) {
         payment159 = Some(payment); producerReturned159 = Some(producerReturned)
     }
@@ -1429,10 +1440,10 @@ class HostRegistryCatalogBacking159 <: ToolCatalogBackingData159 & ToolCatalogRe
 }
 private class HostRegistryUnknownBackingDebt159 {
     private let lock159 = Mutex()
-    private var first159: ?HostRegistryCatalogBacking159 = Option<HostRegistryCatalogBacking159>.None
-    func retain159(value: HostRegistryCatalogBacking159): Unit {
+    private var first159: ?HostRegistryUnknownBacking159 = None
+    func retain159(value: HostRegistryUnknownBacking159): Unit {
         lock159.lock()
-        try { value.next159 = first159; first159 = Some(value) }
+        try { value.nextUnknown = first159; first159 = Some(value) }
         finally { lock159.unlock() }
     }
 }

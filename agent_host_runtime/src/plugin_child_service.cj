@@ -339,7 +339,7 @@ public class HostPluginChildAdmission111 {
                     if(full.size>(Int64.Max-65536)/16){throw LogicalJsonPayloadError("actual process failure invoice overflow")}
                     match(fund(65536+full.size*16)){
                         case Result.Err(failure)=>throw OwnedCanonicalDataFailure113(failure);case Result.Ok(_)=>()}
-                    let original=recoverableToolResult(prepared.call,error,receiptId:prepared.operationId.value)
+                    let original=recoverableToolResult(prepared.call.callId,error,receiptId:prepared.operationId.value)
                     state.output=Some(retainOutput(original.output))
                 }
             })

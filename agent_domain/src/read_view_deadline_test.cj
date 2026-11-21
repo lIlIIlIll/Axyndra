@@ -35,4 +35,29 @@ class ReadViewFiniteDeadlineTests {
             @Expect(validReadViewDeadlineGrants(parseUnifiedJson(raw)), false) }
         @Expect(validReadViewDeadlineGrants(parseUnifiedJson("[{\"contribution\":\"exec\",\"maximum_ms\":600000}]")), true)
     }
+    @TestCase
+    func privateInputEncoderReportsExactLengthAndRejectsOverflowOrRevocation(): Unit {
+        let value = objectValue([ValueField("z", textValue("a\n\"界")), ValueField("a", integerValue(42))])
+        let expected = stringifyUnifiedJson(value)
+        let intent = finiteReadViewTestIntent(123)
+        let request = intent.field("request").getOrThrow()
+        request.put("input", value)
+        let args = objectValue([ValueField("intent", intent), ValueField("tool_payload_limits", nullValue())])
+        let exact = Array<Byte>(expected.size, repeat: 0)
+        let saved = withToolResolverInput(ToolCall("worker-id", "worker-tool", args), { input =>
+            @Expect(resolverReadViewResponseLimit(input).isNone())
+            @Expect(resolverEncodeReadViewInput(input, Array<Byte>(1, repeat: 0)).getOrThrow(), expected.size)
+            @Expect(resolverEncodeReadViewInput(input, exact).getOrThrow(), expected.size)
+            let scratch = Array<Byte>(1, repeat: 0)
+            value.put("z", textValue(String.fromUtf8(Array<Byte>(HOST_READ_VIEW_INPUT_BYTES, repeat: b'x'))))
+            @Expect(resolverEncodeReadViewInput(input, scratch).isNone())
+            request.put("input", nullValue())
+            @Expect(resolverEncodeReadViewInput(input, exact).isNone())
+            input
+        })
+        var stale = false
+        try { let _ = resolverEncodeReadViewInput(saved, exact) } catch (_: IllegalStateException) { stale = true }
+        @Expect(stale)
+        @Expect(String.fromUtf8(exact), expected)
+    }
 }

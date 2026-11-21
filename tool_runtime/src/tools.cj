@@ -4858,7 +4858,7 @@ public class ToolPipeline {
                     "tool is not registered",
                     fields: [ErrorField("tool", requestedCall.name)]
                 )
-                return Result.Ok(ToolPreparation.Completed(recoverableToolResult(requestedCall, error)))
+                return Result.Ok(ToolPreparation.Completed(recoverableToolResult(requestedCall.callId, error)))
         }
         let initializationRead = initializationReadSource(source)
         let envelope = match (planBoundBusinessCall204(requestedCall,
@@ -4878,7 +4878,7 @@ public class ToolPipeline {
                 "tool is not registered",
                 fields: [ErrorField("tool", call.name)]
             )
-            return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
+            return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call.callId, error)))
         }
         if ((supervised || context.planReviewControl) && !registration.descriptor.supervisedExecutionSafe &&
             !initializationRead && !inheritedHostSource(source, registration.descriptor, call.name, call.callId)) {
@@ -4904,12 +4904,12 @@ public class ToolPipeline {
         match (validator.validate(schemaCall, registration.descriptor.definition)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
-                return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
+                return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call.callId, error)))
         }
         let canonicalCall = match (canonicalizedInvocationCall204(context, call, registration.descriptor)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Ok(
-                ToolPreparation.Completed(recoverableToolResult(call, error))
+                ToolPreparation.Completed(recoverableToolResult(call.callId, error))
             )
         }
         let effective = registration.descriptor.resolved(canonicalCall)
@@ -5616,7 +5616,7 @@ public class ToolPipeline {
                 fields: rejectionFields(pipelineCall204(context, prepared).name, reason)
             )
             let result = recoverableToolResult(
-                pipelineCall204(context, prepared),
+                pipelineCall204(context, prepared).callId,
                 error,
                 receiptId: prepared.operationId.value
             )
@@ -6596,7 +6596,7 @@ public class ToolPipeline {
                     (!supervisedExecution || storedPlan.effectClass == OperationEffectClass.ReadOnly)) {
                     return Result.Ok(ToolInvocationResult.Completed(
                         recoverableToolResult(
-                            pipelineCall204(context, prepared),
+                            pipelineCall204(context, prepared).callId,
                             error,
                             receiptId: prepared.operationId.value
                         )

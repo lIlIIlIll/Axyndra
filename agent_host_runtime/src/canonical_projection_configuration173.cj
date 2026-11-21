@@ -175,7 +175,7 @@ public class HostCanonicalProjectionSelection173 {
                         throw LogicalJsonPayloadError("recoverable error construction invoice overflow") }
                     match (fund(65536 + bytes * 16 + nodes * 512)) {
                         case Result.Err(error) => throw OwnedCanonicalDataFailure113(error); case Result.Ok(_) => () }
-                    let original = recoverableToolResult(prepared.call, error, receiptId: prepared.operationId.value)
+                    let original = recoverableToolResult(prepared.call.callId, error, receiptId: prepared.operationId.value)
                     copied.retainValue151(1, original.output)
                     copied.projectValue151(1)
                 })) {

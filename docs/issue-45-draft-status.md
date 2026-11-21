@@ -5104,3 +5104,9 @@ E2265: on the E2263 candidate, the Program budget and cancellation/recovery cont
 ### Brokered child authorization (E2274, E2277)
 
 The broker uses closed frozen-plan comparisons; Source, current capabilities, descriptor checks and SQL settlement remain mandatory. Combined Task/broker: Tool 87/87 and 17 selected Host cases passed. Broker-only continuous Core: 40 derived tuples matched E2265 across both stores, but both read-view and grep Receipts still failed `read_view.output_capacity`. **Incomplete; PR remains Draft.** [Evidence and source boundaries](implementation/plan-execution-reliability.md#broker-child-checks-no-longer-lend-the-raw-plan).
+
+### Frozen read-view fields, actual bank occupancy and matched cold startup
+
+E2288/E2289/E2290 qualified the selected Domain and Host cases, Tool 87/87 and five external contracts on the bounded-field candidate. E2286 timed out compiling Product; zero cases ran. E2292's final result-ID ordering passed Program budget and cancellation but failed continuous Core in both reserved Receipts. E2291 reconciled all four logical slots and 33 fixed buffers on a separate instrumented build; no early refunds. E2282 found regressions in both cold Product commands despite passing their absolute limits. **Incomplete; keep Draft.** [Source scopes, measured P95s, SQL and bank receipts](implementation/plan-execution-reliability.md#read-view-workers-consume-frozen-fields-not-an-exported-prepared-plan).
+
+E2293: **437/437 eligible Product cases** passed on the result-ID source; the native inventory was 1,106, with 669 deferred, unexecuted identities. The final Host, including the forced pre-launch refusal, passed 18/282 selected. See `resultidentityproduct2293/{summary.json,host-qualified.json}`. This does not resolve continuous Core or the local provider deadline.

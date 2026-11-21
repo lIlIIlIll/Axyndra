@@ -60,10 +60,41 @@ class HostLivePolicyCatalogEntryTests {
         @Expect(error.message,"user rejected the pending tool operation: 保留原说明 ")
         @Expect(error.fields.size,2)
         @Expect(error.fields[1].value,"保留原说明 ")
-        let result=recoverableToolResult(call,error,receiptId:"actual-parent-operation")
+        let result=recoverableToolResult(call.callId,error,receiptId:"actual-parent-operation")
         @Expect(result.callId,call.callId)
         @Expect(result.receiptId,"actual-parent-operation")
         @Expect(result.isError,true)
         @Expect(result.output.field("error").getOrThrow().text,error.code)
+    }
+    @TestCase
+    func copiedReadViewFieldsSumEqualValuesAndRejectRevokedSource(): Unit {
+        let budget = LogicalJsonOwnerBudget(maximumCharged: 33554432)
+        let root = budget.acquire(1); let local = root.deriveRetainedLease(); let exports = root.deriveRetainedLease()
+        try {
+            let call = ToolCall("same-id", "same-id", objectValue([]))
+            let (fields, first, second) = withToolResolverInput(call, { source =>
+                let worker = HostReadViewWorkerFields(source, local, exports)
+                let before = root.retainedCustodyUsage113()[0]
+                let a = worker.text(ToolResolverText.CallId); let b = worker.text(ToolResolverText.Name)
+                @Expect(root.retainedCustodyUsage113()[0] - before, 2 * (1024 + 8 * a.size))
+                let pressure = root.deriveRetainedLease()
+                try {
+                    let state = root.retainedCustodyUsage113()
+                    pressure.ensureRetainedPeak(budget.capacity() - budget.usage()[1] + state[1] - state[0])
+                    @Expect(budget.usage()[1], budget.capacity())
+                    var denied = false
+                    try { let _ = worker.text(ToolResolverText.CallId, external: true) }
+                    catch (_: HostReadViewMetadataCapacity) { denied = true }
+                    @Expect(denied); @Expect(!worker.published)
+                } finally { pressure.close() }
+                @Expect(worker.text(ToolResolverText.Name), "same-id")
+                (worker, a, b)
+            })
+            @Expect(first, "same-id"); @Expect(second, "same-id"); @Expect(!fields.published)
+            var stale = false
+            try { let _ = fields.text(ToolResolverText.CallId) } catch (_: IllegalStateException) { stale = true }
+            @Expect(stale)
+        } finally { exports.close(); local.close(); root.close() }
+        @Expect(budget.usage()[1], 0)
     }
 }

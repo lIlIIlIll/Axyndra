@@ -66,7 +66,7 @@ func hostWriteLivePolicyRejectedParent(actual:HostDocumentDataSession,parent:Pre
         phase.ensureRetainedPeak(initial)
         let produce:()->Result<HostServiceArtifactWriter>={=>
             let error=hostLivePolicyParentUserRejection(parent.call,decision)
-            let value=recoverableToolResult(parent.call,error,receiptId:parent.operationId.value).output
+            let value=recoverableToolResult(parent.call.callId,error,receiptId:parent.operationId.value).output
             let bytes=logicalJsonWriteReservationBytes(value,Int64.Max)
             if(bytes<1 || bytes>(Int64.Max-initial)/2){
                 return hostPluginResourceError("plugin.live_parent_rejection_bound","original complete rejection JSON exceeds its original Tool codec")}

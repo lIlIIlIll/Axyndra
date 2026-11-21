@@ -177,6 +177,13 @@ owns the reader. One reader cannot acknowledge another. Earlier raw exports
 remain charged; the rest of the Prepared call/plan migration is still open.
 Neither the plugin wire protocol nor the database format changes.
 
+`recoverableToolResult` now takes a call ID (`String`) instead of a `ToolCall`.
+Change `recoverableToolResult(call, error, receiptId: id)` to
+`recoverableToolResult(call.callId, error, receiptId: id)` and rebuild. If you
+have a Prepared reader rather than a `ToolCall`, obtain an independent ID
+inside `withCallInput`. Do not export the arguments merely to report an error.
+The error fields, Receipt ID, plugin wire protocol and stored records are unchanged.
+
 When a Host only needs to classify a plugin plan, use a closed predicate, for
 example `prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChild)`.
 `ReadViewChildOf(parent)` also checks that the frozen child matches the parent

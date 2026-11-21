@@ -1,5 +1,6 @@
 package agent_domain
 
+import std.io.*
 import yjson.*
 import yjson_support.*
 
@@ -97,5 +98,41 @@ public func resolverLiveEffectCapability(input: ToolResolverInput): Capability {
             Capability(CapabilityKind.ExtensionInvoke,
                 resource: resolverOutputText(httpIntentText(call.arguments.field("binding").getOrThrow(), "namespace")))
         } else { Capability(CapabilityKind.WorkspaceWrite, resource: resolverOutputText(httpIntentText(effect, "canonical_path"))) }
+    })
+}
+
+// These projections expose neither a JSON node nor the source-backed contribution
+// name. The caller has already validated the complete frozen child and its parent.
+public func resolverReadViewResponseLimit(input: ToolResolverInput): ?Int64 {
+    input.domainProjection({ call => match (ordinaryToolPayloadLimitsFromValue(call.arguments.field("tool_payload_limits").getOrThrow())) {
+        case Some(profile) => Some(profile.maxServiceResponseBytes)
+        case None => None<Int64>
+    } })
+}
+
+private class ReadViewInputTooLarge <: Exception {
+    init() { super("frozen read-view input exceeds its private bound") }
+}
+
+private class ReadViewInputBuffer <: OutputStream {
+    private let destination: Array<Byte>
+    var size: Int64 = 0
+    init(destination: Array<Byte>) { this.destination = destination }
+    public func write(part: Array<Byte>): Unit {
+        if (part.size > HOST_READ_VIEW_INPUT_BYTES - size) { throw ReadViewInputTooLarge() }
+        if (part.size <= destination.size - size) { part.copyTo(destination, 0, size, part.size) }
+        size += part.size
+    }
+    public func flush(): Unit {}
+}
+
+// Never publish the encoder's source-backed slices. A short destination only
+// measures the required length; its contents are valid only if the result fits.
+public func resolverEncodeReadViewInput(input: ToolResolverInput, destination: Array<Byte>): ?Int64 {
+    input.projectNode([ToolResolverStep.Field("intent"), ToolResolverStep.Field("request"), ToolResolverStep.Field("input")], { value =>
+        if (value.unifiedKind != ValueKind.Object) { return None<Int64> }
+        let sink = ReadViewInputBuffer(destination)
+        try { value.writeJson(sink); Some(sink.size) }
+        catch (_: ReadViewInputTooLarge) { None<Int64> }
     })
 }

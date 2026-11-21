@@ -494,7 +494,7 @@ public class MemoryToolOutputSink <: ToolOutputSink {
 }
 
 public func recoverableToolResult(
-    call: ToolCall,
+    callId: String,
     error: AgentError,
     receiptId!: String = ""
 ): ToolResult {
@@ -517,7 +517,7 @@ public func recoverableToolResult(
     }
     fields.add(ValueField("fields", listValue(details.toArray())))
     ToolResult(
-        call.callId,
+        callId,
         objectValue(fields.toArray()),
         isError: true,
         receiptId: receiptId
