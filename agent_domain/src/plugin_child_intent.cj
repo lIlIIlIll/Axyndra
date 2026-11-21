@@ -358,6 +358,18 @@ public func pluginPrimitiveArgumentsService111(arguments: AgentValue): String {
     httpIntentText(intents.items[0],"service")
 }
 
+// Compare the original display identity with its frozen binding; none of the
+// plan, call or binding strings cross the resolver boundary.
+public func resolverPrimitiveBindingMatches(input: ToolResolverInput, namespace: String, generation: String, digest: String): Bool {
+    input.domainProjection({ call =>
+        let host = match (call.arguments.field("host_plan")) { case Some(value) => value; case None => return false }
+        let binding = match (host.field("binding")) { case Some(value) => value; case None => return false }
+        httpIntentText(binding, "namespace") == namespace && httpIntentText(binding, "generation") == generation &&
+            httpIntentText(binding, "configuration_digest") == digest && httpIntentText(binding, "parent_call_id") == call.callId &&
+            httpIntentText(binding, "contribution") == call.name
+    })
+}
+
 // Both derived identifiers already belong to the child request. The callback
 // cannot retain the root call, its ID or its display arguments through this projection.
 public func resolverChildServiceIds(input: ToolResolverInput, requestId: String): (String, String) {

@@ -1047,13 +1047,12 @@ public open class HostJavaScriptPluginHost {
     }
     func primitiveConfigurationOwned191(namespace: String, localTool: String,
         generation: UInt64): Result<?HostOwnedPrimitiveConfiguration191> {
-        let descriptor = match (servicePackageData81(namespace, generation)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        let selected = match (primitiveConfigurations111.loadOwned191(this, settingsRoot, namespace, descriptor.contentDigest, generation)) {
+        let (kind, selected) = match (loadPrimitiveSelection191(namespace, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         match (selected) {
             case Some(value) =>
-                let accepted = primitiveConfigurationValidationFrame191(namespace, localTool, generation, descriptor, value)
+                let accepted = if (value.permits(localTool)) { validatePrimitiveProfile191(namespace, localTool, generation, kind)
+                    } else { Result<Bool>.Ok(false) }
                 match (accepted) {
                     case Result.Ok(true) => return Result.Ok(Some(value))
                     case Result.Ok(false) => value.returnOwnedPrimitive191()
@@ -1062,12 +1061,27 @@ public open class HostJavaScriptPluginHost {
             case None => () }
         Result<?HostOwnedPrimitiveConfiguration191>.Ok(None<HostOwnedPrimitiveConfiguration191>)
     }
-    private func primitiveConfigurationValidationFrame191(namespace: String, localTool: String,
-        generation: UInt64, descriptor: PluginPackageDescriptor, selected: HostOwnedPrimitiveConfiguration191): Result<Bool> {
-        if (!selected.permits(localTool)) { return Result<Bool>.Ok(false) }
+    private func loadPrimitiveSelection191(namespace: String, generation: UInt64): Result<(PluginEntryKind, ?HostOwnedPrimitiveConfiguration191)> {
+        let descriptor = match (servicePackageData81(namespace, generation)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let selected = match (primitiveConfigurations111.loadOwned191(this, settingsRoot, namespace, descriptor.contentDigest, generation)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        Result.Ok((descriptor.entryKind, selected))
+    }
+    func checkPreparedPrimitiveService(namespace: String, generation: UInt64, prepared: PreparedToolInvocation, service: String): Result<Bool> {
+        let (kind, selected) = match (loadPrimitiveSelection191(namespace, generation)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        match (selected) {
+            case None => Result<Bool>.Ok(false)
+            case Some(view) =>
+                try { view.checkPreparedService(this, kind, namespace, generation, prepared, service) }
+                finally { view.returnOwnedPrimitive191() }
+        }
+    }
+    func validatePrimitiveProfile191(namespace: String, localTool: String, generation: UInt64, kind: PluginEntryKind): Result<Bool> {
         let profile = match (toolExecutionProfile(namespace, localTool, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(actual) => actual }
-        if (descriptor.entryKind != PluginEntryKind.NativeExecutable || profile != PluginToolExecutionProfile.Brokered) {
+        if (kind != PluginEntryKind.NativeExecutable || profile != PluginToolExecutionProfile.Brokered) {
             return hostPluginResourceError("child.profile_invalid", "primitive selection requires an actual Native brokered Tool") }
         Result<Bool>.Ok(true)
     }

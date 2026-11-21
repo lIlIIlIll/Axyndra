@@ -1,6 +1,8 @@
 package agent_host_runtime
 
 import agent_domain.*
+import agent_extension_runtime.*
+import tool_runtime.*
 import agent_runtime.*
 import agent_plugin_registry.*
 import agent_sdk.*
@@ -71,10 +73,31 @@ class HostPrimitiveConfiguration111 {
         for (entry in selections.items where httpIntentText(entry, "name") == localTool) { return true }
         false
     }
+    func checkPreparedService(host: HostJavaScriptPluginHost, kind: PluginEntryKind, actualNamespace: String, generation: UInt64,
+        prepared: PreparedToolInvocation, input: ToolResolverInput, service: String): Result<Bool> {
+        let prefix = "plugin." + actualNamespace + "."
+        for (entry in selections.items) {
+            let tool = httpIntentText(entry, "name")
+            if (!input.nameEqualsParts(prefix, tool)) { continue }
+            match (host.validatePrimitiveProfile191(actualNamespace, tool, generation, kind)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            if (!entryPermitsService(entry, service) || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent) ||
+                prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone()) {
+                return hostPluginResourceError("child.service_denied", "only this exact selected canonical Tool may request its frozen child service") }
+            if (!resolverPrimitiveBindingMatches(input, actualNamespace, generation.toString(), digest)) {
+                return hostPluginResourceError("child.service_binding_changed", "child service belongs to another selected contribution or invocation") }
+            match (validateCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => return Result.Ok(true) }
+        }
+        Result.Ok(false)
+    }
     func permitsService(localTool: String, service: String): Bool {
         for (entry in selections.items where httpIntentText(entry, "name") == localTool) {
-            for (selected in entry.field("services").getOrThrow().items where selected.text == service) { return true }
+            if (entryPermitsService(entry, service)) { return true }
         }
+        false
+    }
+    private func entryPermitsService(entry: AgentValue, service: String): Bool {
+        for (selected in entry.field("services").getOrThrow().items where selected.text == service) { return true }
         false
     }
     // Closed host-owned Task selection: no process/network/other service may

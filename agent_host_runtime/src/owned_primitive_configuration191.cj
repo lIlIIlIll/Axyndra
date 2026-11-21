@@ -1,6 +1,7 @@
 package agent_host_runtime
 
 import agent_domain.*
+import agent_extension_runtime.*
 import tool_runtime.*
 import std.sync.*
 
@@ -178,6 +179,12 @@ public class HostOwnedPrimitiveConfiguration191 {
     public func permits(localTool: String): Bool { withData191({ value => value.permits(localTool) }) }
     func supervisedTaskServices191(localTool: String): Bool {
         withData191({ value => value.supervisedTaskServices191(localTool) })
+    }
+    func checkPreparedService(host: HostJavaScriptPluginHost, kind: PluginEntryKind, namespace: String, generation: UInt64,
+        prepared: PreparedToolInvocation, service: String): Result<Bool> {
+        withData191({ configuration => prepared.withCanonicalCallInput({ input =>
+            configuration.checkPreparedService(host, kind, namespace, generation, prepared, input, service)
+        }) })
     }
     public func permitsService(localTool: String, service: String): Bool { withData191({ value => value.permitsService(localTool, service) }) }
     public func mappedInvocation(localTool: String): Bool { withData191({ value => value.mappedInvocation(localTool) }) }

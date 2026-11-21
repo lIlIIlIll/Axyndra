@@ -233,6 +233,43 @@ private func withOrdinaryNativeCatalog221(action: (HostJavaScriptPluginHost, Too
 @Test
 class OrdinaryCatalogLifetimeSmoke221 {
     @TestCase
+    func selectedServiceRefusalReturnsItsPrivateConfiguration(): Unit {
+        withOrdinaryNativeCatalog221({ host, _, record, root =>
+            let namespace = "axyndra:ordinary-catalog"
+            let generation = host.instanceGeneration(namespace)
+            let descriptor = match (host.servicePackageData81(namespace, generation)) {
+                case Result.Err(error) => throw IllegalStateException(error.code); case Result.Ok(value) => value }
+            File.writeTo(root + "/settings/plugins/primitives.json", ("{\"version\":1,\"plugins\":[{\"namespace\":\"" + namespace +
+                "\",\"package_digest\":\"" + descriptor.contentDigest + "\",\"tools\":[{\"name\":\"echo\",\"profile\":\"frozen-primitives-v1\"," +
+                "\"services\":[\"child.start\"],\"preparation_provider\":\"provider\"}]}]}").toArray())
+            let f = LivePolicyCanonicalFixture()
+            let payment = record.descriptor.deriveCopiedDataPayment(4096)
+            try {
+                let context = ToolInvocationContext(f.active.runId, SessionId(f.active.threadId.value),
+                    CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]), epoch: f.active.epoch,
+                    toolContext: ToolContextDescriptor(workspaceRoot: f.root, cwd: f.root), cancellation: f.cancellation.token,
+                    contextProjection: f.active.contextSnapshot)
+                let call = ToolCall("ordinary", "plugin." + namespace + ".echo", objectValue([]))
+                // A different catalog may prepare the same name. That real direct
+                // preparation does not acquire this mounted service's authority.
+                let other = ToolCatalog(); let executor = CatalogSnapshotExecutor159c()
+                other.register(ToolDescriptor(ModelToolDefinition(call.name, "Ordinary read", objectValue([ValueField("type", textValue("object"))])),
+                    Capability(CapabilityKind.WorkspaceRead)), executor).value().getOrThrow()
+                let pipeline = ToolPipeline(other, f.store, PathIdentitySqlAudit(f.database), HostIds())
+                let prepared = match (pipeline.prepare(context, call).value().getOrThrow()) {
+                    case ToolPreparation.Ready(value) => value
+                    case _ => throw IllegalStateException("ordinary preparation was not ready") }
+                let bound = HostPluginServiceIdentity(host, namespace, generation)
+                let before = payment.retainedCustodyUsage113()
+                match (bound.validateService(prepared, "child.wait")) {
+                    case Result.Err(error) => @Expect(error.code, "child.service_denied")
+                    case Result.Ok(_) => throw IllegalStateException("unselected service was accepted") }
+                @Expect(executor.calls.load(), 0)
+                catalogSnapshotUsage159c(payment.retainedCustodyUsage113(), before)
+            } finally { payment.close(); f.close() }
+        })
+    }
+    @TestCase
     func actualPlainNativeCatalogRetiresAfterItsWholePublicationReturns(): Unit {
         withOrdinaryNativeCatalog221({ _, catalog, _, _ =>
             @Expect(catalog.definitionNamesEqual159(["plugin.axyndra:ordinary-catalog.echo"]))

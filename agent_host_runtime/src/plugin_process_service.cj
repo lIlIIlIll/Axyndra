@@ -61,21 +61,11 @@ public class HostPluginServiceIdentity {
         let descriptor = match (host.servicePackageData81(namespace, generation)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
         }
-        let prefix = "plugin." + namespace + "."
-        let localTool = if (prepared.call.name.startsWith(prefix)) { prepared.call.name[prefix.size..] } else { "" }
-        let primitive = match (host.primitiveConfiguration111(namespace, localTool, generation)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        if (primitive.isSome() || prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent)) {
-            if (primitive.isNone() || !primitive.getOrThrow().permitsService(localTool, service) || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent) ||
-                prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone()) {
+        match (host.checkPreparedPrimitiveService(namespace, generation, prepared, service)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(true) => return Result.Ok(())
+            case Result.Ok(false) => if (prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent)) {
                 return hostPluginResourceError("child.service_denied", "only this exact selected canonical Tool may request its frozen child service") }
-            let binding = prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("binding").getOrThrow()
-            if (httpIntentText(binding, "namespace") != namespace || httpIntentText(binding, "generation") != generation.toString() ||
-                httpIntentText(binding, "configuration_digest") != primitive.getOrThrow().digest ||
-                httpIntentText(binding, "parent_call_id") != prepared.call.callId ||
-                httpIntentText(binding, "contribution") != prepared.call.name) {
-                return hostPluginResourceError("child.service_binding_changed", "child service belongs to another selected contribution or invocation") }
-            return primitive.getOrThrow().validateCurrent()
         }
         if (pluginPrimitiveService111(service)) { return hostPluginResourceError("child.profile_missing", "this contribution has no operator-selected child profile") }
         if (descriptor.requestedCapabilities.contains("tool.readonly")) {

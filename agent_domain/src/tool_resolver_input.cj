@@ -82,6 +82,13 @@ public class ToolResolverInput {
     public func nameStartsWith(prefix: String): Bool {
         lock.lock(); try { current().name.startsWith(prefix) } finally { lock.unlock() }
     }
+    public func nameEqualsParts(prefix: String, suffix: String): Bool {
+        lock.lock()
+        try {
+            let name = current().name
+            name.size - prefix.size == suffix.size && name.startsWith(prefix) && name.endsWith(suffix)
+        } finally { lock.unlock() }
+    }
     public func hasKind(path: Array<ToolResolverStep>, expected: JsonKind): Bool {
         lock.lock(); try { match (at(path)) { case Some(value) => value.kind() == expected; case None => false } }
         finally { lock.unlock() }

@@ -43,6 +43,26 @@ private func processObservationPlan197(args: AgentValue, kind!: CapabilityKind =
 @Test
 class TrustedProcessObservation197Tests {
     @TestCase
+    func primitiveBindingRejectsAnotherCallContributionGenerationOrConfiguration(): Unit {
+        let name = "plugin.ns.echo"
+        let binding = objectValue([ValueField("namespace", textValue("ns")), ValueField("generation", textValue("8")),
+            ValueField("configuration_digest", textValue("current")), ValueField("parent_call_id", textValue("parent")),
+            ValueField("contribution", textValue(name))])
+        let args = objectValue([ValueField("host_plan", objectValue([ValueField("binding", binding)]))])
+        let matches = { call: ToolCall => withToolResolverInput(call, { input =>
+            resolverPrimitiveBindingMatches(input, "ns", "8", "current") }) }
+        let call = ToolCall("parent", name, args)
+        @Expect(matches(call)); @Expect(!matches(ToolCall("other", name, args)))
+        @Expect(!matches(ToolCall("parent", "plugin.other.echo", args)))
+        @Expect(!matches(ToolCall("parent", name, objectValue([]))))
+        withToolResolverInput(call, { input =>
+            @Expect(input.nameEqualsParts("plugin.ns.", "echo")); @Expect(!input.nameEqualsParts("plugin.", "echo"))
+            @Expect(!resolverPrimitiveBindingMatches(input, "other", "8", "current"))
+            @Expect(!resolverPrimitiveBindingMatches(input, "ns", "7", "current"))
+            @Expect(!resolverPrimitiveBindingMatches(input, "ns", "8", "old"))
+        })
+    }
+    @TestCase
     func allFourNormalizedObserversUseTheTrustedReadCapabilityAndEffect(): Unit {
         for (op in ["ps", "logs", "describe", "wait"]) {
             let child = processObservationChild197(op)
