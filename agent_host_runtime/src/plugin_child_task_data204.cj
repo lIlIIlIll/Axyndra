@@ -8,6 +8,12 @@ import std.collection.*
 import yjson.*
 import yjson_support.*
 
+struct HostTaskCallIdentity {
+    let callId: String
+    let name: String
+    init(callId: String, name: String) { this.callId = callId; this.name = name }
+}
+
 // Descriptive Task history only. This object owns neither Source nor a plan,
 // executor, grant or launch callback. Its payment derives from the actual
 // installed configuration, before any independent history copy is built.

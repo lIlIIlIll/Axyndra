@@ -1,6 +1,7 @@
 package agent_host_runtime
 
 import agent_domain.*
+import tool_runtime.ToolOutputChunk
 import std.sync.*
 import std.time.*
 import std.unittest.*
@@ -27,6 +28,28 @@ private func taskWaitOutputCopyFrame204(source: HostPaidValueProjection151, targ
 
 @Test
 class TaskExecutorData204Tests {
+    @TestCase
+    func retainedOutputIdentityIsPaidWithoutChargingDisplayArguments(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let grant = bank.acquire(131072)
+        let root = grant.deriveRetainedLease(); grant.close()
+        let configuration = HostPrimitiveConfiguration111("", "{}", "", "axyndra:workflow", "digest", listValue([]), root)
+        let before = root.retainedCustodyUsage113()
+        let id = "task:雪"; let name = "plugin.axyndra:workflow.task"
+        let copy = { arguments: AgentValue => withToolResolverInput(ToolCall(id, name, arguments),
+            { input => configuration.copyTaskCallIdentity(input) }) }
+        let first = copy(objectValue([]))
+        let afterFirst = root.retainedCustodyUsage113()
+        let output = ToolOutputChunk(first.callId, ToolOutputChannel.Stdout, "done")
+        let next = copy(objectValue([ValueField("details", textValue(String.fromUtf8(Array<UInt8>(65536, repeat: 120u8))))]))
+        let afterNext = root.retainedCustodyUsage113()
+        @Expect(first.name, name); @Expect(next.callId, id); @Expect(next.name, name)
+        @Expect(afterFirst[2] - before[2], 1); @Expect(afterNext[2] - afterFirst[2], 1)
+        @Expect(afterFirst[0] > before[0]); @Expect(afterNext[0] - afterFirst[0], afterFirst[0] - before[0])
+        root.close()
+        @Expect(output.callId, id); @Expect(!configuration.canRetireOwnedData191()); @Expect(bank.usage()[1] > 0)
+        // This private bank deliberately has no ACK for external output strings.
+    }
+
     @TestCase
     func distinctWaitReaderKeepsOriginalProjectionPaidUntilWholeOutputCopyReturns(): Unit {
         let bank = LogicalJsonOwnerBudget()

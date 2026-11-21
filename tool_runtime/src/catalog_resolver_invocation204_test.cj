@@ -282,7 +282,7 @@ class PrivateApprovalMetadataMove1201Tests {
         @Expect(after[2], before[2])
         @Expect(after[0] > before[0] && after[0] <= before[0] + 8192)
         var oldReturned = false
-        try { original.withCall204({ call => call.name == "resolver.data" }) }
+        try { original.withCallInput({ view => view.textEquals(ToolResolverText.Name, "resolver.data") }) }
         catch (_: IllegalStateException) { oldReturned = true }
         @Expect(oldReturned, true)
         let consumer = next.retainMetadataConsumer204().getOrThrow()
@@ -326,7 +326,7 @@ class PrivateApprovalMetadataMove1201Tests {
             @Expect(scope.movePrivateAuthorization204(original, PreparedAuthorization.Approved).isNone())
             let after = fixture.root.retainedCustodyUsage113()
             @Expect(after[0], before[0]); @Expect(after[2], before[2])
-            @Expect(original.withCall204({ call => call.name == "resolver.data" }), true)
+            @Expect(original.withCallInput({ view => view.textEquals(ToolResolverText.Name, "resolver.data") }), true)
             if (rawContext) { @Expect(scope.returnWholeCoreFrame204(), false) }
             // The real export/opaque debt stays paid. This private-bank
             // fixture cannot manufacture a DATA ACK or authorize execution.

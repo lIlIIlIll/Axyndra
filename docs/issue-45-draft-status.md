@@ -5096,3 +5096,7 @@ E2252/E2263: the closed frozen-plan checks preserve the real reader across a ree
 E2258/E2266 on `63d4816ade`: the actual Full package protocols passed 602/606. Only the MCP client failure has a binary-matched GC stack; the LSP, DAP and MCP Server failures are not deferred on that basis. [Cases, artifacts and classification](implementation/plan-execution-reliability.md#four-failures-in-the-full-package-protocol-suite).
 
 E2265: on the E2263 candidate, the Program budget and cancellation/recovery controls passed; continuous Core still failed `read_view.output_capacity` in both reserved Receipts. No bank amount or release credit on this ELF. Evidence: `returnedreadercore2265/qualified.json`.
+
+### Task identity and scoped release checks (E2248, E2259, E2261, E2267–E2279)
+
+**Incomplete; PR remains Draft.** The raw `withCall204` callback is gone. The paid Task identity passed Tool 87/87, 17 selected Host tests and five external consumers, including two actual Memory release contracts. On the earlier `63d4816ade` artifacts, ten real PTY flows passed, as did three separate Full protocol suites (57/57) and the matched two-worker output/cancellation runs. E2248 has direct GC evidence for a provider-installation crash before timing, not for the outstanding five-second timeout. No change to the E2258 full-suite verdict or the continuous Core refusal. [Scope, revisions and evidence](implementation/plan-execution-reliability.md#task-call-identity-without-a-raw-prepared-call).

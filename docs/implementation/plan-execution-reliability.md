@@ -11747,3 +11747,25 @@ E2265 rebuilt the continuous Core contract from the same 21 changed production/t
 E2258 ran the 16 checker suites against the E2245 Full package from `63d4816ade`. Of 606 cases, 602 passed, four failed, none skipped. LSP (18/19) and DAP (17/18) rejected a repeated 3 MiB backend result. MCP Server (19/20) received a frame without `payload` during a repeated 1 MiB result transfer. The MCP client (50/51) exited while executing the nine-page, 72-tool, 96 KiB case. All checker processes were accounted for; that does not make the four cases successful. Evidence: `publicframeprotocols2258/qualified.json`.
 
 E2266 recovered the core for that MCP client process and matched the executable and Runtime mappings to the packaged files. The faulting thread recorded `WCollector::FindToVersion → WCollector::TryUpdateRefField → IdleBarrier::ReadReference → McpClient.dispatchPreparedToolCall` in the unwind from `abort`. Only this MCP client sample joins the deferred GC failures. Core SHA-256 `35e22429b359e984a7df072d2642bf6175f83b2868654aeaef47caf919415d8b`; verdict and bindings: `fullmcpwirecore2266/qualified.json`. No corresponding GC evidence for the LSP, DAP or MCP Server failure.
+
+## Task call identity without a raw Prepared call
+
+The Host now retains independent copies of the call ID and tool name for Task output. It charges the installed configuration before copying or publishing either string. Display arguments do not enter this payment: adding 65,536 display bytes does not change it. Publishing fails closed on capacity refusal. Returning a callback, finishing a job or reaping its worker does not return outstanding DATA. The last `withCall204` API and its caller were removed; see [the migration](../compatibility.md).
+
+E2268 rebuilt Tool, Store, Core and Host, then passed the complete Native Tool suite (87/87) and all 17 selected Native Host cases (281 enumerated). Tool ELF `944a38bb2efcb584f37078b733996ef7df6711afefee2aefafa7d1d9935a8551`; Host ELF `d97868b32e177833d456ee3b0d700f4dc932ea1d58312e66b5e7ed41e2f33919`. E2276 rebuilt and ran five independent consumers: Tool Runtime, SDK, Task persistence, Memory and Prompt/Memory v3. The last two used the release clean/build/run recipe and the E2245 Full Memory plugin. No GC-deferred Memory scenario was repeated. Both gates bind the seven changed sources on `de8581e240`. Evidence: `joinedtaskidentityunits2268/{tool_runtime,agent_host_runtime}-summary.json` and `taskidentityreleaseconsumers2276/summary.json`. These runs do not cover continuous Core or the remaining raw Prepared exports.
+
+### Application and release evidence on `63d4816ade`
+
+- **Cold provider:** E2248 exited in the installer's `plugin inspect`, before either timed request. The saved broker-worker core matched the Coding executable and Runtime mappings. The faulting thread showed `GCTib::ForEachBitmapWord → BaseObject::ForEachRefField → Mutator::GCPhasePreForward` on SIGSEGV. Only this setup crash is deferred. There was no five-second measurement; the earlier measured timeout remains unresolved. Evidence: `publicframeprofile2248/saved-setup-core/qualified.json`.
+- **TUI:** E2259 passed all ten real Linux tmux flows on the E2241 App and sealed Full fixture packages: three streaming protocols, cancel, Ctrl-C, HTTP error, timeout, incomplete EOF, invalid UTF-8 and MCP. Key timelines, ANSI output and screens were retained. Local fixtures only; these are not mouse, resize or packaged Coding startup tests.
+- **Full protocol:** E2267 passed LSP 19/19, DAP 18/18 and MCP Server 20/20 on the unchanged E2245 binaries, using the original limits in an exclusive window with failure diagnostics. All three process trees closed. This separate 57/57 result does not change the original E2258 **602/606** or establish why the three failures were intermittent. The GC-qualified MCP client crash was not rerun.
+- **Two overlapping workers:** E2261 compared base `4d88fa6072` against `63d4816ade` with the same SDK, yjson revision, inputs, deadlines and concurrency. Twelve pairs per output size; 12 cancellation samples per arm. The only output-driver difference is the candidate's required payload release after the end timestamp and byte check. Cancellation drivers were byte-identical.
+
+| Nearest-rank P95 (µs) | Base | Candidate |
+|---|---:|---:|
+| 256-byte output pair, span | 10,181 | 809 |
+| 32,768-byte output pair, span | 93,285 | 5,578 |
+| Cancellation trigger to result | 26,684 | 25,591 |
+| Cancellation trigger to observed reap | 26,703 | 25,603 |
+
+Raw runs: `publicframepty2259/summary.json`, `profiledthreeprotocols2267/summary.json` and `offlinepairedworkers2261/{baseline,candidate}-{output,cancel}/measure.json`. E2279 binds the terminal files, driver difference and raw measurements in `publicworkerptyreceipt2279/qualified.json`. These arms do not qualify all startup, memory or final-release gates.

@@ -107,11 +107,11 @@ public open class HostJavaScriptPluginServiceRuntime {
     }
 
     func observerTaskFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        identity: HostPluginServiceIdentity, plan: NormalizedOperationPlan, call: ToolCall): HostJavaScriptPluginInvocationObserver {
+        identity: HostPluginServiceIdentity, plan: NormalizedOperationPlan, call: HostTaskCallIdentity): HostJavaScriptPluginInvocationObserver {
         HostJavaScriptPluginInvocationObserver(context, prepared,
             Some(HostJavaScriptPluginServiceBroker(catalog, pipeline, operations, askRuntime, context, prepared,
                 identity: Some(identity), readonlyExecRoute: readonlyExecRoute,
-                taskBorrowedPlan204: Some(plan), taskBorrowedCall204: Some(call))))
+                taskBorrowedPlan204: Some(plan), taskCallIdentity: Some(call))))
     }
 
     public func channelBroker(context: ToolInvocationContext, prepared: PreparedToolInvocation,
@@ -413,10 +413,14 @@ public class HostJavaScriptPluginServiceBroker {
     private let rootPrepared: PreparedToolInvocation
     private let taskBorrowSelected204: Bool
     private var taskBorrowedPlan204: ?NormalizedOperationPlan
-    private var taskBorrowedCall204: ?ToolCall
-    private prop invocationCall204: ToolCall { get() {
-        if (taskBorrowSelected204) { return taskBorrowedCall204.getOrThrow() }
-        rootPrepared.call
+    private var taskCallIdentity: ?HostTaskCallIdentity
+    private prop invocationCallId204: String { get() {
+        if (taskBorrowSelected204) { return taskCallIdentity.getOrThrow().callId }
+        rootPrepared.call.callId
+    } }
+    private prop invocationName204: String { get() {
+        if (taskBorrowSelected204) { return taskCallIdentity.getOrThrow().name }
+        rootPrepared.call.name
     } }
     private prop invocationPlan204: NormalizedOperationPlan { get() {
         if (taskBorrowSelected204) {
@@ -509,7 +513,7 @@ public class HostJavaScriptPluginServiceBroker {
         }
         match (validatePluginRootAuthority(waitingService171)) { case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>() }
         let bound=identity.getOrThrow();let prefix="plugin."+bound.namespace+"."
-        let local=invocationCall204.name[prefix.size..]
+        let local=invocationName204[prefix.size..]
         let selected=match(bound.host.primitiveConfiguration111(bound.namespace,local,bound.generation)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(Some(value))=>value
             case Result.Ok(None)=>return hostChildRecovery111("actual selected waiting contribution is unavailable")}
@@ -606,7 +610,7 @@ public class HostJavaScriptPluginServiceBroker {
         // Every real Native/Future/callback helper has returned above. Revoke
         // only this private Task plan borrow before its outer loan may return.
         taskBorrowedPlan204 = None<NormalizedOperationPlan>
-        taskBorrowedCall204 = None<ToolCall>
+        taskCallIdentity = None<HostTaskCallIdentity>
         Result.Ok(())
     }
     private func clearReturnedChildContextFrame159(): ?ToolInvocationContext {
@@ -624,7 +628,7 @@ public class HostJavaScriptPluginServiceBroker {
         if(service=="peer.send" && invocationPlan204.canonicalArguments.field("host_plan").getOrThrow().field("intents").getOrThrow().asArray().get(0).getOrThrow().field("input").getOrThrow().field("await_reply").isNone()) { return Result<?ToolResult>.Ok(None<ToolResult>) }
         match(validatePluginRootAuthority(service)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         let actual=identity.getOrThrow();let prefix="plugin."+actual.namespace+"."
-        let configuration=match(actual.host.primitiveConfiguration111(actual.namespace,invocationCall204.name[prefix.size..],actual.generation)){
+        let configuration=match(actual.host.primitiveConfiguration111(actual.namespace,invocationName204[prefix.size..],actual.generation)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(Some(value))=>value
             case Result.Ok(None)=>return hostChildRecovery111("actual observation configuration was retired")}
         let loan=configuration.inputTemporaryPayment111(1048576)
@@ -701,7 +705,7 @@ public class HostJavaScriptPluginServiceBroker {
         httpStreamBinding!: ?AgentValue = None,
         readonlyExecRoute!: ?HostPluginReadOnlyExecRoute = None,
         taskBorrowedPlan204!: ?NormalizedOperationPlan = None<NormalizedOperationPlan>,
-        taskBorrowedCall204!: ?ToolCall = None<ToolCall>
+        taskCallIdentity!: ?HostTaskCallIdentity = None<HostTaskCallIdentity>
     ) {
         this.catalog = catalog
         this.pipeline = pipeline
@@ -712,9 +716,9 @@ public class HostJavaScriptPluginServiceBroker {
         this.rootPrepared = rootPrepared
         this.taskBorrowSelected204 = taskBorrowedPlan204.isSome()
         this.taskBorrowedPlan204 = taskBorrowedPlan204
-        this.taskBorrowedCall204 = taskBorrowedCall204
-        if (taskBorrowedPlan204.isSome() != taskBorrowedCall204.isSome()) {
-            throw IllegalArgumentException("Task call and plan must share one actual Native reader frame")
+        this.taskCallIdentity = taskCallIdentity
+        if (taskBorrowedPlan204.isSome() != taskCallIdentity.isSome()) {
+            throw IllegalArgumentException("Task call identity and plan must share one actual Native frame")
         }
         if (channelBinding.isSome() && httpStreamBinding.isSome()) {
             throw IllegalArgumentException("a service broker has exactly one transport binding")
@@ -929,7 +933,7 @@ public class HostJavaScriptPluginServiceBroker {
                 )
             }
             match (rootContext.outputSink.emit(ToolOutputChunk(
-                invocationCall204.callId,
+                invocationCallId204,
                 ToolOutputChannel.Progress,
                 "Pi notification [" + notificationType + "]: " + message
             ))) {
@@ -1044,7 +1048,7 @@ public class HostJavaScriptPluginServiceBroker {
         )
         match (askRuntime.ask(
             rootContext,
-            invocationCall204.callId + ":ui:" + requestId,
+            invocationCallId204 + ":ui:" + requestId,
             [question],
             interactionKind: interactionKind,
             operationId: rootPrepared.operationId.value,
@@ -1149,7 +1153,7 @@ public class HostJavaScriptPluginServiceBroker {
             return hostExecutePluginDocument(catalog, pipeline, operations, actual, rootContext, rootPrepared,
                 invocationId, requestId, arguments)
         }
-        let callId = invocationCall204.callId + ":service:" + requestId
+        let callId = invocationCallId204 + ":service:" + requestId
         var execTarget: ?HostPluginReadOnlyExecTarget = None
         var returnsConcreteTarget159 = false
         let call = if (service == "tool.readonly") {
@@ -1235,14 +1239,14 @@ public class HostJavaScriptPluginServiceBroker {
         }
         let requestKey = if (service == "tool.readonly" ||
             (service=="file.plan.propose" && readonlyDelegationFilePlanProposalsEnabled(invocationPlan204))) {
-            readonlyDelegationRequestKey(invocationCall204.callId, callId)
+            readonlyDelegationRequestKey(invocationCallId204, callId)
         } else if (service == "process.channel.write") {
-            "channel-service:" + invocationCall204.callId + ":" +
+            "channel-service:" + invocationCallId204 + ":" +
                 httpIntentText(call.arguments.field("intent").getOrThrow(), "id")
         } else if (service == "network.http.stream") {
-            "http-stream-service:" + invocationCall204.callId + ":" +
+            "http-stream-service:" + invocationCallId204 + ":" +
                 httpIntentText(call.arguments.field("intent").getOrThrow(), "id")
-        } else { "javascript-service:" + invocationCall204.callId + ":" + requestId }
+        } else { "javascript-service:" + invocationCallId204 + ":" + requestId }
         let executionContext = match (execTarget) { case None => childContext
             case Some(target) => match (target.context(rootPrepared, rootContext, childContext)) {
                 case Result.Err(error) =>
@@ -1323,13 +1327,13 @@ public class HostJavaScriptPluginServiceBroker {
                 return hostPluginResourceError("child.source_invalid", "only the exact canonical Tool invocation can start its child") }
             let actual = identity.getOrThrow()
             let prefix = "plugin." + actual.namespace + "."
-            if (!invocationCall204.name.startsWith(prefix)) { return hostPluginResourceError("child.contribution_invalid", "child belongs to another Tool") }
+            if (!invocationName204.startsWith(prefix)) { return hostPluginResourceError("child.contribution_invalid", "child belongs to another Tool") }
             if (taskBorrowSelected204) {
                 return hostChildInvocationPlanFrame204(actual.host, rootContext, rootPrepared, actual.namespace,
-                    invocationCall204.name[prefix.size..], actual.generation, invocationPlan204)
+                    invocationName204[prefix.size..], actual.generation, invocationPlan204)
             }
             match (hostChildInvocationInput111(actual.host, rootContext, rootPrepared, actual.namespace,
-                invocationCall204.name[prefix.size..], actual.generation)) {
+                invocationName204[prefix.size..], actual.generation)) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             return Result.Ok(())
         }
@@ -1344,7 +1348,7 @@ public class HostJavaScriptPluginServiceBroker {
         if (httpStreamBinding.isSome()) {
             if (service != "network.http.stream" || !isFrozenHttpStreamParentPlan(invocationPlan204) ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
-                invocationCall204.name != invocationPlan204.toolName ||
+                invocationName204 != invocationPlan204.toolName ||
                 canonicalAgentValue(invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
                     .field("binding").getOrThrow()) != httpStreamBinding.getOrThrow()) {
                 return hostPluginResourceError("http.stream_parent_invalid", "HTTP stream broker requires its actual canonical root")
@@ -1361,7 +1365,7 @@ public class HostJavaScriptPluginServiceBroker {
         if (channelBinding.isSome()) {
             if ((service != "process.channel.write" && service != "file.plan.propose") || !isFrozenChannelParentPlan(invocationPlan204) ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
-                invocationCall204.name != invocationPlan204.toolName ||
+                invocationName204 != invocationPlan204.toolName ||
                 canonicalAgentValue(invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
                     .field("binding").getOrThrow()) != channelBinding.getOrThrow()) {
                 return hostPluginResourceError("channel.parent_invalid", "channel broker requires its host-held exact canonical root")
@@ -1370,7 +1374,7 @@ public class HostJavaScriptPluginServiceBroker {
                 !hostPluginPlanRequires(invocationPlan204, CapabilityKind.WorkspaceRead) ||
                 !hostPluginPlanRequires(invocationPlan204, CapabilityKind.ExtensionInvoke) ||
                 !rootContext.capabilities.allows(CapabilityKind.WorkspaceRead) ||
-                !rootContext.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: invocationCall204.name))) {
+                !rootContext.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: invocationName204))) {
                 return hostPluginResourceError("channel.file_plan_capability_denied", "file proposal exceeds the real root workspace ceiling")
             }
             for (required in invocationPlan204.requiredCapabilities where
@@ -1393,10 +1397,10 @@ public class HostJavaScriptPluginServiceBroker {
             }
             return Result.Ok(())
         }
-        if (invocationCall204.name != invocationPlan204.toolName ||
-            !invocationCall204.name.startsWith("plugin.") ||
-            !CapabilitySet(values: invocationPlan204.requiredCapabilities).allows(CapabilityKind.ExtensionInvoke, resource: invocationCall204.name) ||
-            !rootContext.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: invocationCall204.name) ||
+        if (invocationName204 != invocationPlan204.toolName ||
+            !invocationName204.startsWith("plugin.") ||
+            !CapabilitySet(values: invocationPlan204.requiredCapabilities).allows(CapabilityKind.ExtensionInvoke, resource: invocationName204) ||
+            !rootContext.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: invocationName204) ||
             (service != "network.http" &&
                 (!hostPluginPlanRequires(invocationPlan204, CapabilityKind.WorkspaceRead) ||
                 !rootContext.capabilities.allows(CapabilityKind.WorkspaceRead)))) {

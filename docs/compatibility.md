@@ -160,16 +160,16 @@ For example, `prepared.withCanonicalCallInput({ input => input.stringField("path
 copies a text field. Neither view grants permission to execute. A saved view
 rejects reads after the callback returns or throws.
 
-For a counted metadata consumer, replace `reader.withCall204` with
-`reader.withCallInput` for display arguments or `reader.withCanonicalCallInput`
-for the frozen arguments. For Task selection, `resolverChildStartOrWaitGeneration`
+The raw `withCall204` callback was removed from both `PreparedToolInvocation`
+and its counted metadata reader. Replace it with `withCallInput` for display
+arguments or `withCanonicalCallInput` for frozen arguments. For Task selection, `resolverChildStartOrWaitGeneration`
 reads the matching namespace and contribution; `resolverSelectsChildWait`
 compares the start ID and complete binding. To name a derived child call, use
 `resolverChildServiceIds(input, requestId)` inside `withCallInput`. It returns
 only the child call ID and its idempotency key; neither string retains the parent
 call or its arguments. These reads do not grant permission to launch or reuse a Receipt. Use `textEquals` for comparisons and
-`copyText` only when the recipient needs its own string. The raw-call callback on the reader
-no longer compiles; recompile host extensions against the updated Tool API.
+`copyText` only when the recipient needs its own string. Recompile Host
+extensions that used the old callback against the updated Tool API.
 Returning a scoped view does **not** return the reader. Call
 `reader.returnConsumerFrame204()` only when that reader's real consumers have
 finished, including a published result's payload acknowledgement if it still

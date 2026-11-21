@@ -2652,8 +2652,8 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
     ): Result<ToolResult> {
         if (closedPlainDataOnly204) { return executePlainDataOnly204(context, prepared, executionObservation) }
         if (hostWorkflowTaskDataSelected204(host, extensionId, toolName, instanceGeneration)) {
-            return prepared.withOperationPlan204({ plan => prepared.withCall204({ call =>
-                executeTaskActualFrame204(context, prepared, executionObservation, plan, call) }) })
+            return prepared.withOperationPlan204({ plan =>
+                executeTaskActualFrame204(context, prepared, executionObservation, plan) })
         }
         executeLegacyActualFrame204(context, prepared, executionObservation: executionObservation)
     }
@@ -2752,7 +2752,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
     }
 
     private func executeTaskActualFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        executionObservation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall): Result<ToolResult> {
+        executionObservation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan): Result<ToolResult> {
         if(isPluginLivePolicyParentPlan(plan)){
             return hostPluginResourceError("plugin.live_owned_entry_required","live Parent requires the actual typed owned Pipeline entry")}
         if (instanceGeneration == 0u64) {
@@ -2785,12 +2785,18 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         let input = try { copyHostTaskInvocationInput204(configuration, plan) }
             catch (_: LogicalJsonPayloadError) { return Result.Err(AgentError(AgentErrorKind.BudgetExceeded,
                 "extension.payload_capacity", "Task invocation input cannot fit the original shared payload capacity")) }
+        let call = try { prepared.withCallInput({ view => configuration.copyTaskCallIdentity(view) }) }
+            catch (_: LogicalJsonPayloadError) {
+                let _ = input.retireAfterCompleteTaskFrame()
+                return Result.Err(AgentError(AgentErrorKind.BudgetExceeded, "extension.payload_capacity",
+                    "Task call identity cannot fit the original shared payload capacity"))
+            } catch (error: Exception) { let _ = input.retireAfterCompleteTaskFrame(); throw error }
         let returned = [false]
         try { input.withData({ arguments => executeTaskInputFrame204(context, prepared, executionObservation, plan, call, arguments, returned) }) }
         finally { if (returned[0]) { let _ = input.retireAfterCompleteTaskFrame() } }
     }
     private func executeTaskInputFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        executionObservation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: ToolCall,
+        executionObservation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: HostTaskCallIdentity,
         invocationArguments: AgentValue, returned: Array<Bool>): Result<ToolResult> {        let toolPayload: ?OrdinaryToolPayloadLimits = if (isFrozenReadonlyDelegationParentPlan(plan)) {
             ordinaryToolPayloadLimitsFromValue(plan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
         } else if (isFrozenPluginDocumentParentPlan(plan) || isFrozenReadViewParentPlan(plan)) {
@@ -2886,7 +2892,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
     }
     private func executeObservedTaskInvocationFrame204(context: ToolInvocationContext,
         prepared: PreparedToolInvocation, executionObservation: ?HostToolExecutionCancellationObservation,
-        plan: NormalizedOperationPlan, call: ToolCall, invocationArguments: AgentValue, toolPayload: ?OrdinaryToolPayloadLimits,
+        plan: NormalizedOperationPlan, call: HostTaskCallIdentity, invocationArguments: AgentValue, toolPayload: ?OrdinaryToolPayloadLimits,
         identity: JavaScriptHostInvocationIdentity, dataOnly: Bool, preparedCompletion152: Bool,
         observer: HostJavaScriptPluginInvocationObserver): Result<ToolResult> {
         if(httpIntentText(plan.canonicalArguments.field("host_plan") ?? nullValue(),"version")==PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA ||

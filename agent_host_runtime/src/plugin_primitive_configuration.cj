@@ -204,12 +204,31 @@ class HostPrimitiveConfiguration111 {
         var retained = false
         try {
             loan.ensureRetainedPeak(bytes + 4096)
-            let hold = HostPrimitivePlanData111(loan, nullValue())
-            planLock.lock()
-            try { copiedPlans.add(hold); retained = true } finally { planLock.unlock() }
+            registerWorkerMetadata(loan); retained = true
         } finally { if (!retained) { loan.close() } }
     }
 
+    // Native identity, ordinary output sinks and ToolResult can each keep these
+    // strings after the Task frame returns. Keep only their independent payment
+    // on the same installed configuration's existing worker-metadata list.
+    func copyTaskCallIdentity(input: ToolResolverInput): HostTaskCallIdentity {
+        let idBytes = input.byteCount(ToolResolverText.CallId)
+        let nameBytes = input.byteCount(ToolResolverText.Name)
+        let available = (Int64.Max - 20480) / 6
+        if (idBytes > available || nameBytes > available - idBytes) {
+            throw LogicalJsonPayloadError("Task call identity invoice overflow")
+        }
+        let loan = deriveDataPayment191(20480 + (idBytes + nameBytes) * 6)
+        var published = false
+        try {
+            let copy = HostTaskCallIdentity(input.copyText(ToolResolverText.CallId), input.copyText(ToolResolverText.Name))
+            registerWorkerMetadata(loan); published = true; copy
+        } finally { if (!published) { loan.close() } }
+    }
+    private func registerWorkerMetadata(loan: LogicalJsonOwnerReservation): Unit {
+        let hold = HostPrimitivePlanData111(loan, nullValue())
+        planLock.lock(); try { copiedPlans.add(hold) } finally { planLock.unlock() }
+    }
     func retainObservation(encodedCeiling: Int64, nodeCeiling: Int64, build: () -> AgentValue): AgentValue {
         if(encodedCeiling<1 || nodeCeiling<1 || encodedCeiling>Int64.Max/64 || nodeCeiling>Int64.Max/2048){
             throw IllegalArgumentException("observation accounting exceeds its representable invoice")}

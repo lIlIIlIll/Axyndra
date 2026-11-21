@@ -250,13 +250,6 @@ public class PreparedToolInvocation {
             operationPlanData204.getOrThrow().canonicalArguments), body) }
         withToolResolverInput(call, body)
     }
-    public func withCall204<T>(body: (ToolCall) -> T): T {
-        if (metadataReturned204) { throw IllegalStateException("prepared DATA has returned") }
-        try { body(callData204.getOrThrow()) }
-        catch (error: Exception) {
-            match (detachedMetadata204) { case Some(value) => value.holdUnknown204(); case None => () }; throw error
-        }
-    }
     public func withApproval204<T>(body: (?ApprovalRequest) -> T): T {
         requireMetadataBorrow204()
         try { body(approvalData204) }
