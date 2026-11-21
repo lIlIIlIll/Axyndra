@@ -5208,3 +5208,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2362: installed defaults use a presence check; complete Core still fails
 
 [Eight Native distribution cases and paired query measurements](implementation/plan-execution-reliability.md#e2362-check-installed-defaults-without-copying-the-registry) verify the new lookup without changing package integrity or operator enablement. On its parent `c8d896d5`, all 436 eligible Product cases and 16 selected packaging stages passed. The unsplit Core still failed on `host.process.readview`; neither the five-second model entry nor whole Product or final release is accepted. GC work remains deferred.
+
+### File-plan preview and the cold local model request (E2365)
+
+[The real preview/recovery/apply contract](implementation/plan-execution-reliability.md#e2365-verify-a-file-plan-preview-without-exporting-digest-copies) passed on `a16c0566` plus the preview change. Earlier unsplit Core retained the failed read-view receipt. On `c8d896d5` the local model attempt reached dispatch but no POST arrived within five seconds. The matched CLI latency regressions remain open; neither the 606 endpoint cases nor the selected Product cases establish final release acceptance.

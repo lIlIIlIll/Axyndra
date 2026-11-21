@@ -100,9 +100,9 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
                 case Result.Err(error) => return Result.Err(error)
             }
             let root = prepared.source.operationRoot.getOrThrow()
-            if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) == "" ||
-                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) != pluginReceiptText(arguments, "package_digest") ||
-                !pluginFilePlanParentIdentity(parent, arguments, namespace, productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest))) ||
+            let packageDigest = pluginReceiptText(arguments, "package_digest")
+            if (packageDigest == "" || !descriptor.textEquals(PluginDescriptorText.ContentDigest, packageDigest) ||
+                !pluginFilePlanParentIdentity(parent, arguments, namespace, packageDigest) ||
                 parent.toolName != root.toolName() || !parent.toolName.startsWith("plugin." + namespace + ".") ||
                 context.workspaceRoot != workspace.rootPath()) {
                 return pluginProcessError("application_plan.source_mismatch", "file plan origin must match the frozen parent and workspace")
