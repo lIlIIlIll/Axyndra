@@ -11819,3 +11819,20 @@ E2296, over `244404b010`: the ordinary service broker uses closed predicates for
 The fixed-SDK Native run passed all 87 Tool tests (ELF `803226dea03a`) and 18 selected Host tests from a natural inventory of 282 (`5187447c92ad`). The reentry case returned the paid child producer during the parent comparison: its allocation remained live inside the comparison and returned afterward. E2295 qualified the preceding ReadView result-ID change, **not** the new broker: Task persistence, Memory and Prompt Memory v3 external consumers rebuilt and ran successfully. The Tool and SDK consumer evidence from E2290 remains applicable to that preceding change because neither resolved closure includes the modified Host package.
 
 E2297 rebuilt Native Core (`d74769912d09`) from the same three E2296 source files. The unchanged budget and cancellation/recovery controls passed; the unsplit gate failed at workspace grep and its nested `host.process.readview`, both with `read_view.output_capacity`. Six original SQLite files were unchanged after inspection. The two projections contained 1/4/4 and 35/69/69 Runs/Operations/Receipts and matched all 3 + 37 preceding authorization edges, including their actual plan and Receipt bindings. No capacity improvement, complete Product result, five-second provider result or final release is claimed for this candidate.
+
+### Release packages on the closed broker source
+
+E2298 rebuilt all 11 production stages and 22 outputs from the E2296 behavior published in `de166288de`. The production App was `0eec69583406`; it is not the packaged executable. E2300 assembled Minimal, Coding and Full with 0, 9 and 17 bundled plugins respectively. Minimal (`c9a5d5f988a1`) passed clean-environment and empty-offline execution. Coding and Full shared the packaged ELF `eadffca25d8a`, but their package manifests differed. Both passed clean-environment, setup and the Skills, Program and Shell wire checks; Full also passed the Eval wire check. All 16 recorded assembly and entrypoint stages exited zero with process custody closed. Evidence: `brokerclosedparentsrelease2298/summary.json` and `publicbrokerpackages2300/summary.json`.
+
+These setup checks do not exercise the first local model request. E2300 is not a full Product, Core or release acceptance result.
+
+### Refusal-time catalog ownership
+
+E2301 stopped the E2297 Native Core executable (`d74769912d09`) at the rejected `host.process.readview` allocation. The bank had charged 140,931,608 of 150,994,944 bytes. The 131,072-byte output request required a 16,777,216-byte new reservation: 6,713,880 bytes over capacity. The two Registry ledgers accounted for 39,905,384 and 16,812,464 bytes of bank capacity. Their holdings at the stop included:
+
+| Registry | Catalog identity leases | Identity bytes | Tool declaration leases | Declaration bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Main | 9 | 1,105,408 | 30 | 5,825,088 |
+| Fault | 4 | 520,064 | 16 | 3,214,848 |
+
+All 59 leases were distinct, open and on the same bank. Every identity had completed construction but still had one Catalog share. Twelve recorded original configuration aliases; **none** recorded an actual legacy-alias retirement refusal. These are holders, not proven leaks or refundable bytes. The 37 opaque Prepared owners separately accounted for 10,049,208 bytes. All six original SQLite files remained unchanged and all 40 durable derived edges matched E2297, including the two failed reserved Receipts. Evidence: `brokercatalogrefusal2301/qualified.json`. No limits or return conditions changed.
