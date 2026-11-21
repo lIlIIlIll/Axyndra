@@ -1502,12 +1502,7 @@ public class HostJavaScriptPluginServiceBroker {
     }
 
     private func childCapabilitiesCurrent(prepared: PreparedToolInvocation): Bool {
-        prepared.withOperationPlan204({ child =>
-            for (required in child.requiredCapabilities where !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
-                return false
-            }
-            true
-        })
+        prepared.matchesFrozenPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))
     }
 
     private func validateChildPlan(prepared: PreparedToolInvocation,
@@ -1516,10 +1511,9 @@ public class HostJavaScriptPluginServiceBroker {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         if (isFrozenReadonlyDelegationParentPlan(invocationPlan204)) {
             let preview = prepared.textEquals(PreparedMetadataText.CallName, PLUGIN_FILE_PLAN_TOOL)
-            let allowed = prepared.withOperationPlan204({ child =>
-                if (preview) { readonlyDelegationFilePlanProposalAllowed(invocationPlan204, child) }
-                else { readonlyDelegationChildAllowed(invocationPlan204, child) }
-            })
+            let rule = if (preview) { FrozenPluginPlanRule.FilePlanPreviewOf(invocationPlan204) }
+                else { FrozenPluginPlanRule.ReadonlyTargetOf(invocationPlan204) }
+            let allowed = prepared.matchesFrozenPlan(rule)
             if (!allowed) {
                 if (preview) { return hostPluginResourceError("readonly_delegation.file_plan_denied", "preview differs from its exact frozen operator Root") }
                 return hostPluginResourceError("readonly_delegation.child_denied", "child differs from the exact frozen readonly contribution")
@@ -1536,7 +1530,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_STREAM_TOOL)) {
-            if (httpStreamBinding.isNone() || !prepared.withOperationPlan204({ child => httpStreamServiceChildAllowed(invocationPlan204, child) })) {
+            if (httpStreamBinding.isNone() || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.HttpStreamChildOf(invocationPlan204))) {
                 return hostPluginResourceError("http.stream_intent_changed", "HTTP stream child exceeds its exact frozen parent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_HTTP_STREAM_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
@@ -1552,7 +1546,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_CHANNEL_WRITE_TOOL)) {
-            if (channelBinding.isNone() || !prepared.withOperationPlan204({ child => channelServiceChildAllowed(invocationPlan204, child) })) {
+            if (channelBinding.isNone() || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ChannelChildOf(invocationPlan204))) {
                 return hostPluginResourceError("channel.intent_changed", "channel child exceeds the exact frozen parent intent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_CHANNEL_WRITE_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
@@ -1568,7 +1562,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_READ_VIEW_TOOL)) {
-            if (!prepared.withOperationPlan204({ child => readViewServiceChildAllowed(invocationPlan204, child) })) {
+            if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChildOf(invocationPlan204))) {
                 return hostPluginResourceError("read_view.intent_changed", "resource child differs from its exact parent intent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_READ_VIEW_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
@@ -1583,7 +1577,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_SERVICE_TOOL)) {
-            if (!prepared.withOperationPlan204({ child => httpServiceChildAllowed(invocationPlan204, child) })) {
+            if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.HttpChildOf(invocationPlan204))) {
                 return hostPluginResourceError("http.intent_changed", "HTTP child exceeds its exact frozen parent intent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, "host-http-intent-v1", ThreadId(rootContext.sessionId.value))) {

@@ -5100,3 +5100,7 @@ E2265: on the E2263 candidate, the Program budget and cancellation/recovery cont
 ### Task identity and scoped release checks (E2248, E2259, E2261, E2267–E2279)
 
 **Incomplete; PR remains Draft.** The raw `withCall204` callback is gone. The paid Task identity passed Tool 87/87, 17 selected Host tests and five external consumers, including two actual Memory release contracts. On the earlier `63d4816ade` artifacts, ten real PTY flows passed, as did three separate Full protocol suites (57/57) and the matched two-worker output/cancellation runs. E2248 has direct GC evidence for a provider-installation crash before timing, not for the outstanding five-second timeout. No change to the E2258 full-suite verdict or the continuous Core refusal. [Scope, revisions and evidence](implementation/plan-execution-reliability.md#task-call-identity-without-a-raw-prepared-call).
+
+### Brokered child authorization (E2274, E2277)
+
+The broker uses closed frozen-plan comparisons; Source, current capabilities, descriptor checks and SQL settlement remain mandatory. Combined Task/broker: Tool 87/87 and 17 selected Host cases passed. Broker-only continuous Core: 40 derived tuples matched E2265 across both stores, but both read-view and grep Receipts still failed `read_view.output_capacity`. **Incomplete; PR remains Draft.** [Evidence and source boundaries](implementation/plan-execution-reliability.md#broker-child-checks-no-longer-lend-the-raw-plan).

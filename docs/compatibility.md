@@ -182,6 +182,11 @@ example `prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChild)`.
 `ReadViewChildOf(parent)` also checks that the frozen child matches the parent
 intent. Both return a Boolean, not a plan or its arguments. A reader retained
 before the producer returns can make the same comparisons until its own return.
+For brokered children, use `ReadonlyTargetOf(parent)`, `FilePlanPreviewOf(parent)`,
+`HttpStreamChildOf(parent)`, `ChannelChildOf(parent)`, `ReadViewChildOf(parent)`
+or `HttpChildOf(parent)` for the corresponding frozen relationship. Use
+`CapabilitiesWithin(ceiling)` to test every required capability and its resource.
+Rebuild consumers and update any exhaustive matches for the new enum cases.
 A match does not replace Source, approval or current capability checks.
 
 ## Migrate a Host scheduler's derived-frame callback

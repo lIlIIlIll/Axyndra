@@ -96,6 +96,11 @@ class PreparedMetadataCopy204Tests {
         host.put("max_calls", integerValue(0))
         @Expect(!isFrozenReadonlyDelegationParentPlan(plan))
         @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent))
+        @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.CapabilitiesWithin(context.capabilities)))
+        let wrongResource = CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke, resource: "other")])
+        @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.CapabilitiesWithin(wrongResource)))
+        let exact = CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke, resource: name)])
+        @Expect(reader.matchesFrozenPlan(FrozenPluginPlanRule.CapabilitiesWithin(exact)))
         @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChildOf(plan)))
         owner.producerReturned204(); root.close()
         var closed = false
