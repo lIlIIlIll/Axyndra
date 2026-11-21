@@ -5186,3 +5186,9 @@ The earlier inherited Coding request fault is still unclassified. Its retained c
 ### E2357: a returned producer cannot export another reader’s Prepared data
 
 The new Native regression kept one real reader live after its producer returned. On `75d3d4a7`, both `prepared.call` and `prepared.operationPlan` still returned data. Those two accesses left the test bank charged 16,777,216 bytes even after its last reader returned. With the fix, both accesses throw, the reader can still read the original tool name, and its final return leaves zero charged bytes. All 96 Tool Runtime cases passed. This does not refund earlier exports or resolve the unsplit Core capacity failure.
+
+### E2358: eligible Product and matched release results on `75d3d4a7`
+
+The fixed-SDK Product ELF naturally enumerated 1,108 tests. The 437 eligible tests actually ran: 436 passed and one crashed. The 671 previously deferred tests were not rerun. The new crash reached the pinned runtime’s GC root traversal instruction during plugin package inspection; the capability assertion did not pass. This classification applies to this execution only.
+
+All 16 selected release stages passed across Minimal, Coding and Full. On the matched Coding packages, disabled-plugin CLI cold-start P95 increased from 137.161 to 412.936 ms; declarative inspection increased from 147.509 to 471.103 ms. Both absolute gates passed. Neither result is final release acceptance or evidence for a later source revision. The non-GC Core capacity failure, first model request and Prepared API migration remain open.

@@ -12012,3 +12012,21 @@ The service check reads the current generation and operator selection. It compar
 `PreparedMetadataOwner204.exportFromProducer204` checks the producer identity and its return flag under the same lock that records an unknown recipient. An independently paid `PreparedToolInvocation` uses this check for its display call and raw metadata exports. A previously exported reference remains paid; no caller can obtain new raw data merely because a different reader is still live. Catalog and uncounted display calls are unchanged.
 
 `PreparedMetadataCopy204Tests.retiredProducerCannotPublishCallOrPlanThroughAnotherReadersPayment` failed on the previous behavior: both accesses succeeded, and the final bank reading was 16,777,216 instead of zero. The changed Tool Runtime ELF (`f88f6c495067dfacc3a76ff8346104c3154feb431b8e9ea1bd49d8ef27b11655`) passed 96/96, including the existing historical-export retention case. Both the failing and passing executions returned without forced process cleanup. This establishes the property lifetime contract, not a release of any historical Core owner. The separate callback-export defect and the wider call/plan API migration remain open.
+
+### E2358: bind eligible Product and matched release checks to `75d3d4a7`
+
+Product ELF `c266772ac703974ac770026f8031361ef1e9d2a685e416d57f35d56718ebedf4` ran all 437 eligible tests from its 1,108-test inventory (215 before interruption; 222 on the same executable after resumption). Each has a matching original log and physical process receipt, without forced cleanup. Of these, 436 passed. `PluginRuntimeContractTests.codexCommandHooksWithoutCapabilityGrantsRemainInactive` failed with SIGSEGV in `MapleRuntime::CheckAndPush` at `0x637f21`, while opening a package file. The fixed runtime matches E1488’s GC visitor disassembly; no dynamic parent GC visitor frame is claimed. The 671 known GC cases were not run. Evidence: `primitiveboundproduct2356/qualified.json`.
+
+The 16 selected release stages cover Minimal assembly, clean environment and empty offline startup; Coding assembly, clean environment, setup and three wire contracts; Full the Coding stages plus eval wire. The Coding ELF is `077f585c814aa52f2502af2613e2ab911064920260f432a60f820acf99be575d`. Against the fixed `4d88fa60` baseline packages, these are the matched P95 values; cancellation includes the original 100 ms trigger.
+
+| Metric | Samples per arm | Baseline | Candidate |
+|---|---:|---:|---:|
+| Extension activation, ms | 12 | 86.416 | 60.357 |
+| First call, ms | 12 | 11.259 | 0.740 |
+| Steady IPC, ms | 240 | 9.168 | 0.262 |
+| Extension host RSS, bytes | 12 | 29,245,440 | 20,836,352 |
+| Cancel, ms | 12 | 127.880 | 127.404 |
+| Disabled-plugin CLI cold start, ms | 20 | 137.161 | 412.936 |
+| Declarative inspection, ms | 20 | 147.509 | 471.103 |
+
+Both packaged absolute gates passed. The two relative CLI regressions remain; these are not model-profile, whole Product or final-source results. Evidence: `primitiveboundpackages2355/qualified.json`, `primitiveboundmatched2356/qualified.json`.
