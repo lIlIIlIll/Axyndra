@@ -21,6 +21,39 @@ public enum FrozenPluginChildRelation {
     }
 }
 
+// Current operator/package facts can be compared without giving their caller
+// the frozen input. These are separate checks so Host can preserve its errors.
+public enum FrozenReadViewCheck {
+    Identity(String, String, UInt64, String) | Grant(String, Bool) |
+    PayloadLimits(AgentValue) | Deadline(?AgentValue)
+
+    func matches(arguments: AgentValue): Bool {
+        let host = match (arguments.field("host_plan")) { case Some(value) => value; case None => return false }
+        match (this) {
+            case Identity(namespace, tool, generation, digest) =>
+                httpIntentText(host, "plugin") == namespace && httpIntentText(host, "contribution") == tool &&
+                    httpIntentText(host, "generation") == generation.toString() && httpIntentText(host, "package_digest") == digest
+            case Grant(digest, granted) =>
+                match (host.field("read_granted")) {
+                    case Some(value) => value.unifiedKind == ValueKind.Boolean && value.asBool() == granted &&
+                        httpIntentText(host, "configuration_digest") == digest
+                    case None => false
+                }
+            case PayloadLimits(expected) =>
+                match (host.field("tool_payload_limits")) {
+                    case Some(value) => canonicalAgentValuesEqual(expected, value)
+                    case None => false
+                }
+            case Deadline(selected) =>
+                let intents = match (host.field("intents")) { case Some(value) => value; case None => return false }
+                if (intents.unifiedKind != ValueKind.List || intents.items.size != 1) { return false }
+                let intent = intents.items[0]
+                canonicalAgentValuesEqual(selected ?? nullValue(), intent.field("deadline_profile") ?? nullValue()) &&
+                    validateReadViewIntent(intent).isOk()
+        }
+    }
+}
+
 public enum FrozenPluginPlanRule {
     LivePolicyParent | ReadonlyDelegationParent | DocumentParent | ReadViewParent |
     ReadonlyInputAttachment | ReadonlyFilePlanProposals | DocumentPayloadProtocol |
@@ -30,12 +63,14 @@ public enum FrozenPluginPlanRule {
     HttpChildOf(NormalizedOperationPlan) | CapabilitiesWithin(CapabilitySet) |
     ReadonlyDelegatedChild | HttpStreamParent | ChannelParent | AllowsChild(FrozenPluginChildRelation, PreparedToolInvocation) |
     DerivableParent(Bool, Bool) | PermitsDerivedIntent(NormalizedOperationPlan, String, String, String) |
-    FileApplicationContentsMatch(AgentValue, AgentValue)
+    FileApplicationContentsMatch(AgentValue, AgentValue) | ReadViewFact(FrozenReadViewCheck) | Effect(OperationEffectClass)
 
     // A broker may already own the parent plan (Task or durable Store).
     // Otherwise both Prepared participants pin their own DATA for this call.
     public func matches(plan: NormalizedOperationPlan): Bool {
         match (this) {
+            case Effect(expected) => plan.effectClass == expected
+            case ReadViewFact(check) => check.matches(plan.canonicalArguments)
             case FileApplicationContentsMatch(operations, patch) =>
                 let arguments = plan.canonicalArguments
                 match ((arguments.field("operations"), arguments.field("patch_artifact"))) {

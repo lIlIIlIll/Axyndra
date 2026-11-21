@@ -5236,3 +5236,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### Retained attachment isolation (E2371)
 
 [Complete Native Store: 263/263](implementation/plan-execution-reliability.md#e2371--retained-attachment-evidence-is-independent-of-the-submitted-artifact). The new regression failed in both mutation directions on the previous implementation. This fixes returned evidence, not the continuous Core capacity refusal or the five-second model gate.
+
+### Read-view validation and Core capacity (E2372)
+
+[101/101 Tool, 12 selected Host cases and five Native Core controls](implementation/plan-execution-reliability.md#e2372-validate-a-read-view-without-exporting-its-prepared-input). Validation no longer exports the input. The actual continuous Core receipt still records `read_view.output_capacity`; the earlier DATA debts remain payable.

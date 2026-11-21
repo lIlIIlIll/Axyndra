@@ -18,33 +18,39 @@ import yjson_support.*
 
 public func hostValidatePluginReadViewParent(host: HostJavaScriptPluginHost, settingsRoot: String,
     parent: NormalizedOperationPlan, namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
+    match (hostCheckCurrentReadViewParent(host, settingsRoot, namespace, tool, generation, { rule => rule.matches(parent) })) {
+        case Result.Err(error) => Result.Err(error)
+        case Result.Ok(scoped) =>
+            // This caller needs the actual business input for the process protocol.
+            Result.Ok(if (scoped) { parent.canonicalArguments.field("input").getOrThrow() } else { parent.canonicalArguments })
+    }
+}
+
+func hostCheckCurrentReadViewParent(host: HostJavaScriptPluginHost, settingsRoot: String,
+    namespace: String, tool: String, generation: UInt64, matches: (FrozenPluginPlanRule) -> Bool): Result<Bool> {
     let descriptor = match (host.servicePackageData81(namespace, generation)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
     }
-    if (!descriptor.requestedCapabilities.contains("process.readview")) { return Result.Ok(parent.canonicalArguments) }
-    if (!isFrozenReadViewParentPlan(parent)) { return hostPluginResourceError("read_view.parent_invalid", "read-view package requires its canonical prepared resource view") }
-    let plan = parent.canonicalArguments.field("host_plan").getOrThrow()
-    if (httpIntentText(plan, "plugin") != namespace || httpIntentText(plan, "contribution") != tool ||
-        httpIntentText(plan, "generation") != generation.toString() || httpIntentText(plan, "package_digest") != descriptor.contentDigest) {
+    if (!descriptor.requestedCapabilities.contains("process.readview")) { return Result.Ok(false) }
+    if (!matches(FrozenPluginPlanRule.ReadViewParent)) { return hostPluginResourceError("read_view.parent_invalid", "read-view package requires its canonical prepared resource view") }
+    if (!matches(FrozenPluginPlanRule.ReadViewFact(FrozenReadViewCheck.Identity(namespace, tool, generation, descriptor.contentDigest)))) {
         return hostPluginResourceError("read_view.identity_changed", "read-view parent belongs to another package, contribution or generation")
     }
     let configuration = match (loadHostPluginHttpConfiguration(settingsRoot, namespace, descriptor.contentDigest)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
     }
-    if (configuration.digest != httpIntentText(plan, "configuration_digest") ||
-        configuration.ordinaryReadTools.contains(tool) != plan.field("read_granted").getOrThrow().asBool()) {
+    if (!matches(FrozenPluginPlanRule.ReadViewFact(FrozenReadViewCheck.Grant(configuration.digest, configuration.ordinaryReadTools.contains(tool))))) {
         return hostPluginResourceError("read_view.grant_changed", "ordinary Tool operator grant changed after preparation")
     }
     let selectedPayload = match (configuration.toolPayloadLimits(tool)) { case Some(value) => value.value(); case None => nullValue() }
-    if (canonicalAgentValue(selectedPayload) != canonicalAgentValue(plan.field("tool_payload_limits").getOrThrow())) {
+    if (!matches(FrozenPluginPlanRule.ReadViewFact(FrozenReadViewCheck.PayloadLimits(selectedPayload)))) {
         return hostPluginResourceError("read_view.payload_changed", "ordinary read-view representation profile changed after preparation") }
-    let intent = plan.field("intents").getOrThrow().items[0]
-    match (hostValidateReadViewDeadline(host, configuration, namespace, tool, generation, intent)) {
-        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    let deadline = match (hostReadViewDeadlineProfile(host, configuration, namespace, tool, generation)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    if (!matches(FrozenPluginPlanRule.ReadViewFact(FrozenReadViewCheck.Deadline(deadline)))) {
+        return hostPluginResourceError("read_view.deadline_profile_changed", "finite deadline differs from the actual current operator and ready Tool") }
     match (configuration.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-    // The process protocol receives the original business input. Host-only
-    // filesystem identities and capability decisions remain in durable plans.
-    Result.Ok(parent.canonicalArguments.field("input").getOrThrow())
+    Result.Ok(true)
 }
 
 public func hostRegisterPluginReadViewService(catalog: ToolCatalog, host: HostJavaScriptPluginHost,

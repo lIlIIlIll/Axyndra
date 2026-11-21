@@ -82,7 +82,7 @@ public class HostPluginServiceIdentity {
         }
         let plan = prepared.operationPlan.canonicalArguments.field("host_plan")
         let contribution = match (plan) { case Some(value) => httpIntentText(value, "contribution"); case None => "" }
-        match (host.readViewInput(prepared, namespace, contribution, generation)) {
+        match (host.checkReadViewInput(prepared, namespace, contribution, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
         }
         let readGranted = plan.getOrThrow().field("read_granted").getOrThrow().asBool()

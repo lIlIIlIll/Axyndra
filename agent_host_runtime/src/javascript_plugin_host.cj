@@ -574,7 +574,7 @@ public open class HostJavaScriptPluginHost {
         tool: String, generation: UInt64): Result<Unit> {
         // Preserve the original read-view package predicate. For a plain
         // data-only plan the same validator rejects a requested resource view.
-        match (hostValidatePluginReadViewParent(this, settingsRoot, plan, namespace, tool, generation)) {
+        match (hostCheckCurrentReadViewParent(this, settingsRoot, namespace, tool, generation, { rule => rule.matches(plan) })) {
             case Result.Err(error) => Result.Err(error); case Result.Ok(_) => Result.Ok(()) }
     }
 
@@ -582,7 +582,7 @@ public open class HostJavaScriptPluginHost {
         namespace: String, tool: String, generation: UInt64): Result<?HostReadViewCallWindow> {
         let descriptor = match (servicePackageData81(namespace, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         if (!descriptor.requestedCapabilities.contains("process.readview")) { return Result<?HostReadViewCallWindow>.Ok(Option<HostReadViewCallWindow>.None) }
-        match (readViewInput(prepared, namespace, tool, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (checkReadViewInput(prepared, namespace, tool, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let configuration = match (loadHostPluginHttpConfiguration(settingsRoot, namespace, descriptor.contentDigest)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         match (prepared.withCanonicalCallInput(frozenReadViewDeadlineText)) { case None => Result<?HostReadViewCallWindow>.Ok(Option<HostReadViewCallWindow>.None)
@@ -619,6 +619,14 @@ public open class HostJavaScriptPluginHost {
     public func readViewInput(prepared: PreparedToolInvocation, namespace: String, tool: String,
         generation: UInt64): Result<AgentValue> {
         hostValidatePluginReadViewParent(this, settingsRoot, prepared.operationPlan, namespace, tool, generation)
+    }
+    func checkReadViewInput(prepared: PreparedToolInvocation, namespace: String, tool: String,
+        generation: UInt64): Result<Unit> {
+        match (hostCheckCurrentReadViewParent(this, settingsRoot, namespace, tool, generation,
+            { rule => prepared.matchesFrozenPlan(rule) })) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => Result.Ok(())
+        }
     }
     public func mount(record: ProductPluginRecord,
         startup!: ?PluginRegistryStartupTransaction = None): Result<Array<JavaScriptToolDescriptor>> {

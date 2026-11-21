@@ -42,15 +42,6 @@ func hostFreezeReadViewDeadline(host: HostJavaScriptPluginHost, configuration: H
     fields.add(ValueField("deadline_profile", profile.getOrThrow()))
     Result.Ok(objectValue(fields.toArray()))
 }
-func hostValidateReadViewDeadline(host: HostJavaScriptPluginHost, configuration: HostPluginHttpConfiguration,
-    namespace: String, tool: String, generation: UInt64, intent: AgentValue): Result<Unit> {
-    let selected = match (hostReadViewDeadlineProfile(host, configuration, namespace, tool, generation)) {
-        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-    let frozen = intent.field("deadline_profile")
-    if (canonicalAgentValue(selected ?? nullValue()) != canonicalAgentValue(frozen ?? nullValue()) || validateReadViewIntent(intent).isError()) {
-        return hostPluginResourceError("read_view.deadline_profile_changed", "finite deadline differs from the actual current operator and ready Tool") }
-    Result.Ok(())
-}
 
 
 class HostReadViewCallWindow {
@@ -75,7 +66,7 @@ class HostReadViewCallWindow {
             prepared.source.operationRoot.isNone() || !prepared.textEquals(PreparedMetadataText.PlanToolName, "plugin." + namespace + "." + contribution) ||
             !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewParent)) {
             return hostPluginResourceError("read_view.deadline_owner_changed", "finite call window belongs to another actual Root invocation") }
-        match (host.readViewInput(prepared, namespace, contribution, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (host.checkReadViewInput(prepared, namespace, contribution, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (prepared.withCanonicalCallInput({ input => matchingReadViewDeadlineMillis(input, configurationDigest, profileText) })) {
             case Some(millis) => Result.Ok(millis)
             case None => hostPluginResourceError("read_view.deadline_owner_changed", "finite call window lost its exact current frozen profile")

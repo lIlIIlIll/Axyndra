@@ -338,6 +338,49 @@ class PreparedMetadataCopy204Tests {
     }
 
     @TestCase
+    func readViewFactsRejectChangedOperatorInputsWithoutRetainingTheParent(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("view-run"), SessionId("session"), CapabilitySet())
+        let limits = objectValue([ValueField("bytes", integerValue(128))])
+        let host = objectValue([ValueField("plugin", textValue("example:view")), ValueField("contribution", textValue("read")),
+            ValueField("generation", textValue("7")), ValueField("package_digest", textValue("package")),
+            ValueField("configuration_digest", textValue("grant")), ValueField("read_granted", boolValue(false)),
+            ValueField("tool_payload_limits", limits), ValueField("intents", listValue([objectValue([])]))])
+        let prepared = metadataFixture204(context, objectValue([ValueField("host_plan", host)]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        owner.producerReturned204(); root.close()
+        let check = { fact: FrozenReadViewCheck => reader.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewFact(fact)) }
+        @Expect(check(FrozenReadViewCheck.Identity("example:view", "read", 7u64, "package")))
+        @Expect(!check(FrozenReadViewCheck.Identity("example:view", "read", 8u64, "package")))
+        @Expect(!check(FrozenReadViewCheck.Identity("example:view", "read", 7u64, "replacement")))
+        @Expect(check(FrozenReadViewCheck.Grant("grant", false)))
+        @Expect(!check(FrozenReadViewCheck.Grant("grant", true)))
+        @Expect(!check(FrozenReadViewCheck.Grant("other", false)))
+        @Expect(check(FrozenReadViewCheck.PayloadLimits(limits)))
+        let changed = objectValue([ValueField("bytes", integerValue(129))])
+        @Expect(!check(FrozenReadViewCheck.PayloadLimits(changed)))
+        // Both profiles are absent, but the malformed worker intent still fails.
+        @Expect(!check(FrozenReadViewCheck.Deadline(None<AgentValue>)))
+        @Expect(!reader.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewParent))
+        @Expect(reader.matchesFrozenPlan(FrozenPluginPlanRule.Effect(OperationEffectClass.ReadOnly)))
+        @Expect(!reader.matchesFrozenPlan(FrozenPluginPlanRule.Effect(OperationEffectClass.ExternalMutation)))
+        reader.returnConsumerFrame204()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+        let profile = objectValue([ValueField("version", textValue(READ_VIEW_FINITE_DEADLINE_VERSION)),
+            ValueField("maximum_ms", integerValue(130)), ValueField("schema_digest", textValue(modelPolicySha256Text("schema")))])
+        let intent = objectValue([ValueField("id", textValue("read")), ValueField("requires_approval", boolValue(false)),
+            ValueField("request", objectValue([ValueField("executable", textValue("bin/worker")), ValueField("arguments", listValue([])), ValueField("timeout_ms", integerValue(130))])),
+            ValueField("resources", listValue([objectValue([ValueField("kind", textValue("directory")), ValueField("source", textValue("/view")),
+                ValueField("path", textValue(".")), ValueField("witness", textValue("d:actual")), ValueField("bytes", integerValue(0)), ValueField("permission", textValue("workspace.read"))])])),
+            ValueField("deadline_profile", profile)])
+        let finite = metadataFixture204(context, objectValue([ValueField("host_plan", objectValue([ValueField("intents", listValue([intent]))]))]))
+        @Expect(finite.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewFact(FrozenReadViewCheck.Deadline(Some(profile)))))
+        @Expect(!finite.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewFact(FrozenReadViewCheck.Deadline(None<AgentValue>))))
+    }
+
+    @TestCase
     func returningAPlanFromACallbackKeepsItsDataPaid(): Unit {
         for (throughReader in [false, true]) {
             let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
