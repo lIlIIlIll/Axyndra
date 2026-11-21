@@ -321,6 +321,24 @@ class PreparedMetadataCopy204Tests {
     }
 
     @TestCase
+    func retiredProducerCannotPublishCallOrPlanThroughAnotherReadersPayment(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
+        let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("retired-run"), SessionId("retired-session"), CapabilitySet())
+        let prepared = metadataFixture204(context, objectValue([]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        owner.producerReturned204(); root.close()
+        var callRefused = false; var planRefused = false
+        try { let _ = prepared.call.name } catch (_: IllegalStateException) { callRefused = true }
+        try { let _ = prepared.operationPlan.bindingDigest } catch (_: IllegalStateException) { planRefused = true }
+        @Expect(callRefused); @Expect(planRefused)
+        @Expect(reader.textEquals(PreparedMetadataText.CallName, "copy-tool"))
+        reader.returnConsumerFrame204()
+        @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func actualRawPlanExportKeepsOnlyIndependentMetadataCopyHeld():Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged:16777216); let root = bank.acquire(131072)
         let core = MetadataCopyConsumer204(root)

@@ -101,6 +101,15 @@ class PreparedMetadataOwner204 {
             prepared.getOrThrow().borrowDetachedPlan204()
         } finally { lock.unlock() }
     }
+    // A remaining reader keeps its own DATA live, not the authority of a
+    // returned producer. Pin a real raw export before the getter returns.
+    func exportFromProducer204(producer: PreparedToolInvocation): Unit {
+        lock.lock(); try {
+            if (returned || producerReturned || !refEq(prepared.getOrThrow(), producer)) {
+                throw IllegalStateException("prepared DATA producer has returned") }
+            unknown = true
+        } finally { lock.unlock() }
+    }
     func holdUnknown204(): Unit { lock.lock(); try { unknown = true } finally { lock.unlock() } }
     func movePrivateAuthorization204(value: PreparedToolInvocation, actual: PlanCopyDataConsumer204,
         headerPayment: LogicalJsonOwnerReservation, headerInvoice: Int64,

@@ -90,7 +90,7 @@ public class PreparedToolInvocation {
     // operationPlan.canonicalArguments.
     private var callData204: ?ToolCall
     public prop call: ToolCall { get() {
-        match (detachedMetadata204) { case Some(value) => value.holdUnknown204(); case None => () }
+        match (detachedMetadata204) { case Some(value) => value.exportFromProducer204(this); case None => () }
         callData204.getOrThrow()
     } }
     private var concurrencyData204: ?ToolConcurrencyProfile = None<ToolConcurrencyProfile>
@@ -364,7 +364,7 @@ public class PreparedToolInvocation {
     }
     private func requireMetadataExport204(): Unit {
         if (metadataReturned204) { throw IllegalStateException("prepared metadata has returned") }
-        match (detachedMetadata204) { case Some(value) => value.holdUnknown204()
+        match (detachedMetadata204) { case Some(value) => value.exportFromProducer204(this)
             case None => match (catalogConsumer204) { case Some(value) => value.holdPreparedExport204(this); case None => () } }
     }
     func borrowPlanStepIdFrame204(): String { requireMetadataBorrow204(); planStepIdData204.getOrThrow() }

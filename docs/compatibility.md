@@ -182,6 +182,12 @@ owns the reader. One reader cannot acknowledge another. Earlier raw exports
 remain charged; the rest of the Prepared call/plan migration is still open.
 Neither the plugin wire protocol nor the database format changes.
 
+When the producer of an independently paid Prepared copy returns, reading
+`prepared.call` or `prepared.operationPlan` from that producer throws
+`IllegalStateException`, even if another reader still holds the data. If a
+consumer must outlive the producer, acquire its counted reader while the
+producer is live and read through that reader instead.
+
 `recoverableToolResult` now takes a call ID (`String`) instead of a `ToolCall`.
 Change `recoverableToolResult(call, error, receiptId: id)` to
 `recoverableToolResult(call.callId, error, receiptId: id)` and rebuild. If you

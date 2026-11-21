@@ -5182,3 +5182,7 @@ The service check reads the current generation and operator selection. It compar
 All eleven production build stages passed with 22 rebuilt outputs. Broker permission, identity and resource-cleanup checks passed. The rebuilt Native Core passed its budget-positive and cancellation/recovery contracts. The unsplit contract exited 1: the durable `workspace.grep` and `host.process.readview` receipts both report `read_view.output_capacity`. The Program parent committed a failed receipt. This is not a successful read.
 
 The earlier inherited Coding request fault is still unclassified. Its retained core shows a `ProductScopedPrompt` where `AgentRunRequest.planContextFacts` requires JSON. Both that field and its adjacent custody field are present in the runtime reference bitmap. No evidence here identifies when the wrong reference was written. Current model entry, eligible Product, relative performance and final release acceptance remain separate gates.
+
+### E2357: a returned producer cannot export another reader’s Prepared data
+
+The new Native regression kept one real reader live after its producer returned. On `75d3d4a7`, both `prepared.call` and `prepared.operationPlan` still returned data. Those two accesses left the test bank charged 16,777,216 bytes even after its last reader returned. With the fix, both accesses throw, the reader can still read the original tool name, and its final return leaves zero charged bytes. All 96 Tool Runtime cases passed. This does not refund earlier exports or resolve the unsplit Core capacity failure.
