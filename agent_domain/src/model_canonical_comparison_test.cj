@@ -8,6 +8,15 @@ import std.unittest.testmacro.*
 @Test
 class ModelCanonicalComparisonTests {
     @TestCase
+    func canonicalOutputKeepsInsertionOrderPrivateAndFramesUtf8Bytes(): Unit {
+        let value = objectValue([ValueField("雪", textValue("é:")),
+            ValueField("a", listValue([boolValue(true), nullValue()]))])
+        @Expect(canonicalAgentValue(value), "{1:a14:[4:true4:null]3:雪6:s3:é:}")
+        @Expect(value.asObject().nameAt(0), "雪")
+        @Expect(value.asObject().nameAt(1), "a")
+    }
+
+    @TestCase
     func wholeOriginalCanonicalOracleMatchesEveryTypeAndPair(): Unit {
         let values = [nullValue(), boolValue(false), boolValue(true), numberValue("-0"),
             numberValue("0"), numberValue("1.50e2"), textValue("雪🙂\u{0}\n:"),

@@ -2,6 +2,7 @@ package logical_json_payload
 
 import std.collection.*
 import std.convert.*
+import std.sort.sort
 import stdx.crypto.digest.*
 import yjson.*
 import yjson_support.*
@@ -66,25 +67,28 @@ public func canonicalAgentValue(value: AgentValue): String {
         case ValueKind.Number => "n" + agentValueFrame(value.asNumberText())
         case ValueKind.Text => "s" + agentValueFrame(value.text)
         case ValueKind.List =>
-            var output = "["
-            for (item in value.items) { output += agentValueFrame(canonicalAgentValue(item)) }
-            output + "]"
+            let output = StringBuilder()
+            output.append("[")
+            for (item in value.items) { appendAgentValueFrame(output, canonicalAgentValue(item)) }
+            output.append("]"); output.toString()
         case ValueKind.Object =>
-            var output = "{"
-            let used = Array<Bool>(value.fields.size, repeat: false)
-            for (_ in 0..value.fields.size) {
-                var selected: Int64 = -1
-                for (index in 0..value.fields.size where !used[index]) {
-                    if (selected < 0 || value.fields[index].name < value.fields[selected].name) {
-                        selected = index
-                    }
-                }
-                used[selected] = true
-                output += agentValueFrame(value.fields[selected].name) +
-                    agentValueFrame(canonicalAgentValue(value.fields[selected].value))
+            // JsonObject keys are unique. Sort only a private array of names:
+            // UnifiedJsonAccess.fields constructs a fresh table on every read.
+            let object = value.asObject()
+            let keys = Array<String>(object.size(), { index => object.nameAt(index) })
+            sort(keys)
+            let output = StringBuilder()
+            output.append("{")
+            for (key in keys) {
+                appendAgentValueFrame(output, key)
+                appendAgentValueFrame(output, canonicalAgentValue(object.get(key).getOrThrow()))
             }
-            output + "}"
+            output.append("}"); output.toString()
     }
+}
+
+func appendAgentValueFrame(output: StringBuilder, value: String): Unit {
+    output.append(value.size.toString()); output.append(":"); output.append(value)
 }
 
 func agentValueFrame(value: String): String {
