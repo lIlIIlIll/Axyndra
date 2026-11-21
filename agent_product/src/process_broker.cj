@@ -17,6 +17,7 @@ import std.env.*
 import std.fs.*
 import std.io.*
 import std.net.*
+import std.posix.chmod
 import std.process.*
 import std.sync.*
 import std.time.*
@@ -121,7 +122,7 @@ class ProductProcessBroker {
         let nonce=match(secureBrokerToken()){case Result.Ok(value)=>value;case Result.Err(error)=>return Result.Err(error)}
         let currentPath="/tmp/axyndra-current-"+nonce+".sock"
         lease.prepareActualHostCurrentBridge180(currentPath,nonce,pid,start)
-        match(chmodBrokerPath(currentPath,"600")){
+        match(chmodBrokerPath(currentPath, 0o600)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         lease.startActualHostCurrentBridge180()
         let ticket=match(lease.issueActualRootHandoff180(pid,start,nonce)){
@@ -593,8 +594,7 @@ func assignBrokerLeaseOwner(
     }
     match (atomicBrokerWrite(
         paths.leasePath + "/owner.json",
-        encodeAgentValue(brokerLeaseOwnerValue(token, workspace, identity)),
-        "600"
+        encodeAgentValue(brokerLeaseOwnerValue(token, workspace, identity))
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -1034,7 +1034,7 @@ func prepareBrokerRuntime(
             error.message
         )
     }
-    match (chmodBrokerPath(paths.runtimeRoot, "700")) {
+    match (chmodBrokerPath(paths.runtimeRoot, 0o700)) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
@@ -1056,7 +1056,7 @@ func prepareBrokerRuntime(
                 "process broker token file is unsafe or malformed"
             )
         }
-        match (chmodBrokerPath(paths.tokenPath, "600")) {
+        match (chmodBrokerPath(paths.tokenPath, 0o600)) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -1084,7 +1084,7 @@ func tryAcquireBrokerLease(
                 "process broker lease candidate is unsafe"
             )
         }
-        match (chmodBrokerPath(candidate, "700")) {
+        match (chmodBrokerPath(candidate, 0o700)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
                 let _ = removeIfExists(candidate, recursive: true)
@@ -1097,8 +1097,7 @@ func tryAcquireBrokerLease(
         )
         match (atomicBrokerWrite(
             candidate + "/owner.json",
-            encodeAgentValue(owner),
-            "600"
+            encodeAgentValue(owner)
         )) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
@@ -1284,7 +1283,7 @@ func ensureBrokerToken(path: String): Result<String> {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
-    match (atomicBrokerWrite(path, token + "\n", "600")) {
+    match (atomicBrokerWrite(path, token + "\n")) {
         case Result.Ok(_) => Result.Ok(token)
         case Result.Err(error) => Result.Err(error)
     }
@@ -1313,8 +1312,7 @@ func secureBrokerToken(): Result<String> {
 
 func atomicBrokerWrite(
     path: String,
-    source: String,
-    mode: String
+    source: String
 ): Result<Unit> {
     var temporary = ""
     try {
@@ -1338,7 +1336,7 @@ func atomicBrokerWrite(
                 "process broker temporary file is unsafe"
             )
         }
-        match (chmodBrokerPath(temporary, mode)) {
+        match (chmodBrokerPath(temporary, 0o600)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
                 let _ = removeIfExists(temporary)
@@ -1358,17 +1356,10 @@ func atomicBrokerWrite(
     }
 }
 
-func chmodBrokerPath(path: String, mode: String): Result<Unit> {
-    let (code, _, error) = executeWithOutput(
-        "/usr/bin/chmod",
-        [mode, "--", path]
-    )
-    if (code == 0) { return Result.Ok(()) }
-    brokerError<Unit>(
-        AgentErrorKind.PermissionDenied,
-        "hub.process_broker_permissions_failed",
-        String.fromUtf8(error).trimAscii()
-    )
+func chmodBrokerPath(path: String, mode: UInt32): Result<Unit> {
+    if (!path.contains("\u{0}") && chmod(path, mode) == 0) { return Result.Ok(()) }
+    brokerError<Unit>(AgentErrorKind.PermissionDenied, "hub.process_broker_permissions_failed",
+        "could not set private process broker permissions")
 }
 
 func validBrokerToken(value: String): Bool {
@@ -2461,8 +2452,8 @@ func initializeAndServeActualProcessBroker180(arguments:Array<String>,root:Actua
     // takes. The assembly runs on its own worker and `frontend180` waits for it.
     let server=UnixServerSocket(bindAt:paths.socketPath);root.server=Some(server)
     server.backlogSize=32;server.bind()
-    match(chmodBrokerPath(paths.socketPath,"600")){case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
-    match(atomicBrokerWrite(paths.identityPath,encodeAgentValue(identity),"600")){
+    match(chmodBrokerPath(paths.socketPath, 0o600)){case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+    match(atomicBrokerWrite(paths.identityPath,encodeAgentValue(identity))){
         case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
     root.startAssembly180({=>
         match(openProductAssembly180(config,Some(root))){

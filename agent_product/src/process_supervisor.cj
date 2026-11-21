@@ -2640,7 +2640,7 @@ class ProductProcessSupervisor {
                 )
                 return
             }
-            match (atomicBrokerWrite(path, encoded, "600")) {
+            match (atomicBrokerWrite(path, encoded)) {
                 case Result.Ok(_) => setPersistenceWarning(state, "")
                 case Result.Err(error) => setPersistenceWarning(
                     state,

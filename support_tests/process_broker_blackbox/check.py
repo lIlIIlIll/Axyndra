@@ -32,7 +32,7 @@ class BrokerScope:
     temp_parent = Path.home() / ".cache/agent-tmp"
     workflow_package: Path
 
-    def __init__(self, candidate: Path, label: str) -> None:
+    def __init__(self, candidate: Path, label: str, *, install_workflow: bool = True) -> None:
         self.candidate = candidate
         self.temp_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.root = Path(tempfile.mkdtemp(prefix="", dir=self.temp_parent))
@@ -57,7 +57,8 @@ class BrokerScope:
         self.lock = threading.Lock()
         paths = self.paths()
         require(len(os.fsencode(paths["socketPath"])) <= 100, "fixture path exceeds the product's portable Unix socket bound")
-        self.install_workflow(label)
+        if install_workflow:
+            self.install_workflow(label)
 
     def public_command(self, label: str, arguments: list[str], timeout: float = 15.0):
         with self.lock:
@@ -784,7 +785,9 @@ def run_corrupt_record_isolation(candidate: Path, scopes: list[BrokerScope]) -> 
 
 
 def run_unsafe_token_symlink(candidate: Path, scopes: list[BrokerScope]) -> None:
-    scope = BrokerScope(candidate, "symlink")
+    # Workflow management opens an authenticated frontend and starts its broker.
+    # This --probe case needs the first token read in a fresh runtime directory.
+    scope = BrokerScope(candidate, "symlink", install_workflow=False)
     scopes.append(scope)
     paths = scope.paths()
     runtime_root = Path(paths["runtimeRoot"])
