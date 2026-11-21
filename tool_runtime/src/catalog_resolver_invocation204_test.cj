@@ -184,14 +184,35 @@ class CatalogResolverInvocation204Tests {
     }
 
     @TestCase
+    func readOnlyQueryKeepsTheCatalogThroughResolutionAndHoldsUnexpectedErrors(): Unit {
+        for (fail in [false, true]) {
+            let catalog = ToolCatalog(); let retiredInside = ArrayList<Bool>()
+            let descriptor = ToolDescriptor(ModelToolDefinition("read", "read", objectValue([])),
+                Capability(CapabilityKind.WorkspaceRead), sideEffectResolver: Some({ _ =>
+                    retiredInside.add(catalog.retireCatalogData159())
+                    if (fail) { throw IllegalStateException("resolver failure") }
+                    false
+                }))
+            @Assert(catalog.register(descriptor, ResolverExecutor204()).isOk())
+            @Expect(!catalog.isReadOnly(ToolCall("id", "missing", objectValue([]))))
+            var threw = false; var readOnly = false
+            try { readOnly = catalog.isReadOnly(ToolCall("id", "read", objectValue([]))) }
+            catch (_: IllegalStateException) { threw = true }
+            @Expect(retiredInside.size, 1); @Expect(!retiredInside[0])
+            @Expect(threw, fail); @Expect(readOnly, !fail)
+            @Expect(catalog.retireCatalogData159(), !fail)
+        }
+    }
+
+    @TestCase
     func serviceComparisonResolvesDisplayArgumentsWithoutExportingPreparedData(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
         let root = bank.acquire(131072); let paid = root.deriveRetainedLease()
-        let catalog = ToolCatalog(); let captured = ArrayList<ToolResolverInput>()
+        let catalog = ToolCatalog(); let captured = ArrayList<ToolResolverInput>(); let retiredInside = ArrayList<Bool>()
         let descriptor = ToolDescriptor(ModelToolDefinition("probe", "probe", objectValue([])),
             Capability(CapabilityKind.WorkspaceRead), hostServiceOnly: true, implementationFingerprint: "probe-fp",
             sideEffectResolver: Some({ input =>
-                captured.add(input)
+                captured.add(input); retiredInside.add(catalog.retireCatalogData159())
                 if (!input.textEquals(ToolResolverText.Scalar([ToolResolverStep.Field("arg")]), "display")) {
                     throw IllegalStateException("resolved the wrong arguments") }
                 false
@@ -208,6 +229,7 @@ class CatalogResolverInvocation204Tests {
         @Expect(prepared.resolvedHostServiceMatches(catalog, "probe-fp", thread).getOrThrow())
         @Expect(!prepared.resolvedHostServiceMatches(catalog, "other", thread).getOrThrow())
         @Expect(captured.size, 2)
+        @Expect(retiredInside.size, 2); @Expect(!retiredInside[0] && !retiredInside[1])
         for (input in captured) {
             var closed = false
             try { let _ = input.kind([]) } catch (_: IllegalStateException) { closed = true }
@@ -215,6 +237,7 @@ class CatalogResolverInvocation204Tests {
         }
         @Expect(catalog.revoke("probe"))
         @Expect(prepared.resolvedHostServiceMatches(catalog, "probe-fp", thread).isNone())
+        @Expect(catalog.retireCatalogData159())
         owner.producerReturned204(); root.close()
         @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
     }
@@ -249,6 +272,7 @@ class CatalogResolverInvocation204Tests {
             owner.producerReturned204()
         }
         @Expect(reads.size, 6)
+        @Expect(catalog.retireCatalogData159())
         for (input in reads) {
             var revoked = false
             try { let _ = input.kind([]) } catch (_: IllegalStateException) { revoked = true }; @Expect(revoked)

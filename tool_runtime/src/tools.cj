@@ -652,6 +652,22 @@ private class ToolCatalogDataLink159 {
         this.value = Some(value); this.next = next
     }
 }
+// No registration or resolved descriptor crosses a closed comparison. The
+// semantically distinct display and frozen calls are chosen by Prepared.
+enum CatalogResolutionQuery {
+    ReadOnly | DisplayService(String) | FrozenReadonly(Bool, ToolImplementationIdentity)
+
+    func matches(actual: ToolDescriptor): Bool {
+        match (this) {
+            case ReadOnly => !actual.sideEffecting
+            case DisplayService(fingerprint) => actual.hostServiceOnly && actual.implementationFingerprint == fingerprint
+            case FrozenReadonly(hostOnly, identity) => actual.hostServiceOnly == hostOnly && !actual.controlOnly && !actual.sideEffecting &&
+                actual.implementationVersion == identity.toolVersion && actual.implementationFingerprint == identity.implementationFingerprint &&
+                actual.schemaDigest == identity.schemaDigest
+        }
+    }
+}
+
 public class ToolCatalog {
     private var registrationsData159: ?ArrayList<ToolRegistration> = Some(ArrayList<ToolRegistration>())
     private prop registrations: ArrayList<ToolRegistration> {
@@ -1412,16 +1428,21 @@ public class ToolCatalog {
         }
     }
 
+    private func findActiveLocked(name: String, threadId: ?ThreadId): ?ToolRegistration {
+        for (item in registrations where item.active && !item.revoked && item.descriptor.nameForData204() == name && toolRegistrationVisible(item, threadId)) {
+            return Some(item)
+        }
+        None
+    }
+
     // A miss exports nothing. Mark positive and exceptional lookups under the
     // registration lock, before a receiver or resolver can retain the result.
     func find(name: String, threadId!: ?ThreadId = None): ?ToolRegistration {
         lock.lock()
         try {
-            for (item in registrations where item.active && !item.revoked && item.descriptor.nameForData204() == name && toolRegistrationVisible(item, threadId)) {
-                rawAliases159 = true
-                return Some(item)
-            }
-            None
+            let selected = findActiveLocked(name, threadId)
+            if (selected.isSome()) { rawAliases159 = true }
+            selected
         } catch (error: Exception) {
             if (!dataClosed159) { rawAliases159 = true }
             throw error
@@ -1687,11 +1708,31 @@ public class ToolCatalog {
         }
     }
 
-    public func isReadOnly(call: ToolCall, threadId!: ?ThreadId = None): Bool {
-        match (resolvedDescriptor(call, threadId: threadId)) {
-            case Some(value) => !value.sideEffecting
-            case None => false
+    // A resolver may reenter the Catalog. Hold a counted publication frame,
+    // not its mutex, across real resolution. The helper containing every
+    // registration and descriptor reference returns before the count drops.
+    func compareResolution(call: ToolCall, threadId: ?ThreadId, query: CatalogResolutionQuery): ?Bool {
+        lock.lock()
+        try {
+            if (publicationFrames159 == Int64.Max) { throw IllegalStateException("catalog resolution frame overflow") }
+            publicationFrames159++
+        } finally { lock.unlock() }
+        try { compareResolutionFrame(call, threadId, query) }
+        catch (error: Exception) { recordRawCatalogAlias159(); throw error }
+        finally { lock.lock(); try { publicationFrames159-- } finally { lock.unlock() } }
+    }
+
+    private func compareResolutionFrame(call: ToolCall, threadId: ?ThreadId, query: CatalogResolutionQuery): ?Bool {
+        lock.lock()
+        let selected = try { findActiveLocked(call.name, threadId) } finally { lock.unlock() }
+        match (selected) {
+            case Some(item) => Some(query.matches(item.descriptor.resolved(call)))
+            case None => None<Bool>
         }
+    }
+
+    public func isReadOnly(call: ToolCall, threadId!: ?ThreadId = None): Bool {
+        compareResolution(call, threadId, CatalogResolutionQuery.ReadOnly) ?? false
     }
 
     public func definitions(threadId!: ?ThreadId = None): Array<ModelToolDefinition> {

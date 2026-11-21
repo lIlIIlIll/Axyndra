@@ -185,18 +185,12 @@ public class PreparedToolInvocation {
             case PreparedDescriptorCheck.DisplayService(_) => display
             case PreparedDescriptorCheck.FrozenReadonly(_) => ToolCall(display.callId, display.name, operationPlanData204.getOrThrow().canonicalArguments)
         }
-        let actual = match (catalog.resolvedDescriptor(call, threadId: Some(threadId))) {
-            case Some(value) => value
-            case None => return None<Bool>
-        }
-        match (check) {
-            case PreparedDescriptorCheck.DisplayService(fingerprint) => Some(actual.hostServiceOnly && actual.implementationFingerprint == fingerprint)
+        let query = match (check) {
+            case PreparedDescriptorCheck.DisplayService(fingerprint) => CatalogResolutionQuery.DisplayService(fingerprint)
             case PreparedDescriptorCheck.FrozenReadonly(hostOnly) =>
-                let identity = operationPlanData204.getOrThrow().implementation
-                Some(actual.hostServiceOnly == hostOnly && !actual.controlOnly && !actual.sideEffecting &&
-                    actual.implementationVersion == identity.toolVersion &&
-                    actual.implementationFingerprint == identity.implementationFingerprint && actual.schemaDigest == identity.schemaDigest)
+                CatalogResolutionQuery.FrozenReadonly(hostOnly, operationPlanData204.getOrThrow().implementation)
         }
+        catalog.compareResolution(call, Some(threadId), query)
     }
     // Only the scalar comparator crosses into the port. Revoke it before the
     // counted DATA reader / Catalog frame returns, including on exceptions.
