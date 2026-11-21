@@ -4,15 +4,37 @@ import agent_domain.*
 
 // Closed questions about the frozen plan. A match neither exports the plan nor
 // grants execution; Source, capability and durable admission checks are separate.
+public enum FrozenPluginChildRelation {
+    ReadonlyTarget | FilePlanPreview | HttpStream | Channel | ReadView | Http
+
+    func against(parent: NormalizedOperationPlan): FrozenPluginPlanRule {
+        match (this) {
+            case ReadonlyTarget => FrozenPluginPlanRule.ReadonlyTargetOf(parent)
+            case FilePlanPreview => FrozenPluginPlanRule.FilePlanPreviewOf(parent)
+            case HttpStream => FrozenPluginPlanRule.HttpStreamChildOf(parent)
+            case Channel => FrozenPluginPlanRule.ChannelChildOf(parent)
+            case ReadView => FrozenPluginPlanRule.ReadViewChildOf(parent)
+            case Http => FrozenPluginPlanRule.HttpChildOf(parent)
+        }
+    }
+}
+
 public enum FrozenPluginPlanRule {
     LivePolicyParent | ReadonlyDelegationParent | DocumentParent | ReadViewParent |
     PrimitiveChildParent | PreparedCompletion | ReadViewChild | ReadViewChildOf(NormalizedOperationPlan) |
     ReadonlyTargetOf(NormalizedOperationPlan) | FilePlanPreviewOf(NormalizedOperationPlan) |
     HttpStreamChildOf(NormalizedOperationPlan) | ChannelChildOf(NormalizedOperationPlan) |
-    HttpChildOf(NormalizedOperationPlan) | CapabilitiesWithin(CapabilitySet)
+    HttpChildOf(NormalizedOperationPlan) | CapabilitiesWithin(CapabilitySet) |
+    ReadonlyDelegatedChild | HttpStreamParent | ChannelParent | AllowsChild(FrozenPluginChildRelation, PreparedToolInvocation)
 
-    func matches(plan: NormalizedOperationPlan): Bool {
+    // A broker may already own the parent plan (Task or durable Store).
+    // Otherwise both Prepared participants pin their own DATA for this call.
+    public func matches(plan: NormalizedOperationPlan): Bool {
         match (this) {
+            case AllowsChild(relation, child) => child.matchesFrozenPlan(relation.against(plan))
+            case ReadonlyDelegatedChild => isReadonlyDelegatedChildPlan(plan)
+            case HttpStreamParent => isFrozenHttpStreamParentPlan(plan)
+            case ChannelParent => isFrozenChannelParentPlan(plan)
             case LivePolicyParent => isPluginLivePolicyParentPlan(plan)
             case ReadonlyDelegationParent => isFrozenReadonlyDelegationParentPlan(plan)
             case DocumentParent => isFrozenPluginDocumentParentPlan(plan)

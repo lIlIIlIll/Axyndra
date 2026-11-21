@@ -429,6 +429,10 @@ public class HostJavaScriptPluginServiceBroker {
         }
         rootPrepared.operationPlan
     } }
+    private func matchesRootPlan(rule: FrozenPluginPlanRule): Bool {
+        if (taskBorrowSelected204) { return rule.matches(taskBorrowedPlan204.getOrThrow()) }
+        rootPrepared.matchesFrozenPlan(rule)
+    }
     private let childSnapshotLock159 = Mutex()
     private var ownedChildContext159: ?ToolInvocationContext = None<ToolInvocationContext>
     private prop childContext: ToolInvocationContext {
@@ -451,8 +455,8 @@ public class HostJavaScriptPluginServiceBroker {
     private let readonlyAdmitted = ArrayList<OperationId>()
 
     private func isReadonlyTree(): Bool {
-        isFrozenReadonlyDelegationParentPlan(invocationPlan204) ||
-            (rootPrepared.source.kind == PreparedInvocationSourceKind.Derived && isReadonlyDelegatedChildPlan(invocationPlan204))
+        matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegationParent) ||
+            (rootPrepared.source.kind == PreparedInvocationSourceKind.Derived && matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegatedChild))
     }
 
     // This observes the existing operation ledger, not plugin-reported status.
@@ -504,7 +508,7 @@ public class HostJavaScriptPluginServiceBroker {
     // This hook is called by the real published executor before invoking its
     // Native formatter. It cannot be selected by a Native request or DTO.
     func prepareOwnedAwait166(): Result<Unit> {
-        if (!isFrozenPluginChildParent111(invocationPlan204)) { return Result.Ok(()) }
+        if (!matchesRootPlan(FrozenPluginPlanRule.PrimitiveChildParent)) { return Result.Ok(()) }
         let waitingService171 = pluginPrimitivePlanService111(invocationPlan204)
         if (waitingService171 != "job.wait" && waitingService171 != "peer.wait" && waitingService171 != "peer.send") { return Result.Ok(()) }
         if (waitingService171 == "peer.send") {
@@ -622,8 +626,9 @@ public class HostJavaScriptPluginServiceBroker {
         } finally { childSnapshotLock159.unlock() }
     }
     func retainOwnedAwaitResult166(callId:String,output:AgentValue,isError:Bool):Result<?ToolResult>{
+        if (!matchesRootPlan(FrozenPluginPlanRule.PrimitiveChildParent)) { return Result<?ToolResult>.Ok(None<ToolResult>) }
         let service=pluginPrimitivePlanService111(invocationPlan204)
-        if(!isFrozenPluginChildParent111(invocationPlan204) || (service!="job.wait" && service!="job.list" && service!="peer.wait" && service!="job.cancel" && service!="peer.send")){
+        if(service!="job.wait" && service!="job.list" && service!="peer.wait" && service!="job.cancel" && service!="peer.send"){
             return Result<?ToolResult>.Ok(None<ToolResult>)}
         if(service=="peer.send" && invocationPlan204.canonicalArguments.field("host_plan").getOrThrow().field("intents").getOrThrow().asArray().get(0).getOrThrow().field("input").getOrThrow().field("await_reply").isNone()) { return Result<?ToolResult>.Ok(None<ToolResult>) }
         match(validatePluginRootAuthority(service)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
@@ -651,7 +656,7 @@ public class HostJavaScriptPluginServiceBroker {
     private var childFailed111 = false
     private let childAdmitted111 = ArrayList<OperationId>()
     public func finishChild111(): Result<Unit> {
-        if (!isFrozenPluginChildParent111(invocationPlan204)) { return Result.Ok(()) }
+        if (!matchesRootPlan(FrozenPluginPlanRule.PrimitiveChildParent)) { return Result.Ok(()) }
         childLock111.lock()
         try {
             childClosed111 = true
@@ -732,11 +737,12 @@ public class HostJavaScriptPluginServiceBroker {
         this.identity = identity
         this.channelBinding = channelBinding.map({ value => canonicalAgentValue(value) })
         this.httpStreamBinding = httpStreamBinding.map({ value => canonicalAgentValue(value) })
-        let initializedPlan204 = match (taskBorrowedPlan204) {
-            case Some(value) => value
-            case None => rootPrepared.operationPlan }
-        this.executionControlError = if (isFrozenReadonlyDelegationParentPlan(initializedPlan204) ||
-            (rootPrepared.source.kind == PreparedInvocationSourceKind.Derived && isReadonlyDelegatedChildPlan(initializedPlan204))) {
+        let readonlyTree = match (taskBorrowedPlan204) {
+            case Some(parent) => isFrozenReadonlyDelegationParentPlan(parent) ||
+                (rootPrepared.source.kind == PreparedInvocationSourceKind.Derived && isReadonlyDelegatedChildPlan(parent))
+            case None => rootPrepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent) ||
+                (rootPrepared.source.kind == PreparedInvocationSourceKind.Derived && rootPrepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegatedChild)) }
+        this.executionControlError = if (readonlyTree) {
             match (initializedChildContext159.inheritExecutionControlFrom(rootContext)) {
                 case Result.Err(error) => Some(error); case Result.Ok(_) => None }
         } else { None }
@@ -745,7 +751,7 @@ public class HostJavaScriptPluginServiceBroker {
     // Only exact document parents use this fence. A terminal cannot pass an
     // active synchronous CAS callback; cancellation callbacks never take it.
     public func finishDocument(): Result<Unit> {
-        if (!isFrozenPluginDocumentParentPlan(invocationPlan204)) { return Result.Ok(()) }
+        if (!matchesRootPlan(FrozenPluginPlanRule.DocumentParent)) { return Result.Ok(()) }
         documentLock.lock()
         try {
             documentClosed = true
@@ -758,9 +764,9 @@ public class HostJavaScriptPluginServiceBroker {
     }
     public func execute(invocationId: String, requestId: String, service: String,
         argumentsJson: String): JavaScriptHostResult<String> {
-        if (isFrozenPluginChildParent111(invocationPlan204)) {
+        if (matchesRootPlan(FrozenPluginPlanRule.PrimitiveChildParent)) {
             return executeChild111(invocationId, requestId, service, argumentsJson) }
-        if (!isFrozenPluginDocumentParentPlan(invocationPlan204)) {
+        if (!matchesRootPlan(FrozenPluginPlanRule.DocumentParent)) {
             return executeCurrent(invocationId, requestId, service, argumentsJson) }
         documentLock.lock()
         try {
@@ -1293,7 +1299,7 @@ public class HostJavaScriptPluginServiceBroker {
         }
     }
     private func validatePluginRootAuthority(service: String): Result<Unit> {
-        if(service=="file.plan.propose" && isFrozenReadonlyDelegationParentPlan(invocationPlan204)){
+        if(service=="file.plan.propose" && matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)){
             if(identity.isNone() || channelBinding.isSome() || httpStreamBinding.isSome() ||
                 rootPrepared.source.kind==PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
                 !readonlyDelegationFilePlanProposalsEnabled(invocationPlan204)){
@@ -1303,7 +1309,7 @@ public class HostJavaScriptPluginServiceBroker {
                 return hostPluginResourceError("readonly_delegation.call_limit","operator readonly delegation width is exhausted")}
             if(!hostPluginPlanRequires(invocationPlan204,CapabilityKind.WorkspaceRead) ||
                 !hostPluginPlanRequires(invocationPlan204,CapabilityKind.ExtensionInvoke) ||
-                invocationPlan204.requiredCapabilities.any({cap=>!rootContext.capabilities.allows(cap.kind,resource:cap.resource)})){
+                !matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))){
                 return hostPluginResourceError("readonly_delegation.capability_denied","preview exceeds the actual Root ceiling")}
             let actual=identity.getOrThrow()
             return actual.host.checkReadonlyDelegation(rootContext, rootPrepared, actual.namespace,
@@ -1312,18 +1318,18 @@ public class HostJavaScriptPluginServiceBroker {
         if (service == "tool.readonly") {
             if (identity.isNone() || channelBinding.isSome() || httpStreamBinding.isSome() ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
-                !isFrozenReadonlyDelegationParentPlan(invocationPlan204)) {
+                !matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) {
                 return hostPluginResourceError("readonly_delegation.root_invalid", "only an actual frozen canonical root can delegate") }
             let host = invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
             if (requestCount > readonlyDelegationInteger(host, "max_calls")) {
                 return hostPluginResourceError("readonly_delegation.call_limit", "operator readonly delegation width is exhausted") }
-            for (cap in invocationPlan204.requiredCapabilities where !rootContext.capabilities.allows(cap.kind, resource: cap.resource)) {
+            if (!matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))) {
                 return hostPluginResourceError("readonly_delegation.capability_denied", "delegation exceeds the actual Run capability ceiling") }
             return Result.Ok(())
         }
         if (pluginPrimitiveService111(service)) {
             if (identity.isNone() || channelBinding.isSome() || httpStreamBinding.isSome() ||
-                !isFrozenPluginChildParent111(invocationPlan204)) {
+                !matchesRootPlan(FrozenPluginPlanRule.PrimitiveChildParent)) {
                 return hostPluginResourceError("child.source_invalid", "only the exact canonical Tool invocation can start its child") }
             let actual = identity.getOrThrow()
             let prefix = "plugin." + actual.namespace + "."
@@ -1338,7 +1344,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (service == "document.store") {
-            if (identity.isNone() || !isFrozenPluginDocumentParentPlan(invocationPlan204) ||
+            if (identity.isNone() || !matchesRootPlan(FrozenPluginPlanRule.DocumentParent) ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone()) {
                 return hostPluginResourceError("plugin.document_source_invalid", "document broker requires its actual canonical root") }
             let guard = match (hostOpenPluginDocumentGuard(identity.getOrThrow(), rootContext, rootPrepared)) {
@@ -1346,15 +1352,14 @@ public class HostJavaScriptPluginServiceBroker {
             try { return guard.validate() } finally { guard.close() }
         }
         if (httpStreamBinding.isSome()) {
-            if (service != "network.http.stream" || !isFrozenHttpStreamParentPlan(invocationPlan204) ||
+            if (service != "network.http.stream" || !matchesRootPlan(FrozenPluginPlanRule.HttpStreamParent) ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
                 invocationName204 != invocationPlan204.toolName ||
                 canonicalAgentValue(invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
                     .field("binding").getOrThrow()) != httpStreamBinding.getOrThrow()) {
                 return hostPluginResourceError("http.stream_parent_invalid", "HTTP stream broker requires its actual canonical root")
             }
-            for (required in invocationPlan204.requiredCapabilities where
-                !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
+            if (!matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))) {
                 return hostPluginResourceError("http.stream_capability_denied", "HTTP stream root exceeds current Run authority")
             }
             return Result.Ok(())
@@ -1363,7 +1368,7 @@ public class HostJavaScriptPluginServiceBroker {
             return hostPluginResourceError("http.stream_lifecycle_required", "HTTP stream requires its owned active service binding")
         }
         if (channelBinding.isSome()) {
-            if ((service != "process.channel.write" && service != "file.plan.propose") || !isFrozenChannelParentPlan(invocationPlan204) ||
+            if ((service != "process.channel.write" && service != "file.plan.propose") || !matchesRootPlan(FrozenPluginPlanRule.ChannelParent) ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
                 invocationName204 != invocationPlan204.toolName ||
                 canonicalAgentValue(invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
@@ -1377,8 +1382,7 @@ public class HostJavaScriptPluginServiceBroker {
                 !rootContext.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: invocationName204))) {
                 return hostPluginResourceError("channel.file_plan_capability_denied", "file proposal exceeds the real root workspace ceiling")
             }
-            for (required in invocationPlan204.requiredCapabilities where
-                !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
+            if (!matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))) {
                 return hostPluginResourceError("channel.capability_denied", "channel root exceeds current Run authority")
             }
             return Result.Ok(())
@@ -1387,12 +1391,11 @@ public class HostJavaScriptPluginServiceBroker {
             return hostPluginResourceError("channel.lifecycle_required", "ordinary plugin calls have no active service lease")
         }
         if (service == "process.readview") {
-            if (!isFrozenReadViewParentPlan(invocationPlan204) ||
+            if (!matchesRootPlan(FrozenPluginPlanRule.ReadViewParent) ||
                 (rootPrepared.source.kind == PreparedInvocationSourceKind.Derived &&
-                    (!isReadonlyDelegatedChildPlan(invocationPlan204) || rootPrepared.source.parentOperationId.isNone() ||
+                    (!matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegatedChild) || rootPrepared.source.parentOperationId.isNone() ||
                     rootPrepared.source.parentCallId == "")) || rootPrepared.source.operationRoot.isNone()) { return hostPluginResourceError("read_view.source_invalid", "read view requires an actual canonical root") }
-            for (required in invocationPlan204.requiredCapabilities where
-                !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
+            if (!matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))) {
                 return hostPluginResourceError("read_view.capability_denied", "read view exceeds the current root capability ceiling")
             }
             return Result.Ok(())
@@ -1509,11 +1512,10 @@ public class HostJavaScriptPluginServiceBroker {
         execTarget: ?HostPluginReadOnlyExecTarget): Result<Unit> {
         match (execTarget) { case Some(target) => match (target.validate(catalog, rootContext, prepared)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
-        if (isFrozenReadonlyDelegationParentPlan(invocationPlan204)) {
+        if (matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) {
             let preview = prepared.textEquals(PreparedMetadataText.CallName, PLUGIN_FILE_PLAN_TOOL)
-            let rule = if (preview) { FrozenPluginPlanRule.FilePlanPreviewOf(invocationPlan204) }
-                else { FrozenPluginPlanRule.ReadonlyTargetOf(invocationPlan204) }
-            let allowed = prepared.matchesFrozenPlan(rule)
+            let relation = if (preview) { FrozenPluginChildRelation.FilePlanPreview } else { FrozenPluginChildRelation.ReadonlyTarget }
+            let allowed = matchesRootPlan(FrozenPluginPlanRule.AllowsChild(relation, prepared))
             if (!allowed) {
                 if (preview) { return hostPluginResourceError("readonly_delegation.file_plan_denied", "preview differs from its exact frozen operator Root") }
                 return hostPluginResourceError("readonly_delegation.child_denied", "child differs from the exact frozen readonly contribution")
@@ -1530,7 +1532,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_STREAM_TOOL)) {
-            if (httpStreamBinding.isNone() || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.HttpStreamChildOf(invocationPlan204))) {
+            if (httpStreamBinding.isNone() || !matchesRootPlan(FrozenPluginPlanRule.AllowsChild(FrozenPluginChildRelation.HttpStream, prepared))) {
                 return hostPluginResourceError("http.stream_intent_changed", "HTTP stream child exceeds its exact frozen parent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_HTTP_STREAM_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
@@ -1546,7 +1548,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_CHANNEL_WRITE_TOOL)) {
-            if (channelBinding.isNone() || !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ChannelChildOf(invocationPlan204))) {
+            if (channelBinding.isNone() || !matchesRootPlan(FrozenPluginPlanRule.AllowsChild(FrozenPluginChildRelation.Channel, prepared))) {
                 return hostPluginResourceError("channel.intent_changed", "channel child exceeds the exact frozen parent intent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_CHANNEL_WRITE_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
@@ -1562,7 +1564,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_READ_VIEW_TOOL)) {
-            if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChildOf(invocationPlan204))) {
+            if (!matchesRootPlan(FrozenPluginPlanRule.AllowsChild(FrozenPluginChildRelation.ReadView, prepared))) {
                 return hostPluginResourceError("read_view.intent_changed", "resource child differs from its exact parent intent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, HOST_READ_VIEW_FINGERPRINT, ThreadId(rootContext.sessionId.value))) {
@@ -1577,7 +1579,7 @@ public class HostJavaScriptPluginServiceBroker {
             return Result.Ok(())
         }
         if (prepared.textEquals(PreparedMetadataText.CallName, HOST_HTTP_SERVICE_TOOL)) {
-            if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.HttpChildOf(invocationPlan204))) {
+            if (!matchesRootPlan(FrozenPluginPlanRule.AllowsChild(FrozenPluginChildRelation.Http, prepared))) {
                 return hostPluginResourceError("http.intent_changed", "HTTP child exceeds its exact frozen parent intent")
             }
             let exact = match (prepared.resolvedHostServiceMatches(catalog, "host-http-intent-v1", ThreadId(rootContext.sessionId.value))) {

@@ -193,6 +193,13 @@ For brokered children, use `ReadonlyTargetOf(parent)`, `FilePlanPreviewOf(parent
 `HttpStreamChildOf(parent)`, `ChannelChildOf(parent)`, `ReadViewChildOf(parent)`
 or `HttpChildOf(parent)` for the corresponding frozen relationship. Use
 `CapabilitiesWithin(ceiling)` to test every required capability and its resource.
+When both operands are Prepared invocations, use
+`parent.matchesFrozenPlan(FrozenPluginPlanRule.AllowsChild(relation, child))`;
+select `ReadonlyTarget`, `FilePlanPreview`, `HttpStream`, `Channel`, `ReadView`
+or `Http` from `FrozenPluginChildRelation`. This compares the plans while each
+reader is live, without asking either invocation for its raw plan. A Task
+already holding a plan can use `rule.matches(plan)`. For classification only,
+`ReadonlyDelegatedChild`, `HttpStreamParent` and `ChannelParent` return Booleans.
 Rebuild consumers and update any exhaustive matches for the new enum cases.
 A match does not replace Source, approval or current capability checks.
 

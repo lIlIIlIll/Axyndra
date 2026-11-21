@@ -69,7 +69,9 @@ class PreparedMetadataCopy204Tests {
                 @Expect(bank.usage()[1] > 0)
             }
         }))
-        @Expect(!child.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewChildOf(parent)))
+        let actualParent = PreparedToolInvocation(OperationId("parent-operation"), ToolCall("parent-call", "parent", arguments),
+            exclusiveToolConcurrency(), PreparedAuthorization.StaticPolicy, parent, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        @Expect(!actualParent.matchesFrozenPlan(FrozenPluginPlanRule.AllowsChild(FrozenPluginChildRelation.ReadView, child)))
         @Expect(observed[0]); @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
     }
 
