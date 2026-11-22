@@ -310,6 +310,15 @@ public class PreparedToolInvocation {
         match (detachedMetadata204) { case Some(value) => value.requireCore204(actual); case None => () }
         callData204.getOrThrow()
     }
+    // A Derived Source already retains its sealed root. Reuse that root's ID
+    // only if the immediate parent actually has the same ID. A distinct
+    // nested parent's string still escapes and keeps its original payment.
+    func immediateParentCallId204(rootCallId: String, core: ?PaidExecutionFailureSink173): String {
+        match (core) {
+            case Some(actual) => borrowCallForCore204(actual).callId
+            case None => if (textEquals(PreparedMetadataText.CallId, rootCallId)) { rootCallId } else { call.callId }
+        }
+    }
     // Only the unpublished constructor/copy producer may use this accessor.
     func borrowUnpublishedCall204(): ToolCall {
         if (detachedMetadata204.isSome() || metadataReturned204) { throw IllegalStateException("prepared DATA is already published") }

@@ -5295,3 +5295,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2391: paired output improved; ordinary worker close still regressed
 
 [The fresh two-version comparison](implementation/plan-execution-reliability.md#e2391-current-paired-output-and-cancellation-scoped-compaction-did-not-fix-core) checked overlapping 256-byte and 32 KiB outputs, progress, cancellation and physical reaping. Current paired output was faster, but normal close/reaping was about 20 ms P95, versus 11–12 ms on baseline. A private compaction-fixture ownership change passed five controls but did not fix the two continuous Core capacity failures; all 40 canonical derived authority edges still matched. No candidate was adopted. The first-provider, continuous Core and full-release gates remain open.
+
+### E2392: immediate parent identity on derived calls
+
+[The current Tool and Core results](implementation/plan-execution-reliability.md#e2392-derived-source-retains-the-immediate-parent-id-without-exporting-an-equal-prepared-call) cover reuse of an already retained root call ID without exporting a Prepared call. All 105 Tool tests and five Core controls passed. The full continuous Core fixture still failed both read-view-capacity Receipts; no new five-second provider, full Product or final distribution pass is claimed. GC remains deferred and this PR remains Draft.

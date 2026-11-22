@@ -55,6 +55,19 @@ private class PlanRuleObservationNode <: JsonNode {
 @Test
 class PreparedMetadataCopy204Tests {
     @TestCase
+    func derivedSourceReusesOnlyAnEqualRetainedRootCallId(): Unit {
+        let context = ToolInvocationContext(RunId("run"), SessionId("session"), CapabilitySet())
+        for (same in [true, false]) {
+            let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+            let prepared = metadataFixture204(context, objectValue([]))
+            let producer = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+            let id = prepared.immediateParentCallId204(if (same) { "copy-call" } else { "outer-call" }, None)
+            producer.producerReturned204(); root.close()
+            @Expect(id, "copy-call")
+            @Expect(bank.usage()[0] == 0, same)
+        }
+    }
+    @TestCase
     func fileApplicationContentsBindOperationOrderAndTheExactPatchMetadata(): Unit {
         let context = ToolInvocationContext(RunId("file-run"), SessionId("session"), CapabilitySet())
         let operation = { path: String => objectValue([ValueField("path", textValue(path))]) }

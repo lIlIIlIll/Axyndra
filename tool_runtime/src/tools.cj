@@ -4601,7 +4601,8 @@ public class ToolPipeline {
             PreparedInvocationSourceKind.Derived, context,
             operationRoot: parent.source.operationRoot,
             parentOperationId: Some(parent.operationId),
-            requestKey: requestKey, parentCallId: pipelineCall204(context, parent).callId,
+            requestKey: requestKey, parentCallId: parent.immediateParentCallId204(
+                parent.source.operationRoot.getOrThrow().callId(), context.paidExecutionFailureConsumer173()),
             managedJobCeiling: parent.source.managedJobCeiling
         ), parentIntent: if (parent.authorization == PreparedAuthorization.ApprovalRequired) {
             None
@@ -4645,7 +4646,8 @@ public class ToolPipeline {
             PreparedInvocationSourceKind.Derived, context,
             operationRoot: parent.source.operationRoot,
             parentOperationId: Some(parent.operationId),
-            requestKey: requestKey, parentCallId: pipelineCall204(context, parent).callId,
+            requestKey: requestKey, parentCallId: parent.immediateParentCallId204(
+                parent.source.operationRoot.getOrThrow().callId(), context.paidExecutionFailureConsumer173()),
             managedJobCeiling: parent.source.managedJobCeiling
         )
         match (validatePreparedSourceContext(context, source)) {
