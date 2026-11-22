@@ -5287,3 +5287,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2389: current-bundle Todo verified; first provider reply still times out
 
 [The current Coding packages](implementation/plan-execution-reliability.md#e2389-current-bundle-todo-the-first-provider-request-and-ten-app-pty-cases) passed a real Todo save after explicit installation through Minimal: two completed Runs, six matching Receipts, four user approvals, revision 1. A separate copy reached local HTTP at +4,881.08 ms but failed the unchanged five-second first-reply gate; five processes needed cleanup. Ten real Native App PTY cases passed with same-source fixtures. No fresh Coding assembly, continuous Core, full Product or full-release pass is claimed.
+
+### E2390: Full package protocols and two standalone Memory contracts passed
+
+[All 16 independent protocol checkers](implementation/plan-execution-reliability.md#e2390-full-plugin-protocols-standalone-memory-and-the-unresolved-provider-gate) passed against the same Full assembly (606 checks), as did both standalone Memory release contracts. Neither proves large-context Product or full release. Core attribution now covers 262 distinct child invoices; no return was inferred. A private field-check optimization had no end-to-end latency result: its Coding owner crashed in GC before the timed request. No candidate was adopted; E2389 remains the public five-second provider result. PR remains incomplete.
