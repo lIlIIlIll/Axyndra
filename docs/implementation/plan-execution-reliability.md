@@ -12180,3 +12180,29 @@ These results use the earlier `91f0e80963` Coding package (`bdaca47b082b`), not 
 Relative to invocation, SQLite recorded Run admission at +3,108 ms, the completed `host.context.read` receipt at +3,708 ms, the model attempt at +4,427 ms and its dispatch claim at +4,558 ms. Cancellation completed the attempt after the deadline. There was no provider response ID or provider terminal. A passive observer still received `model-providers` package-file events at +4,793 ms. The events do not identify a reader, completed hashes or CPU time.
 
 Both `4d88fa6072` and `91f0e80963` passed the seven original absolute performance checks. Relative to baseline, the candidate improved extension cold activation (P95 61.77 to 46.55 ms), first call (1.89 to 0.57 ms) and steady IPC (2.12 to 0.24 ms). Extension-host RSS fell from 29,200,384 to 20,738,048 bytes. Cancellation including the 100 ms trigger took 128.04 vs 126.45 ms. The packaged CLI was slower: help P95 rose from 195.45 to 408.39 ms, and inspect from 130.17 to 429.09 ms. These are separate from E2378's paired-output and PID-reaping measurements. Evidence: `closeddelegationfirstrequest2376/qualified.json`, `closeddelegationmatched2376/qualified.json`.
+### E2381: all Full wire checkers passed on the assembled release inputs
+
+On `cdbabc3dea`, Minimal, Coding and Full contained 0, 9 and 17 plugins respectively. All 16 selected assembly, clean-environment, setup, offline and wire stages passed. Coding and Full shared the same packaged executable (`e4e9c98c068b`), with different plugin manifests; Minimal used `79e3051965c4`. The four wire checkers executed during Full assembly ran 115 tests. The other twelve ran 491. All 606 passed without skips, with the processes accounted for. No Memory 63 MiB application result or end-to-end CLI result follows from these package checks. Evidence: `ordinarysqlpackages2383/qualified.json`, `ordinarysqlfullwires2389/qualified.json`.
+
+### E2382: matched execution improved; CLI startup and output reaping regressed
+
+The fixed SDK ran the original fixture against `4d88fa6072` and `cdbabc3dea`. Both passed its seven absolute checks. P95 values below are in milliseconds except for RSS. The two additional output sizes used two real workers per sample and checked the echoed bytes and progress. The candidate explicitly released its output payload after validation. Reaping measures observed process return, not a DATA acknowledgement.
+
+| P95 | Baseline | Candidate |
+|---|---:|---:|
+| Extension cold activation | 61.197 | 42.616 |
+| First call / steady IPC | 2.281 / 4.812 | 0.489 / 0.240 |
+| Extension-host RSS (bytes) | 29,331,456 | 20,746,240 |
+| Cancellation including 100 ms trigger | 127.668 | 126.648 |
+| Packaged CLI help / inspect | 147.019 / 127.238 | 408.868 / 429.925 |
+| 256-byte pair span / observed reaping | 10.119 / 10.184 | 0.630 / 19.991 |
+| 32 KiB pair span / observed reaping | 84.984 / 13.369 | 3.019 / 20.061 |
+| Separate cancellation: result / observed reaping after trigger | 26.282 / 26.291 | 16.746 / 16.757 |
+
+Evidence: `ordinarysqlmatched2387/qualified.json` (12 cold/first/RSS/cancel, 240 steady and 20 per CLI command); `ordinarysqlpaired2387/qualified.json` (12 pairs per size and 12 cancellation samples per arm).
+
+### E2383: distinguish a five-second request timeout from a fresh install crash
+
+With the nine inherited operator records, Coding `e4e9c98c068b` timed out at 5,002.79 ms on its first local profile request. Neither listener accepted a connection or received a POST. There was no second request or forced process cleanup. All 242 retained operator inputs stayed unchanged. A separate SQLite copy passed `quick_check`: Run admission at +3,031 ms, committed `host.context.read` receipt at +3,539 ms, model attempt at +4,287 ms and dispatch claim at +4,424 ms. The attempt was cancelled at +5,025 ms and the Run finished at +5,063 ms. A dispatch claim did not mean the provider accepted the request.
+
+A **fresh** operator on the same packaged ELF failed earlier: provider management `inspect` disconnected before publishing the registry lock, before either timed request. The crashing thread in the saved SIGSEGV core passed through `GCTib::ForEachBitmapWord`, `Mutator::GcPhaseEnum` and `TracingCollector::VisitStackRoots`. This sample is GC-deferred. The inherited-operator timeout is still a separate non-GC acceptance gap. The fresh directory was not used as a preinstalled Todo fixture. Evidence: `ordinarysqlfirstrequest2386/qualified.json`, `ordinarysqlfreshprofile2390/qualified.json`.
