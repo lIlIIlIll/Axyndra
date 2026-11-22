@@ -5291,3 +5291,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2390: Full package protocols and two standalone Memory contracts passed
 
 [All 16 independent protocol checkers](implementation/plan-execution-reliability.md#e2390-full-plugin-protocols-standalone-memory-and-the-unresolved-provider-gate) passed against the same Full assembly (606 checks), as did both standalone Memory release contracts. Neither proves large-context Product or full release. Core attribution now covers 262 distinct child invoices; no return was inferred. A private field-check optimization had no end-to-end latency result: its Coding owner crashed in GC before the timed request. No candidate was adopted; E2389 remains the public five-second provider result. PR remains incomplete.
+
+### E2391: paired output improved; ordinary worker close still regressed
+
+[The fresh two-version comparison](implementation/plan-execution-reliability.md#e2391-current-paired-output-and-cancellation-scoped-compaction-did-not-fix-core) checked overlapping 256-byte and 32 KiB outputs, progress, cancellation and physical reaping. Current paired output was faster, but normal close/reaping was about 20 ms P95, versus 11–12 ms on baseline. A private compaction-fixture ownership change passed five controls but did not fix the two continuous Core capacity failures; all 40 canonical derived authority edges still matched. No candidate was adopted. The first-provider, continuous Core and full-release gates remain open.

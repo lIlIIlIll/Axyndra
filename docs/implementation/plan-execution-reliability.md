@@ -12290,3 +12290,20 @@ On production behavior `be188192bd`, the Full assembly passed **606 checks acros
 The retained E2388 continuous Core stop now identifies **262 distinct child invoices**. Three Product hook invoices added 422,912 bytes; 20 fixture invoices added 838,016 bytes. Two fixture record references alias invoices already counted (620,608 bytes); the legacy graph collection was empty. Ledger 1 still has 4,818,648 bytes across 67 unidentified invoices; ledger 2 has 74,536 bytes across six. This is same-stop attribution, not proof that any caller released DATA. The observed 5,902,992-byte admission shortfall is unchanged. Evidence: `offline/additional2403/qualified.json` and `offline/fixtures2404/qualified.json` alongside the retained E2388 core.
 
 A private exact-object-field candidate passed 184/184 Native Domain tests. Across 76 shape cases and 600 rounds per run, the median over three runs per arm fell from 229.18 ms to 49.51 ms. The actual Coding candidate changed eight plugin binaries as well as the Host. After explicit installation of the nine candidate packages, its provider blackbox failed at `plugin list --json` after `enable`, before the timed invocation. The owner died with SIGSEGV; the retained crash stack reaches `BaseObject::GetSize`, `WCollector::ForwardObjectExclusive` and `SlotRoot::VisitGCRoots`. No HTTP request or end-to-end latency was observed. The candidate was not adopted; this private crash does not reclassify the published E2389 timeout. Evidence: `exactfieldshapecomparison2402/qualified.json`, `fieldshapedomain2403/qualified.json` and `fieldshapemodel2403/qualified.json`.
+
+### E2391: current paired output and cancellation; scoped compaction did not fix Core
+
+Baseline `4d88fa6072` and the published `d901e64e5a` checkout (behavior `be188192bd`) rebuilt both Native workloads with the same pinned SDK and ran under the same exclusive performance lock. Two distinct workers had to overlap, return the expected bytes and emit one matching progress event each. Each output size used 12 pairs per arm (24 observed closes). The separate cancellation workload used 12 samples per arm. All eight build/measure stages closed physically with no surviving owned process. `currentpairedload2405/qualified.json` binds all four binaries, case inputs and measurements.
+
+| P95 (ms) | Baseline | Current |
+| --- | ---: | ---: |
+| 256-byte paired output span | 10.091 | 0.973 |
+| 32 KiB paired output span | 81.744 | 3.150 |
+| 256-byte output, close to observed PID disappearance | 11.726 | 19.985 |
+| 32 KiB output, close to observed PID disappearance | 11.267 | 20.082 |
+| Cancellation result after trigger | 27.744 | 25.875 |
+| Observed reaping after cancellation trigger | 27.758 | 25.886 |
+
+Paired output improved, but normal close/reaping regressed at both sizes. PID disappearance is not an acknowledgement that any caller returned DATA. The original seven-check activation, latency, RSS, cancellation and CLI comparison remains at E2387. Neither comparison qualifies the full release.
+
+A private compaction fixture imported the real package, copied and paid for its namespace and digest instead of exporting the whole record, then checked and closed the real enable result. It changed no production source, quotas, authorization, SQL or ACK. Core ELF `bb3578808011b6236c7b4d806f0495d4ade9b538b8215e6629c53f3bed9cb403` passed all five controls. The continuous fixture exited 1 after 51.25 s: the reserved `workspace.grep` and `host.process.readview` Receipts still failed with `read_view.output_capacity`. Both detached databases passed `quick_check`; the six original hashes and all 40 durable authority edges were verified. No refusal amount from another run is attributed to this one. This fixture change was not adopted as a Core repair. Evidence: `scopedcompactioncore2405/qualified.json`.
