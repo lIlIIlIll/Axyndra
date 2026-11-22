@@ -5275,3 +5275,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2386: the real PTY runner must freeze the packaged network bridge
 
 [Ten real Linux tmux flows passed on `cdbabc3dea`](implementation/plan-execution-reliability.md#e2386-pin-the-network-bridge-in-real-pty-acceptance). The unfixed runner omitted the helper and failed the first local Responses request. Separately, all eleven production builds and the broker permission checks passed on `be188192bd`. Neither result clears continuous Core, the five-second first request, or final release acceptance.
+
+### E2387: current quarantine release, continuous Core and the five-second request
+
+[The `be188192bd` release checkpoint](implementation/plan-execution-reliability.md#e2387-quarantine-release-and-matched-run-results) passed all 16 selected Minimal/Coding/Full stages. Continuous Core still failed on two `read_view.output_capacity` receipts, despite five passing controls. The first inherited-operator request timed out at 5,003.2 ms without a TCP connection. The matched Coding CLI remained slower than base. No overall Product, Core or release pass.

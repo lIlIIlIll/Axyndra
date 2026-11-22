@@ -12235,3 +12235,25 @@ The runner copied the App and Native library into its private directory but left
 On the same App, using the packaged bridge `79662c52440ce7f7c8af7be91b4289d87fcf5fc8f22dea020b0c6b620284aaf0`, each of the ten cases passed: rich Responses, Completions and Messages; cancel and Ctrl-C followed by a new request; HTTP error, timeout, incomplete EOF and invalid UTF-8; and an actual MCP tool call. The ten normal PTY exits covered 79 assertions, 20 local model requests and three recorded MCP events. `pinnedgatewaypty2391/qualified.json` identifies each case's input, ANSI output, stream, requests, durable attempt rows and exit; `ordinarysqlpty2386/summary.json` retains the failure. Mouse, resize and other platforms were not exercised. This is not PTY evidence for the later quarantine-built executable.
 
 Separately, `startupquarantinerelease2393/qualified.json` binds eleven fresh production stages, 22 output hashes and real broker authorization, socket and unsafe-token controls to `be188192bd` using CJC `1.3.0-alpha.20261104001050` and CJPM `1.3.0-alpha.09`. The resulting unbundled App is `dacb2c3ccfe0a57223c94ae3e09befd95390aaf8874afb1b126bacb346dccf6e`; Minimal is `80432bc5ac4ef44a56bf0c5f6533da21ba644c1af7a058624388377ede089ce5`. Building is not final distribution acceptance. The remaining Core, first-request, baseline and GC limitations stand.
+
+### E2387: quarantine release and matched run results
+
+**Distribution.** On `be188192bd`, Minimal, Coding and Full contained 0, 9 and 17 plugins and passed 3, 6 and 7 selected assembly/entrypoint stages respectively. Coding and Full packaged ELF: `d1b3efcc7e00c099b2a51ed3f4a44b57250e8af00a6c7d1bde579aba9ae9fc26`. Four Full wire checkers ran on this build (115 checks). The other twelve ran previously (491 checks): all 17 installed trees, including file modes, matched the previous assembly; the independent checkers and support fixtures were unchanged. This does not verify the Memory application or the full frontend. Evidence: `startupquarantinepackages2394/qualified.json` and `wire-applicability.json`.
+
+**Core.** Fresh Native ELF `efd0ff474efb760c07bf8093f751380d9c2fd55a36b6d372d6f11111fd9e4862` passed the direct broker success, failed-child and configuration controls, the budget control and cancellation/recovery. The original continuous fixture exited 1 after 47.27 s. The preserved SQLite files identify failed `plugin.axyndra:workspace.grep` and `host.process.readview` receipts with `read_view.output_capacity`. The two databases again contain 1/4/4 and 35/69/69 Runs/Operations/Receipts; all 40 derived authority edges match. This is a capacity failure, not a GC finding or an ACK. Evidence: `quarantineunsplitcore2396/qualified.json`.
+
+**First request.** The original five-second local fixture on the current Coding host and the inherited nine-plugin installation timed out at 5,003.2 ms. There was no TCP accept or HTTP POST; the second profile did not run. Relative to invocation, the new Run was admitted at +3,229.7 ms, the context receipt committed at +3,796.7 ms, the model Attempt started at +4,552.7 ms and dispatch was claimed at +4,666.7 ms. The Attempt was cancelled at +5,035.7 ms and the Run ended at +5,038.7 ms. The pre-existing Run was unchanged. These timestamps locate the boundary, not the root cause. No fresh-install or external-model credit. Evidence: `quarantinefirstrequest2395/qualified.json`.
+
+**Matched performance.** Baseline `4d88fa6072` and Coding `be188192bd` ran the original gate under the same fixed SDK, fixture, cold-state settings and exclusive performance lock. Both met the gate's absolute ceilings. P95 by arm:
+
+| Measurement | Baseline | Quarantine build |
+| --- | ---: | ---: |
+| Extension cold start (µs) | 61,006 | 60,122 |
+| First call (µs) | 2,881 | 515 |
+| Steady IPC (µs) | 8,700 | 226 |
+| Host RSS (bytes) | 29,188,096 | 20,869,120 |
+| Cancellation after 100 ms trigger (µs) | 126,216 | 126,920 |
+| CLI `/help` (µs) | 131,906 | 407,903 |
+| CLI `/plugins inspect` (µs) | 130,143 | 430,388 |
+
+The two CLI startup regressions remain. E2382's separate paired-output and cancellation workload still has the same 266 candidate inputs and unchanged case code. Its previously slower paired close/reap time is not a new measurement on this App. Evidence: `quarantinematched2395/qualified.json` and `paired-workload-applicability.json`.
