@@ -5279,3 +5279,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2387: current quarantine release, continuous Core and the five-second request
 
 [The `be188192bd` release checkpoint](implementation/plan-execution-reliability.md#e2387-quarantine-release-and-matched-run-results) passed all 16 selected Minimal/Coding/Full stages. Continuous Core still failed on two `read_view.output_capacity` receipts, despite five passing controls. The first inherited-operator request timed out at 5,003.2 ms without a TCP connection. The matched Coding CLI remained slower than base. No overall Product, Core or release pass.
+
+### E2388: existing-install Todo passed; other gates remain open
+
+[The real Todo save](implementation/plan-execution-reliability.md#e2388-real-todo-save-on-an-existing-installation-core-and-provider-still-fail) passed on the current Coding Host with older, digest-verified installed plugins: two completed Runs, six completed Receipts, four distinct user approvals and revision 1. It is not a fresh/current-bundle pass. Continuous Core still refused an output allocation; 239 live child invoices were identified, without proof of release. A private provider candidate reached the local HTTP listener but timed out before returning a reply. No candidate or GC fix is accepted by this checkpoint.
