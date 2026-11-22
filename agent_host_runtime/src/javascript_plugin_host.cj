@@ -17,6 +17,18 @@ import std.fs.Path
 import sandbox4cj.*
 import std.sync.*
 import std.time.*
+
+// Only the two readonly profiles have a check that never publishes business data.
+// Data-only and primitive Tools retain their existing preparation and error results.
+private enum HostOrdinaryInputSelection { Resolved(AgentValue) | ReadonlyDelegation | ReadView }
+
+private func resolvedOrdinaryInput(input: Result<AgentValue>): Result<HostOrdinaryInputSelection> {
+    match (input) {
+        case Result.Err(error) => Result.Err(error)
+        case Result.Ok(value) => Result.Ok(HostOrdinaryInputSelection.Resolved(value))
+    }
+}
+
 // Shared lifecycle owner for the process-backed JavaScript host. The
 // extension runtime owns the wire protocol; this layer owns activation,
 // cancellation bridging, tool registration, and canonical host error semantics.
@@ -522,6 +534,26 @@ public open class HostJavaScriptPluginHost {
     }
     public func ordinaryToolInput(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
+        match (selectOrdinaryInput(context, prepared, namespace, tool, generation)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(HostOrdinaryInputSelection.Resolved(value)) => Result.Ok(value)
+            case Result.Ok(HostOrdinaryInputSelection.ReadonlyDelegation) => delegationInput(context, prepared, namespace, tool, generation)
+            case Result.Ok(HostOrdinaryInputSelection.ReadView) => readViewInput(prepared, namespace, tool, generation)
+        }
+    }
+
+    func checkOrdinaryToolInput(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        namespace: String, tool: String, generation: UInt64): Result<Unit> {
+        match (selectOrdinaryInput(context, prepared, namespace, tool, generation)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(HostOrdinaryInputSelection.Resolved(_)) => Result.Ok(())
+            case Result.Ok(HostOrdinaryInputSelection.ReadonlyDelegation) => checkReadonlyDelegation(context, prepared, namespace, tool, generation)
+            case Result.Ok(HostOrdinaryInputSelection.ReadView) => checkReadViewInput(prepared, namespace, tool, generation)
+        }
+    }
+
+    private func selectOrdinaryInput(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        namespace: String, tool: String, generation: UInt64): Result<HostOrdinaryInputSelection> {
         let descriptor = match (servicePackageData81(namespace, generation)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         let profile = match (toolExecutionProfile(namespace, tool, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -537,15 +569,15 @@ public open class HostJavaScriptPluginHost {
                 !plan.networkPolicy.egress.isEmpty() || !plan.networkPolicy.publish.isEmpty() ||
                 !plan.resolvedHosts.isEmpty() || !plan.contextReadFacts.isEmpty()) {
                 return hostPluginResourceError("plugin.tool_profile_changed", "data-only Tool lost its exact current contribution and restricted plan") }
-            return dataOnlyArguments(context, prepared.textEquals(PreparedMetadataText.CallName, "plugin." + namespace + "." + tool),
-                plan.canonicalArguments, namespace, tool, generation)
+            return resolvedOrdinaryInput(dataOnlyArguments(context, prepared.textEquals(PreparedMetadataText.CallName, "plugin." + namespace + "." + tool),
+                plan.canonicalArguments, namespace, tool, generation))
         }
         let primitive = match (primitiveSelected191(namespace, tool, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         if (primitive || prepared.matchesFrozenPlan(FrozenPluginPlanRule.PrimitiveChildParent)) {
-            return hostChildInvocationInput111(this, context, prepared, namespace, tool, generation) }
-        if (descriptor.requestedCapabilities.contains("tool.readonly")) { return delegationInput(context, prepared, namespace, tool, generation) }
-        readViewInput(prepared, namespace, tool, generation)
+            return resolvedOrdinaryInput(hostChildInvocationInput111(this, context, prepared, namespace, tool, generation)) }
+        Result.Ok(if (descriptor.requestedCapabilities.contains("tool.readonly")) { HostOrdinaryInputSelection.ReadonlyDelegation }
+            else { HostOrdinaryInputSelection.ReadView })
     }
     // Borrowed DATA only. The exact original data-only profile predicates
     // are consumed completely; no canonical arguments escape this frame.
@@ -3091,7 +3123,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
             match (outcome) {
                 case Result.Err(error) => Result.Err(error)
                 case Result.Ok(value) =>
-                    match (host.ordinaryToolInput(context, prepared, extensionId, toolName, instanceGeneration)) {
+                    match (host.checkOrdinaryToolInput(context, prepared, extensionId, toolName, instanceGeneration)) {
                         case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
                     }
                     match (attachment) { case Some(owner) => match (owner.validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }

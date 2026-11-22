@@ -112,7 +112,7 @@ class HostToolInputAttachmentSession {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             case OperationRootSource.Committed(_) => ()
         }
-        match (host.ordinaryToolInput(context, prepared, namespace, contribution, generation)) {
+        match (host.checkOrdinaryToolInput(context, prepared, namespace, contribution, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (evidence) { case Some(value) => artifacts.verifyRetainedToolInputAttachment(context, prepared, charge,
             writer.getOrThrow(), value, { => checkLifetime() })

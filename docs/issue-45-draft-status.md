@@ -5252,3 +5252,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2375–E2376 — Attachment SQL: complete plan comparison
 
 [The locked refusal and Native SQL proof](implementation/plan-execution-reliability.md#e2375-what-the-read-view-output-refused) distinguish the output reservation from any alleged leak. Store 263/263, Tool 104/104 and 19 selected Host cases passed for the new [attachment SPI](compatibility.md#compare-the-executing-root-before-retaining-an-input-attachment). Earlier raw exports remain charged. Continuous Core, the original cold model gate and final release are still open; GC remains deferred and the PR stays Draft.
+
+### E2377–E2378 — Ordinary input validation and combined Core
+
+[The combined Host/SQL Core](implementation/plan-execution-reliability.md#e2377-split-validation-only-host-calls-from-worker-input) passed five Native controls, but continuous Core still failed `read_view.output_capacity`; the two SQLite copies retained 40 matched authority edges. [The preceding release and matched benchmark](implementation/plan-execution-reliability.md#e2378-release-and-matched-load-before-the-attachment-change) qualify their own source only: large-output and cancellation reaping had worse P95 than baseline. Product, the cold five-second model gate and final release remain open. GC stays deferred.
