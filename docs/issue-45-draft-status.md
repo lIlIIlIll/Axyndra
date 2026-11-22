@@ -5263,3 +5263,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2381–E2383: Full wire passed; packaged first request and release acceptance remain open
 
 [Sixteen Full wire checkers](implementation/plan-execution-reliability.md#e2381-all-full-wire-checkers-passed-on-the-assembled-release-inputs) passed all 606 tests on `cdbabc3dea`. [Matched performance](implementation/plan-execution-reliability.md#e2382-matched-execution-improved-cli-startup-and-output-reaping-regressed) showed faster extension calls but slower CLI startup and paired-output reaping. The [existing-operator first request](implementation/plan-execution-reliability.md#e2383-distinguish-a-five-second-request-timeout-from-a-fresh-install-crash) still exceeded five seconds before either local listener accepted a connection. A separate fresh-operator inspect crashed in Runtime GC before a model request; only that sample is deferred. Continuous Core, the remaining application paths and final release acceptance are still open.
+
+### E2384: startup quarantine preserves errors and returns the writer's record
+
+[The Native Product regression](implementation/plan-execution-reliability.md#e2384-startup-quarantine-returns-its-private-registry-handles) exercises successful quarantine, failure to persist it, and a mismatched installed Native handshake. Three selected cases passed on the changed Product ELF. The earlier 606 wire checks and five-second timeout apply to the preceding release. Continuous Core and final release acceptance remain open.

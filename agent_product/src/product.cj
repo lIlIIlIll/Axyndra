@@ -394,26 +394,11 @@ public class ProductRuntime {
                     match (activateProductPlugin(record, startup: startup)) {
                         case PluginRegistryResult.Ok(_) => ()
                         case PluginRegistryResult.Err(activationError) =>
-                            // Quarantine publishes a different installed state.
-                            // No later activation may borrow this transaction.
+                            // No later activation may borrow the pre-quarantine state.
                             startup.getOrThrow().close(); startup = None
-                            match (setPluginEnabled(
-                                productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), false, record.scope
-                            )) {
-                                case PluginRegistryResult.Ok(_) => ()
-                                case PluginRegistryResult.Err(persistenceError) =>
-                                    return Result.Err(AgentError(
-                                        AgentErrorKind.Configuration,
-                                        "plugin.startup_disable_failed",
-                                        "failed to persist startup quarantine for " +
-                                            productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + ": " +
-                                            persistenceError.code,
-                                        fields: [
-                                            ErrorField("plugin", productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))),
-                                            ErrorField("activation_error", activationError.code),
-                                            ErrorField("persistence_error", persistenceError.code)
-                                        ]
-                                    ))
+                            match (quarantineStartupRecord(record, activationError)) {
+                                case Result.Err(error) => return Result.Err(error)
+                                case Result.Ok(_) => ()
                             }
                     }
                 } finally { record.close() }
@@ -422,6 +407,24 @@ public class ProductRuntime {
         } finally {
             match (startup) { case Some(value) => value.close(); case None => () }
             records.close()
+        }
+    }
+
+    func quarantineStartupRecord(record: ProductPluginRecord, activationError: PluginRegistryOwnedError): Result<Unit> {
+        // Registry error codes are static categories, independent of their paid detail.
+        let activationCode = activationError.code
+        activationError.close()
+        match (setPluginEnabled(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)),
+            false, record.scope)) {
+            case PluginRegistryResult.Ok(disabled) => disabled.close(); Result.Ok(())
+            case PluginRegistryResult.Err(error) =>
+                let persistenceCode = error.code
+                error.close()
+                Result.Err(AgentError(AgentErrorKind.Configuration, "plugin.startup_disable_failed",
+                    "failed to persist startup quarantine for " +
+                        productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + ": " + persistenceCode,
+                    fields: [ErrorField("plugin", productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))),
+                        ErrorField("activation_error", activationCode), ErrorField("persistence_error", persistenceCode)]))
         }
     }
 

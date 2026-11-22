@@ -97,6 +97,90 @@ func distributionExistingNativeRecordContract(scope: PluginInstallScope,
 @Test
 class DistributionExistingNativeRecordTests {
     @TestCase
+    func quarantineReturnsPrivateWriterRecordsAndKeepsThePersistenceError(): Unit {
+        let root = pluginContractTemp("startup-quarantine-custody")
+        try {
+            let source = nativePluginTestSource(root)
+            let namespace = "axyndra:native-command-fixture"
+            let scope = PluginInstallScope.Workspace
+            let product = lifecycleTestRequire(openProduct(config: ProductConfig(workspaceRoot: root + "/workspace",
+                settingsRoot: root + "/settings", stateRoot: root + "/state", fixture: true, asyncEnabled: false)))
+            try {
+                let record = match (product.importLocalPlugin(source, scope)) {
+                    case PluginRegistryResult.Ok(value) => value
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                try {
+                    let probe = record.descriptor.deriveCopiedDataPayment(1024)
+                    try {
+                        for (removed in [false, true]) {
+                            if (removed) { @Assert(product.uninstallPlugin(namespace, scope).isOk()) }
+                            let before = probe.retainedCustodyUsage113()
+                            let failure = match (product.inspectPlugin(root + "/absent")) {
+                                case PluginRegistryResult.Err(error) => error
+                                case PluginRegistryResult.Ok(value) => value.close(); throw IllegalStateException("missing package accepted")
+                            }
+                            let code = failure.code
+                            match (product.quarantineStartupRecord(record, failure)) {
+                                case Result.Ok(_) => @Expect(!removed)
+                                case Result.Err(error) =>
+                                    @Assert(removed)
+                                    @Expect(error.code, "plugin.startup_disable_failed")
+                                    @Assert(error.fields.size, 3)
+                                    @Expect(error.fields[0].value, namespace)
+                                    @Expect(error.fields[1].value, code)
+                                    @Expect(error.fields[2].value, "plugin.not_found")
+                            }
+                            // The writer and its two failure diagnostics may retain namespace copies.
+                            // Neither the internal writer record nor either Registry error escapes.
+                            let copies: Int64 = if (removed) { 3 } else { 1 }
+                            let after = probe.retainedCustodyUsage113()
+                            @Expect(after[2] <= before[2] + copies)
+                            @Expect(after[0] <= before[0] + copies * (1024 + productRegistryCopyInvoice83(namespace.size, 0)))
+                            @Expect(record.descriptor.textEquals(PluginDescriptorText.Namespace, namespace))
+                        }
+                    } finally { probe.close() }
+                } finally { record.close() }
+            } finally { product.close().value().getOrThrow() }
+        } finally { remove(root, recursive: true) }
+    }
+
+    @TestCase
+    func reopenQuarantinesAnEnabledPluginWithAMismatchedHandshake(): Unit {
+        let root = pluginContractTemp("startup-quarantine-native")
+        let workspace = root + "/workspace"; let settings = root + "/settings"
+        let namespace = "axyndra:native-command-fixture"
+        try {
+            let source = nativePluginTestSource(root, command: "not-the-native-hello")
+            let registry = ProductPluginRuntime(settings, workspace)
+            try {
+                let imported = match (registry.importLocal(source)) {
+                    case PluginRegistryResult.Ok(value) => value
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+                imported.close()
+                match (registry.setEnabled(namespace, true)) {
+                    case PluginRegistryResult.Ok(value) => try { @Expect(value.enabled) } finally { value.close() }
+                    case PluginRegistryResult.Err(error) => try { throw IllegalStateException(error.code) } finally { error.close() }
+                }
+            } finally { registry.close() }
+            let config = ProductConfig(workspaceRoot: workspace, settingsRoot: settings,
+                stateRoot: root + "/state", fixture: true, asyncEnabled: false)
+            for (_ in 0..2) {
+                let product = lifecycleTestRequire(openProduct(config: config))
+                try {
+                    let records = product.pluginSnapshots()
+                    try {
+                        @Assert(records.size, 1)
+                        let disabled = records.take(0)
+                        try { @Expect(!disabled.enabled); @Expect(disabled.explicitlyDisabled) }
+                        finally { disabled.close() }
+                    } finally { records.close() }
+                } finally { product.close().value().getOrThrow() }
+            }
+        } finally { remove(root, recursive: true) }
+    }
+    @TestCase
     func seedSelectionReturnsRegistryCustodyAfterWritingEffectiveLock(): Unit {
         let root = pluginContractTemp("distribution-selection-custody")
         try {
