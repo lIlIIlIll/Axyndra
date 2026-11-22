@@ -5271,3 +5271,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2385: final Product run on the quarantine fix, two new GC samples
 
 [On `be188192bd`](implementation/plan-execution-reliability.md#e2385-eligible-product-run-on-the-quarantine-fix), 436 of the 438 selected Native Product cases passed. The read-grant and completed-handshake cases crashed in GC root visitation on this ELF. The previous 672 exclusions did not run. No full Product or release pass. The attempted old-behavior negative control did not compile in time and supplied no RED result.
+
+### E2386: the real PTY runner must freeze the packaged network bridge
+
+[Ten real Linux tmux flows passed on `cdbabc3dea`](implementation/plan-execution-reliability.md#e2386-pin-the-network-bridge-in-real-pty-acceptance). The unfixed runner omitted the helper and failed the first local Responses request. Separately, all eleven production builds and the broker permission checks passed on `be188192bd`. Neither result clears continuous Core, the five-second first request, or final release acceptance.

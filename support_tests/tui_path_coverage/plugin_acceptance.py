@@ -7,7 +7,9 @@ Packages must be independently built; importing never fabricates Registry state.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
 import sys
 import time
 
@@ -165,39 +167,46 @@ def execute(case, name, protocol, package, mcp_package):
         and attempts[-1]["failure_kind"] == "", "the final actual provider request completes durably, not just provisional text")
 
 
+def freeze(source: Path, destination: Path) -> str:
+    digest = harness.sha256_file(source)
+    shutil.copy2(source, destination)
+    if not (harness.sha256_file(destination) == digest == harness.sha256_file(source)):
+        raise RuntimeError(f"{source.name} changed while freezing the PTY inputs")
+    return digest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate', type=Path, required=True)
     parser.add_argument('--model-package', type=Path, required=True)
     parser.add_argument('--mcp-package', type=Path, required=True)
     parser.add_argument("--native-library", type=Path)
+    parser.add_argument("--network-bridge", type=Path, help="matching packaged sandbox-net-bridge (default: next to candidate)")
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--case', action='append')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    import shutil
     candidate = args.output / "candidate" / "agent_app"
     candidate.parent.mkdir()
-    source_hash = harness.sha256_file(args.candidate)
-    shutil.copy2(args.candidate, candidate)
-    if not (harness.sha256_file(candidate) == source_hash == harness.sha256_file(args.candidate)):
-        raise RuntimeError("candidate changed while freezing its executable bytes")
+    source_hash = freeze(args.candidate, candidate)
+    bridge = candidate.with_name('sandbox-net-bridge')
+    bridge_source = args.network_bridge or args.candidate.with_name(bridge.name)
+    if not bridge_source.is_file() or not os.access(bridge_source, os.X_OK):
+        parser.error('an executable sandbox-net-bridge is required next to --candidate or via --network-bridge')
+    bridge_hash = freeze(bridge_source, bridge)
     native = None
     native_hash = None
     if args.native_library:
         native = args.output / "native" / args.native_library.name
         native.parent.mkdir()
-        native_hash = harness.sha256_file(args.native_library)
-        shutil.copy2(args.native_library, native)
-        if not (harness.sha256_file(native) == native_hash == harness.sha256_file(args.native_library)):
-            raise RuntimeError("native dependency changed while freezing its bytes")
-    import os
+        native_hash = freeze(args.native_library, native)
     os.environ.setdefault("AXYNDRA_TUI_TMUX_TMPDIR", str(args.output.parent / "t"))
     names = args.case or ['rich-responses', 'rich-completions', 'rich-messages', 'cancel', 'ctrl-c',
                            'http-error', 'timeout', 'incomplete-eof', 'invalid-utf8', 'mcp-tool']
     results = []
     harness.json_dump(args.output / 'provenance.json', {'binary_sha256': source_hash,
         "native_library_sha256": native_hash,
+        "network_bridge_sha256": bridge_hash,
         'sources': {p.name: harness.sha256_file(p) for p in (Path(__file__), harness.FIXTURE_PATH, Path(harness.__file__))},
         'limits': ['Linux tmux PTY only', 'Mouse and resize not exercised', 'No other platform acceptance'], 'cases': names})
     for name in names:
@@ -206,6 +215,8 @@ def main():
         # The same home stays reachable without overflowing the Unix socket prefix.
         case.environment["AXYNDRA_HOME"] = os.path.relpath(case.home, case.workspace)
         case.tmux_environment["AXYNDRA_HOME"] = case.environment["AXYNDRA_HOME"]
+        case.environment["AXYNDRA_NETWORK_BRIDGE"] = str(bridge.resolve())
+        case.tmux_environment["AXYNDRA_NETWORK_BRIDGE"] = case.environment["AXYNDRA_NETWORK_BRIDGE"]
         if native:
             case.environment["LD_LIBRARY_PATH"] = str(native.parent.resolve()) + ":" + case.environment["LD_LIBRARY_PATH"]
             case.tmux_environment["LD_LIBRARY_PATH"] = case.environment["LD_LIBRARY_PATH"]
