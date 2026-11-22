@@ -113,6 +113,25 @@ class PreparedMetadataCopy204Tests {
         }
     }
     @TestCase
+    func retainedAttachmentComparisonCannotReadAfterTheConsumerReturns(): Unit {
+        let context = ToolInvocationContext(RunId("attachment"), SessionId("session"), CapabilitySet())
+        let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+        let args = objectValue([ValueField("body", textValue("data雪"))])
+        let prepared = metadataFixture204(context, args)
+        let expected = NormalizedOperationPlan("copy-tool", args, [], OperationEffectClass.ReadOnly,
+            OperationRetryDisposition.Never, "copy-binding")
+        let wire = encodeStoredValue204(storedOperationPlanValue204(expected))
+        let source = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let work = bank.acquire(65536)
+        let saved = prepared.withInputAttachmentPlanComparison(work, { proof =>
+            @Expect(proof.matchesStored(wire)); proof
+        })
+        @Expect(!saved.hasCandidate()); @Expect(!saved.matchesStored(wire))
+        source.producerReturned204(); work.close(); root.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func documentVersionSelectsValidationButDoesNotValidateThePlan(): Unit {
         let context = ToolInvocationContext(RunId("protocol-run"), SessionId("session"), CapabilitySet())
         for (version in [PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA, PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA, "other"]) {

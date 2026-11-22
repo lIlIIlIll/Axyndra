@@ -1258,21 +1258,24 @@ public class HostArtifactStore {
         } finally { lock.unlock() }
     }
 
-    func verifyToolInputAttachment(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<Unit> {
+    func verifyToolInputAttachment(context: ToolInvocationContext, prepared: PreparedToolInvocation,
+        work: LogicalJsonOwnerReservation): Result<Unit> {
         let actual = match (database) { case Some(value) => value
             case None => return hostResourceError("input_attachment.store_required") }
         if (prepared.source.operationRoot.isNone()) { return hostResourceError("input_attachment.source_invalid") }
         try {
             actual.transaction { tx =>
                 match (context.cancellation.check()) { case Result.Err(_) => throw IllegalStateException("input owner cancelled"); case Result.Ok(_) => () }
-                verifyToolInputAttachmentExecuting(tx, prepared.operationId, context.runId, ThreadId(context.sessionId.value),
-                    context.epoch, prepared.source.operationRoot.getOrThrow(), prepared.operationPlan)
+                prepared.withInputAttachmentPlanComparison(work, { expected =>
+                    verifyToolInputAttachmentExecuting(tx, prepared.operationId, context.runId, ThreadId(context.sessionId.value),
+                        context.epoch, prepared.source.operationRoot.getOrThrow(), expected)
+                })
             }
             Result.Ok(())
         } catch (_: Exception) { hostResourceError("input_attachment.root_changed") }
     }
     func verifyRetainedToolInputAttachment(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        writer: HostServiceArtifactWriter, expected: AgentValue, lifetime: () -> Result<Unit>): Result<Unit> {
+        work: LogicalJsonOwnerReservation, writer: HostServiceArtifactWriter, expected: AgentValue, lifetime: () -> Result<Unit>): Result<Unit> {
         let actual = match (database) { case Some(value) => value; case None => return hostResourceError("input_attachment.store_required") }
         if (prepared.source.operationRoot.isNone()) { return hostResourceError("input_attachment.source_invalid") }
         lock.lock(); try {
@@ -1285,8 +1288,10 @@ public class HostArtifactStore {
                 if (!httpIntentExactFields(pin, ["evidence", "call_payload", "call_provenance"]) ||
                     canonicalAgentValue(pin.field("evidence").getOrThrow()) != canonicalAgentValue(expected)) {
                     throw IllegalStateException("actual retained input evidence changed") }
-                let current = input_store.retainToolInputAttachment(tx, prepared.operationId, context.runId, ThreadId(context.sessionId.value),
-                    context.epoch, prepared.source.operationRoot.getOrThrow(), prepared.operationPlan, writer.completedArtifact().value())
+                let current = prepared.withInputAttachmentPlanComparison(work, { proof =>
+                    input_store.retainToolInputAttachment(tx, prepared.operationId, context.runId, ThreadId(context.sessionId.value),
+                        context.epoch, prepared.source.operationRoot.getOrThrow(), proof, writer.completedArtifact().value())
+                })
                 if (canonicalAgentValue(current) != canonicalAgentValue(expected)) { throw IllegalStateException("retained input Root changed") }
                 match (writer.verifyPublished(blobPath(writer.completedArtifact().sha256), guard: lifetime)) {
                     case Result.Err(_) => throw IllegalStateException("actual retained input file changed"); case Result.Ok(_) => () }
@@ -1296,7 +1301,7 @@ public class HostArtifactStore {
         finally { lock.unlock() }
     }
     func retainToolInputAttachment(context: ToolInvocationContext, prepared: PreparedToolInvocation,
-        writer: HostServiceArtifactWriter, lifetime: () -> Result<Unit>): Result<AgentValue> {
+        work: LogicalJsonOwnerReservation, writer: HostServiceArtifactWriter, lifetime: () -> Result<Unit>): Result<AgentValue> {
         let actual = match (database) { case Some(value) => value
             case None => return hostResourceError("input_attachment.store_required") }
         let rootSource = match (prepared.source.operationRoot) { case Some(value) => value
@@ -1304,7 +1309,7 @@ public class HostArtifactStore {
         lock.lock()
         try {
             match (lifetime()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            match (verifyToolInputAttachment(context, prepared)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            match (verifyToolInputAttachment(context, prepared, work)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let artifact = writer.completedArtifact()
             match (writer.publish(blobPath(artifact.sha256), guard: lifetime)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             match (persistArtifactMetadata(artifact)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -1314,8 +1319,10 @@ public class HostArtifactStore {
                 match (lifetime()) { case Result.Err(_) => throw IllegalStateException("input owner cancelled"); case Result.Ok(_) => () }
                 match (writer.verifyPublished(blobPath(artifact.sha256), guard: lifetime)) {
                     case Result.Err(_) => throw IllegalStateException("input file changed before its actual Root pin"); case Result.Ok(_) => () }
-                input_store.retainToolInputAttachment(tx, prepared.operationId, context.runId, ThreadId(context.sessionId.value),
-                    context.epoch, rootSource, prepared.operationPlan, artifact.value())
+                prepared.withInputAttachmentPlanComparison(work, { proof =>
+                    input_store.retainToolInputAttachment(tx, prepared.operationId, context.runId, ThreadId(context.sessionId.value),
+                        context.epoch, rootSource, proof, artifact.value())
+                })
             }
             match (lifetime()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             Result.Ok(result)

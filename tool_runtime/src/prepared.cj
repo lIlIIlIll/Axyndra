@@ -135,6 +135,16 @@ public class PreparedToolInvocation {
             }
         }
     }
+    // The attachment session already owns the complete SQL/codec working invoice.
+    // Encode exactly the durable fields, not the extended in-memory copy envelope.
+    // The consumer can compare its own row; even a saved matcher loses its data on return.
+    public func withInputAttachmentPlanComparison<T>(work: LogicalJsonOwnerReservation,
+        body: (PluginChildPlanMatch) -> T): T {
+        work.ensureRetainedPeak(TOOL_INPUT_ATTACHMENT_WORKING_BYTES)
+        let encoded = withClosedPlanComparison({ plan => encodeStoredValue204(storedOperationPlanValue204(plan)) })
+        withPluginChildPlanBytes(Some(encoded), body)
+    }
+
     // A closed rule returns only Bool. Domain validation can inspect caller-owned
     // JSON, so do not hold a custody mutex while it runs.
     public func matchesFrozenPlan(rule: FrozenPluginPlanRule): Bool {

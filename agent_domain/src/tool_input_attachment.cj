@@ -7,6 +7,8 @@ import yjson_support.*
 
 public let TOOL_INPUT_ATTACHMENT_SCHEMA = "axyndra.tool-input-attachment/v1"
 public let TOOL_INPUT_ATTACHMENT_MAX_BYTES: Int64 = 262144
+// Full SQL verification, canonical input, plan encoding and its bounded DOM coexist.
+public let TOOL_INPUT_ATTACHMENT_WORKING_BYTES: Int64 = 67108864
 
 // A literal top-level field selector. It has no JSON-pointer/path semantics,
 // does not name an existing artifact, and conveys no Source or read grant.

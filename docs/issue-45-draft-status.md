@@ -5248,3 +5248,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### Readonly delegation reconstruction (E2374)
 
 [All 103 Tool cases and 19 selected Host cases passed](implementation/plan-execution-reliability.md#e2374-rebuild-readonly-delegation-input-without-lending-the-approved-plan) on the combined readonly route/delegation sources. The preceding Core variant preserved 40 durable authority edges but still failed the continuous grep/read-view operation. Complete Core and release acceptance remain open.
+
+### E2375–E2376 — Attachment SQL: complete plan comparison
+
+[The locked refusal and Native SQL proof](implementation/plan-execution-reliability.md#e2375-what-the-read-view-output-refused) distinguish the output reservation from any alleged leak. Store 263/263, Tool 104/104 and 19 selected Host cases passed for the new [attachment SPI](compatibility.md#compare-the-executing-root-before-retaining-an-input-attachment). Earlier raw exports remain charged. Continuous Core, the original cold model gate and final release are still open; GC remains deferred and the PR stays Draft.

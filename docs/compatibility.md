@@ -274,3 +274,18 @@ plugin versions or unavailable executors do not make historical records
 executable: inspection preserves evidence, while continuation must report its
 actual recovery requirement. CLI, RPC and TUI consume the same host projection
 rather than reconstructing execution authority in a frontend.
+
+## Compare the executing Root before retaining an input attachment
+
+Rebuild callers of `agent_store.verifyToolInputAttachmentExecuting` and
+`agent_store.retainToolInputAttachment`. Both take a `PluginChildPlanMatch`
+where they previously took a `NormalizedOperationPlan`. Use the attachment
+session’s existing working reservation when calling
+`PreparedToolInvocation.withInputAttachmentPlanComparison`. Inside its callback,
+pass the proof to the Store method that checks the executing Root.
+
+The Store compares the complete stored plan, including its working directory.
+A matching binding digest alone is insufficient. The proof expires when the
+callback returns or throws. Neither a match nor expiry changes the Source,
+releases the attachment, or acknowledges its output. Existing SQLite rows and
+the Native plugin protocol need no migration.

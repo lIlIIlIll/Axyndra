@@ -63,7 +63,18 @@ class ToolInputAttachmentStoreTests {
         db.transaction<Unit> { tx => tx.execute("INSERT INTO artifacts(hash,mime,size,metadata,relative_path) VALUES (?,?,?,?,?)",
             [SqlParameter.Text(hash), SqlParameter.Text(mime), SqlParameter.Int64Value(text.size),
             SqlParameter.Text(stringifyUnifiedJson(recorded)), SqlParameter.Text("blobs/" + hash + ".txt")]) }
-        let evidence = db.transaction { tx => retainToolInputAttachment(tx, operation, run, thread, active.epoch, source, plan, artifact) }
+        // The impostor has the actual binding digest, attachment and Source; only cwd differs.
+        let changedPlan = storedOperationPlanValue(plan)
+        changedPlan.put("cwd", textValue("other-working-directory"))
+        let retain = { proof: PluginChildPlanMatch => db.transaction { tx =>
+            retainToolInputAttachment(tx, operation, run, thread, active.epoch, source, proof, artifact) } }
+        let refused = withPluginChildPlanBytes(Some(encodeStoredValue(changedPlan)), { wrong =>
+            try { let _ = retain(wrong); false } catch (_: IllegalStateException) { true }
+        })
+        @Expect(refused)
+        @Expect(db.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='tool_input_attached'"), 0)
+        let wire = encodeOperationPlan(plan)
+        let evidence = withPluginChildPlanBytes(Some(wire), retain)
         let retained = evidence.field("artifact").getOrThrow()
         // Field order is part of the existing durable encoding, including on replay.
         @Expect(encodeStoredValue(retained), encodeStoredValue(artifact))
@@ -73,7 +84,7 @@ class ToolInputAttachmentStoreTests {
         let removed = evidence.field("profile").getOrThrow().asObject().remove("max_bytes")
         @Expect(removed.isSome())
         @Expect(readonlyDelegationInteger(plan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").getOrThrow(), "max_bytes"), 64)
-        let replay = db.transaction { tx => retainToolInputAttachment(tx, operation, run, thread, active.epoch, source, plan, artifact) }
+        let replay = withPluginChildPlanBytes(Some(wire), retain)
         @Expect(readonlyDelegationInteger(replay.field("profile").getOrThrow(), "max_bytes"), 64)
         replay.field("artifact").getOrThrow().put("sha256", textValue("changed"))
         @Expect(httpIntentText(artifact, "sha256"), hash)

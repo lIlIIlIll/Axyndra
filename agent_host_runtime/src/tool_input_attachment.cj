@@ -85,7 +85,7 @@ class HostToolInputAttachmentSession {
             // Full Root SQL verification may coexist with canonical input,
             // plan encoding and its bounded DOM. This is paid in the existing
             // 144 MiB aggregate, not a new pool or a Run/output budget increase.
-            allocation.ensureRetainedPeak(67108864)
+            allocation.ensureRetainedPeak(TOOL_INPUT_ATTACHMENT_WORKING_BYTES)
             charge = allocation
         } catch (error: Exception) { allocation.close(); throw error }
     }
@@ -114,9 +114,9 @@ class HostToolInputAttachmentSession {
         }
         match (host.ordinaryToolInput(context, prepared, namespace, contribution, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        match (evidence) { case Some(value) => artifacts.verifyRetainedToolInputAttachment(context, prepared,
+        match (evidence) { case Some(value) => artifacts.verifyRetainedToolInputAttachment(context, prepared, charge,
             writer.getOrThrow(), value, { => checkLifetime() })
-            case None => artifacts.verifyToolInputAttachment(context, prepared) }
+            case None => artifacts.verifyToolInputAttachment(context, prepared, charge) }
     }
     func descriptor(): ?AgentValue { evidence }
     func stage(): Result<AgentValue> {
@@ -139,7 +139,7 @@ class HostToolInputAttachmentSession {
             }
             match (selected.finish(raw.size, modelPolicySha256(raw))) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             match (validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            let retained = match (artifacts.retainToolInputAttachment(context, prepared, selected, { => checkLifetime() })) {
+            let retained = match (artifacts.retainToolInputAttachment(context, prepared, charge, selected, { => checkLifetime() })) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
             evidence = Some(retained)
             match (validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }

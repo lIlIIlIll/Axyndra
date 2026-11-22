@@ -10,27 +10,29 @@ import yjson_support.*
 // budget charge, child Operation, parent grant or new Source constructor.
 // The actual Direct source's live validator must run OUTSIDE this transaction.
 func requireToolInputAttachmentRoot(tx: SqliteTransaction, operation: OperationId, run: RunId,
-    thread: ThreadId, epoch: Int64, source: OperationRootSource, plan: NormalizedOperationPlan): ReadonlyDerivedNode {
+    thread: ThreadId, epoch: Int64, source: OperationRootSource, expected: PluginChildPlanMatch): (ReadonlyDerivedNode, String) {
     let ancestry = requireReadonlyDerivedAncestors(tx, operation, run, Some(source))
     let node = ancestry.root
     if (ancestry.ancestors.size != 1 || node.operation.value != operation.value || node.parent != "" ||
-        node.thread.value != thread.value || node.epoch != epoch || node.state != "executing" ||
-        encodeOperationPlan(node.plan) != encodeOperationPlan(plan) ||
-        plan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").isNone()) {
+        node.thread.value != thread.value || node.epoch != epoch || node.state != "executing") {
         throw IllegalStateException("input attachment lost its actual ordinary executing Root")
     }
-    node
+    let encoded = encodeOperationPlan(node.plan)
+    if (!expected.matchesStored(encoded) || node.plan.canonicalArguments.field("host_plan").getOrThrow().field("input_attachment").isNone()) {
+        throw IllegalStateException("input attachment lost its actual ordinary executing Root")
+    }
+    (node, encoded)
 }
 
 public func verifyToolInputAttachmentExecuting(tx: SqliteTransaction, operation: OperationId, run: RunId,
-    thread: ThreadId, epoch: Int64, source: OperationRootSource, plan: NormalizedOperationPlan): Unit {
-    let _ = requireToolInputAttachmentRoot(tx, operation, run, thread, epoch, source, plan)
+    thread: ThreadId, epoch: Int64, source: OperationRootSource, expected: PluginChildPlanMatch): Unit {
+    let _ = requireToolInputAttachmentRoot(tx, operation, run, thread, epoch, source, expected)
 }
 
 public func retainToolInputAttachment(tx: SqliteTransaction, operation: OperationId, run: RunId,
-    thread: ThreadId, epoch: Int64, source: OperationRootSource, expected: NormalizedOperationPlan,
+    thread: ThreadId, epoch: Int64, source: OperationRootSource, expected: PluginChildPlanMatch,
     artifact: AgentValue): AgentValue {
-    let node = requireToolInputAttachmentRoot(tx, operation, run, thread, epoch, source, expected)
+    let (node, storedPlan) = requireToolInputAttachmentRoot(tx, operation, run, thread, epoch, source, expected)
     // The complete expected plan matched inside this transaction. Publish
     // data from the independently decoded Store row, not the caller's DOM.
     let plan = node.plan
@@ -73,7 +75,7 @@ public func retainToolInputAttachment(tx: SqliteTransaction, operation: Operatio
     }
     let reserved = tx.query("SELECT reserved_receipt_id FROM operation_effect_records WHERE operation_id=? AND run_id=? " +
         "AND tool_call_item_id=? AND normalized_plan=?", [SqlParameter.Text(operation.value), SqlParameter.Text(run.value),
-        SqlParameter.Text(node.item.value), SqlParameter.Text(encodeOperationPlan(plan))])
+        SqlParameter.Text(node.item.value), SqlParameter.Text(storedPlan)])
     if (reserved.size != 1 || reserved[0].required(0) == "") {
         throw IllegalStateException("input attachment has no original reserved Receipt identity")
     }
