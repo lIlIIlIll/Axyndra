@@ -5256,3 +5256,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2377–E2378 — Ordinary input validation and combined Core
 
 [The combined Host/SQL Core](implementation/plan-execution-reliability.md#e2377-split-validation-only-host-calls-from-worker-input) passed five Native controls, but continuous Core still failed `read_view.output_capacity`; the two SQLite copies retained 40 matched authority edges. [The preceding release and matched benchmark](implementation/plan-execution-reliability.md#e2378-release-and-matched-load-before-the-attachment-change) qualify their own source only: large-output and cancellation reaping had worse P95 than baseline. Product, the cold five-second model gate and final release remain open. GC stays deferred.
+
+### E2379–E2380: Product passed the eligible set; Core and cold startup remain open
+
+[Current-source Product and Core evidence](implementation/plan-execution-reliability.md#e2379-product-coverage-and-the-live-core-refusal): 436 eligible Product cases passed, 672 remained unrun, and eleven production builds plus broker permission checks passed. Continuous Core still refused read-view output. The same-stop trace identified 42 live Prepared payments but no new DATA return. [The preceding Coding package](implementation/plan-execution-reliability.md#e2380-the-cold-request-failed-after-the-dispatch-claim) timed out after a real dispatch claim and before either local listener accepted a connection. Its CLI startup was slower than baseline. Full release acceptance remains open; GC is deferred.
