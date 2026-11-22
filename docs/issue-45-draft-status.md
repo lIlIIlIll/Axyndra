@@ -5283,3 +5283,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2388: existing-install Todo passed; other gates remain open
 
 [The real Todo save](implementation/plan-execution-reliability.md#e2388-real-todo-save-on-an-existing-installation-core-and-provider-still-fail) passed on the current Coding Host with older, digest-verified installed plugins: two completed Runs, six completed Receipts, four distinct user approvals and revision 1. It is not a fresh/current-bundle pass. Continuous Core still refused an output allocation; 239 live child invoices were identified, without proof of release. A private provider candidate reached the local HTTP listener but timed out before returning a reply. No candidate or GC fix is accepted by this checkpoint.
+
+### E2389: current-bundle Todo verified; first provider reply still times out
+
+[The current Coding packages](implementation/plan-execution-reliability.md#e2389-current-bundle-todo-the-first-provider-request-and-ten-app-pty-cases) passed a real Todo save after explicit installation through Minimal: two completed Runs, six matching Receipts, four user approvals, revision 1. A separate copy reached local HTTP at +4,881.08 ms but failed the unchanged five-second first-reply gate; five processes needed cleanup. Ten real Native App PTY cases passed with same-source fixtures. No fresh Coding assembly, continuous Core, full Product or full-release pass is claimed.
