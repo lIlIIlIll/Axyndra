@@ -63,13 +63,20 @@ public enum FrozenPluginPlanRule {
     HttpChildOf(NormalizedOperationPlan) | CapabilitiesWithin(CapabilitySet) |
     ReadonlyDelegatedChild | HttpStreamParent | ChannelParent | AllowsChild(FrozenPluginChildRelation, PreparedToolInvocation) |
     DerivableParent(Bool, Bool) | PermitsDerivedIntent(NormalizedOperationPlan, String, String, String) |
-    FileApplicationContentsMatch(AgentValue, AgentValue) | ReadViewFact(FrozenReadViewCheck) | Effect(OperationEffectClass)
+    FileApplicationContentsMatch(AgentValue, AgentValue) | ReadViewFact(FrozenReadViewCheck) | Effect(OperationEffectClass) |
+    ReadonlyExecTarget(String, String, String, String) | AllowsExtension(String)
 
     // A broker may already own the parent plan (Task or durable Store).
     // Otherwise both Prepared participants pin their own DATA for this call.
     public func matches(plan: NormalizedOperationPlan): Bool {
         match (this) {
             case Effect(expected) => plan.effectClass == expected
+            case AllowsExtension(name) =>
+                CapabilitySet(values: plan.requiredCapabilities).allows(CapabilityKind.ExtensionInvoke, resource: name)
+            case ReadonlyExecTarget(name, version, fingerprint, schema) =>
+                plan.toolName == name && plan.implementation.toolVersion == version &&
+                    plan.implementation.implementationFingerprint == fingerprint && plan.implementation.schemaDigest == schema &&
+                    plan.effectClass == OperationEffectClass.ReadOnly && networkPolicyModeIsDenied(plan.networkPolicy.mode)
             case ReadViewFact(check) => check.matches(plan.canonicalArguments)
             case FileApplicationContentsMatch(operations, patch) =>
                 let arguments = plan.canonicalArguments

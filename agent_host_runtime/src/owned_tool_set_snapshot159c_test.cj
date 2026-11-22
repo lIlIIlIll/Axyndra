@@ -233,6 +233,33 @@ private func withOrdinaryNativeCatalog221(action: (HostJavaScriptPluginHost, Too
 @Test
 class OrdinaryCatalogLifetimeSmoke221 {
     @TestCase
+    func readonlyTargetRejectsDifferentDisplayArgumentsAndMissingPublication(): Unit {
+        let f = LivePolicyCanonicalFixture()
+        try {
+            let catalog = ToolCatalog(); let executor = CatalogSnapshotExecutor159c()
+            let caps = CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+            let name = "fixture.read"; let thread = f.active.threadId
+            catalog.register(ToolDescriptor(ModelToolDefinition(name, "read", objectValue([ValueField("type", textValue("object"))])),
+                Capability(CapabilityKind.WorkspaceRead), implementationVersion: "1", implementationFingerprint: "read:1"), executor).value().getOrThrow()
+            let context = ToolInvocationContext(f.active.runId, SessionId(thread.value), caps, epoch: f.active.epoch,
+                toolContext: ToolContextDescriptor(workspaceRoot: f.root, cwd: f.root), cancellation: f.cancellation.token,
+                contextProjection: f.active.contextSnapshot, toolSetSnapshot: Some(catalog.toolSetSnapshot("read-snapshot", caps, threadId: Some(thread))))
+            let call = ToolCall("read-call", name, objectValue([ValueField("value", textValue("first"))]))
+            let target = hostFreezePluginReadOnlyExecTarget(catalog, context, call).value().getOrThrow()
+            let pipeline = ToolPipeline(catalog, f.store, PathIdentitySqlAudit(f.database), HostIds())
+            let prepared = match (pipeline.prepare(context, call).value().getOrThrow()) {
+                case ToolPreparation.Ready(value) => value
+                case _ => throw IllegalStateException("readonly route fixture was not prepared") }
+            @Expect(target.validate(catalog, context, prepared).isOk())
+            let wrong = hostFreezePluginReadOnlyExecTarget(catalog, context, ToolCall("read-call", name,
+                objectValue([ValueField("value", textValue("second"))]))).value().getOrThrow()
+            @Expect(wrong.validate(catalog, context, prepared).error().getOrThrow().code, "extension.exec_plan_changed")
+            @Expect(catalog.unregister(name))
+            @Expect(target.validate(catalog, context, prepared).error().getOrThrow().code, "extension.exec_target_missing")
+            @Expect(executor.calls.load(), 0)
+        } finally { f.close() }
+    }
+    @TestCase
     func selectedServiceRefusalReturnsItsPrivateConfiguration(): Unit {
         withOrdinaryNativeCatalog221({ host, _, record, root =>
             let namespace = "axyndra:ordinary-catalog"

@@ -115,8 +115,8 @@ public class HostPluginReadOnlyExecTarget {
     func context(root: PreparedToolInvocation, parent: ToolInvocationContext,
         ordinary: ToolInvocationContext): Result<ToolInvocationContext> {
         if (readView.isNone()) { return Result.Ok(ordinary) }
-        let ceiling = CapabilitySet(values: root.operationPlan.requiredCapabilities)
-        if (!ceiling.allows(CapabilityKind.ExtensionInvoke, resource: name) || !parent.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: name)) {
+        if (!root.matchesFrozenPlan(FrozenPluginPlanRule.AllowsExtension(name)) ||
+            !parent.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: name)) {
             return hostPluginResourceError("extension.exec_parent_ceiling", "actual parent does not authorize the selected readonly QName") }
         let caps = ArrayList<Capability>()
         for (cap in ordinary.capabilities.values where cap.kind == CapabilityKind.WorkspaceRead) { caps.add(cap) }
@@ -134,17 +134,13 @@ public class HostPluginReadOnlyExecTarget {
     }
     func validate(catalog: ToolCatalog, context: ToolInvocationContext,
         prepared: PreparedToolInvocation): Result<Unit> {
-        if (prepared.call.callId != callId || prepared.call.name != name ||
-            canonicalAgentValue(prepared.call.arguments) != canonicalAgentValue(call.arguments) ||
-            prepared.operationPlan.toolName != name ||
-            prepared.operationPlan.implementation.toolVersion != version ||
-            prepared.operationPlan.implementation.implementationFingerprint != fingerprint ||
-            prepared.operationPlan.implementation.schemaDigest != schemaDigest ||
-            prepared.operationPlan.effectClass != OperationEffectClass.ReadOnly ||
-            !networkPolicyModeIsDenied(prepared.operationPlan.networkPolicy.mode)) {
+        if (!prepared.textEquals(PreparedMetadataText.CallId, callId) ||
+            !prepared.textEquals(PreparedMetadataText.CallName, name) ||
+            !prepared.withCallInput({ input => input.argumentsMatchCanonical(canonicalAgentValue(call.arguments)) }) ||
+            !prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyExecTarget(name, version, fingerprint, schemaDigest))) {
             return hostPluginResourceError("extension.exec_plan_changed", "readonly exec child lost its frozen request, implementation or denied-network plan")
         }
-        match (readView) { case Some(value) => match (value.validate(catalog, context, prepared)) {
+        match (readView) { case Some(value) => match (value.validate(catalog, context, prepared, name)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         let current = match (hostFreezePluginReadOnlyExecTarget(catalog, context, call, readView: readView)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -193,7 +189,7 @@ public func hostFreezePluginReadOnlyExecTarget(catalog: ToolCatalog, context: To
     let network = match (descriptor.networkPolicy(captured)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
     if (!networkPolicyModeIsDenied(network.mode)) {
         return hostPluginResourceError("extension.exec_network_denied", "readonly exec requires the exact current denied-network policy") }
-    match (readView) { case Some(value) => match (value.current(catalog, context, captured)) {
+    match (readView) { case Some(value) => match (value.current(catalog, context, captured.name)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
     for (required in descriptor.requiredCapabilities(captured)) {
         if ((required.kind != CapabilityKind.WorkspaceRead && !(readView.isSome() && required.kind == CapabilityKind.ExtensionInvoke && required.resource == captured.name)) ||

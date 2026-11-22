@@ -71,6 +71,26 @@ class PreparedMetadataCopy204Tests {
         @Expect(!matches(operations, patch("digest", "5.0")))
     }
     @TestCase
+    func readonlyExecTargetRequiresCurrentIdentityAndThePlanCapabilityResource(): Unit {
+        let name = "plugin.fixture.read"; let args = objectValue([])
+        let context = ToolInvocationContext(RunId("readonly-run"), SessionId("session"), CapabilitySet())
+        for (resource in [name, "another", ""]) {
+            let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+            let plan = NormalizedOperationPlan(name, args, [Capability(CapabilityKind.ExtensionInvoke, resource: resource)],
+                OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "bound", toolVersion: "1",
+                implementationFingerprint: "active", schemaDigest: "schema")
+            let prepared = PreparedToolInvocation(OperationId("read"), ToolCall("id", name, args), exclusiveToolConcurrency(),
+                PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+            let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+            @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.AllowsExtension(name)), resource != "another")
+            @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyExecTarget(name, "1", "active", "schema")))
+            @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyExecTarget(name, "1", "revoked", "schema")))
+            @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyExecTarget(name, "1", "active", "replaced")))
+            owner.producerReturned204(); root.close()
+            @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+        }
+    }
+    @TestCase
     func documentVersionSelectsValidationButDoesNotValidateThePlan(): Unit {
         let context = ToolInvocationContext(RunId("protocol-run"), SessionId("session"), CapabilitySet())
         for (version in [PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA, PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA, "other"]) {

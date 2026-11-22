@@ -5240,3 +5240,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### Read-view validation and Core capacity (E2372)
 
 [101/101 Tool, 12 selected Host cases and five Native Core controls](implementation/plan-execution-reliability.md#e2372-validate-a-read-view-without-exporting-its-prepared-input). Validation no longer exports the input. The actual continuous Core receipt still records `read_view.output_capacity`; the earlier DATA debts remain payable.
+
+### Readonly exec target validation (E2373)
+
+[102/102 Tool tests and 13 selected Host tests passed](implementation/plan-execution-reliability.md#e2373-revalidate-the-selected-readonly-exec-target-without-exporting-its-request). Changed arguments and a removed catalog entry still refuse validation. This removes raw exports at the route, not the outstanding continuous Core refusal.

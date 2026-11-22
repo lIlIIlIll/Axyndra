@@ -590,9 +590,9 @@ public open class HostJavaScriptPluginHost {
                 namespace, tool, generation, configuration.digest, value))) }
     }
     func captureReadonlyReadViewTarget(catalog: ToolCatalog, context: ToolInvocationContext,
-        call: ToolCall): Result<HostReadOnlyExecReadView> {
-        let namespace = namespaceForQualifiedTool(call.name)
-        let contribution = contributionForQualifiedTool(call.name)
+        name: String): Result<HostReadOnlyExecReadView> {
+        let namespace = namespaceForQualifiedTool(name)
+        let contribution = contributionForQualifiedTool(name)
         let generation = instanceGeneration(namespace)
         let descriptor = match (servicePackageData81(namespace, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         let profile = match (toolExecutionProfile(namespace, contribution, generation)) {
@@ -608,10 +608,10 @@ public open class HostJavaScriptPluginHost {
         match (configuration.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let version = match (instanceExecutorVersion(namespace, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         let schema = match (currentToolSchemaDigest(namespace, contribution, generation)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        let published = match (catalog.publishedDescriptor(call.name, threadId: Some(ThreadId(context.sessionId.value)))) {
+        let published = match (catalog.publishedDescriptor(name, threadId: Some(ThreadId(context.sessionId.value)))) {
             case None => return hostPluginResourceError("extension.exec_target_missing", "readonly exec target is not published to the actual Thread"); case Some(value) => value }
         if (published.implementationVersion != version || published.implementationFingerprint != namespace + ":" + descriptor.contentDigest ||
-            published.schemaDigest != schema || published.capability.kind != CapabilityKind.ExtensionInvoke || published.capability.resource != call.name ||
+            published.schemaDigest != schema || published.capability.kind != CapabilityKind.ExtensionInvoke || published.capability.resource != name ||
             published.controlOnly || published.hostServiceOnly) {
             return hostPluginResourceError("extension.exec_target_changed", "readonly exec target differs from actual ready package, schema and generation") }
         Result.Ok(HostReadOnlyExecReadView(this, namespace, contribution, generation, descriptor.contentDigest, configuration.digest))
