@@ -12212,3 +12212,16 @@ A **fresh** operator on the same packaged ELF failed earlier: provider managemen
 When activation fails during `activateStartupPlugins`, Product closes the startup transaction before disabling the record in its original scope. It now saves the fixed activation category and closes the activation error before calling the registry writer. On success it closes the disabled record returned by the writer; on failure it closes the persistence error after saving its fixed category. The caller still owns its original record. The public failure remains `plugin.startup_disable_failed` with `plugin`, `activation_error` and `persistence_error` fields.
 
 On `bf4059af14` plus this change, Native Product ELF `89c2f069d52b` enumerated 1,110 cases. Three ran and passed: the registry payment and error-field regression, a real mismatched Native handshake followed by two Product opens with the plugin disabled, and the existing effective-lock control. The payment assertions allow the namespace copies required for the returned error. No other case or previously built release is qualified by this run. Evidence: `startupquarantinecustody2388/qualified.json`.
+
+### E2385: eligible Product run on the quarantine fix
+
+The Product ELF from E2384 (`89c2f069d52b`), built from the two source files published in `be188192bd`, ran the other 435 selected identities under their original limits. Of the 438 cases executed on this ELF, **436 passed and two crashed**. The original 672 exclusions were not launched.
+
+| SIGSEGV case | First runtime frame |
+|---|---|
+| `PluginReadViewTests.readGrantCannotEscapeToWholeWorkspaceProcessOrPlanProposal` | `MapleRuntime::CheckAndPush` |
+| `PluginServiceHandshakeTests.completedHandshakeCannotExpireAnActiveServiceOrShortenItsInvocationWindow` | `Mutator::GcPhaseEnum` reference-field callback |
+
+Both retained cores show `GCTib::ForEachBitmapWord`, `Mutator::GcPhaseEnum` and `TracingCollector::VisitStackRoots` on the crashing thread. The original signal PCs map to the fixed runtime. The captured bytes from non-writable input segments match the tested Product executable and runtime in each core. These two samples are GC-deferred and have no pass credit; exclude both from subsequent runs. Evidence: `startupquarantineeligible2392/qualified.json` and `startupquarantineeligible2392/real-cores/qualification.json`.
+
+The private old-behavior comparison reached its original 900-second compile limit before linking the test executable. No negative-control case ran. E2384's three passes stand on their own; this build does not supply RED evidence. See `startupquarantinered2392/disposition.json`.

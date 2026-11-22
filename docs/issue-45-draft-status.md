@@ -5267,3 +5267,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2384: startup quarantine preserves errors and returns the writer's record
 
 [The Native Product regression](implementation/plan-execution-reliability.md#e2384-startup-quarantine-returns-its-private-registry-handles) exercises successful quarantine, failure to persist it, and a mismatched installed Native handshake. Three selected cases passed on the changed Product ELF. The earlier 606 wire checks and five-second timeout apply to the preceding release. Continuous Core and final release acceptance remain open.
+
+### E2385: final Product run on the quarantine fix, two new GC samples
+
+[On `be188192bd`](implementation/plan-execution-reliability.md#e2385-eligible-product-run-on-the-quarantine-fix), 436 of the 438 selected Native Product cases passed. The read-grant and completed-handshake cases crashed in GC root visitation on this ELF. The previous 672 exclusions did not run. No full Product or release pass. The attempted old-behavior negative control did not compile in time and supplied no RED result.
