@@ -5299,3 +5299,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2392: immediate parent identity on derived calls
 
 [The current Tool and Core results](implementation/plan-execution-reliability.md#e2392-derived-source-retains-the-immediate-parent-id-without-exporting-an-equal-prepared-call) cover reuse of an already retained root call ID without exporting a Prepared call. All 105 Tool tests and five Core controls passed. The full continuous Core fixture still failed both read-view-capacity Receipts; no new five-second provider, full Product or final distribution pass is claimed. GC remains deferred and this PR remains Draft.
+
+### E2393: current build and PTY pass; fixed-capacity Core still rejects output
+
+[The locked refusal and production evidence](implementation/plan-execution-reliability.md#e2393-current-core-refusal-production-build-and-terminal-checks) binds the `fe56c99b10` behavior: no observed raw exports from `prepareDerived`, but the output still exceeded the bank by 5,902,936 bytes. Eleven production builds, the real broker controls and ten local PTY cases passed. Fresh distribution assembly was blocked at disk preflight. Neither those PTYs nor the prior paired benchmark qualify the packaged five-second provider gate. Full Product and release remain incomplete; keep the PR Draft.
