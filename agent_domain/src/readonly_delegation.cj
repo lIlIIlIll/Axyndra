@@ -12,6 +12,13 @@ public let HOST_DERIVED_MAX_DEPTH: Int64 = 8
 public let HOST_DERIVED_MAX_WIDTH: Int64 = 32
 public let HOST_DERIVED_MAX_OPERATIONS: Int64 = 256
 
+// Rebuild the same bounded worker input as ordinary preparation. The decoded
+// result owns its JSON; even a retained input view cannot expose the plan.
+public func copyReadonlyDelegationInput(input: ToolResolverInput, maximum: Int64): AgentValue {
+    input.domainProjection({ call =>
+        parseUnifiedJson(stringifyUnifiedJson(call.arguments.field("input").getOrThrow()), maxBytes: maximum) })
+}
+
 // Data-only narrowing rules. The host builds this envelope from the operator
 // configuration and actual frozen catalog; its shape is NOT an authorization.
 public func isFrozenReadonlyDelegationParentPlan(plan: NormalizedOperationPlan): Bool {

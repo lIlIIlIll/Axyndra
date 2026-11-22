@@ -91,6 +91,28 @@ class PreparedMetadataCopy204Tests {
         }
     }
     @TestCase
+    func delegationRebuildUsesIndependentInputAndReturnsItsCountedReaders(): Unit {
+        let context = ToolInvocationContext(RunId("delegation-run"), SessionId("session"), CapabilitySet())
+        for (name in ["copy-tool", "other"]) {
+            let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+            let args = objectValue([ValueField("input", objectValue([ValueField("body", textValue("data雪"))]))])
+            let plan = NormalizedOperationPlan(name, args, [], OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "binding")
+            let prepared = PreparedToolInvocation(OperationId("comparison"), ToolCall("id", "copy-tool", objectValue([])),
+                exclusiveToolConcurrency(), PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+            let source = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+            @Expect(prepared.displayMatchesFrozenToolName(), name == "copy-tool")
+            let independent = prepared.withCanonicalCallInput({ input => copyReadonlyDelegationInput(input, 128) })
+            for (body in ["data雪", "different"]) {
+                independent.put("body", textValue(body))
+                let rebuilt = ToolCanonicalArgumentsOwner204(root.deriveRetainedLease())
+                rebuilt.installProducerData204(objectValue([ValueField("input", independent)])); rebuilt.producerFrameReturned204()
+                @Expect(prepared.matchesRebuiltArguments(rebuilt).value().getOrThrow(), body == "data雪")
+            }
+            source.producerReturned204(); root.close()
+            @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+        }
+    }
+    @TestCase
     func documentVersionSelectsValidationButDoesNotValidateThePlan(): Unit {
         let context = ToolInvocationContext(RunId("protocol-run"), SessionId("session"), CapabilitySet())
         for (version in [PLUGIN_DOCUMENT_PAYLOAD_PARENT_SCHEMA, PLUGIN_DOCUMENT_ROW_JOURNAL_PARENT_SCHEMA, "other"]) {

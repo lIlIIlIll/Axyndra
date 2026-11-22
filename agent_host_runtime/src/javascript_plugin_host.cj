@@ -462,7 +462,7 @@ public open class HostJavaScriptPluginHost {
     }
     func prepareReadonlyDelegationOwned204(context: ToolInvocationContext, call: ToolCall,
         namespace: String, tool: String, generation: UInt64): Result<ToolCanonicalArgumentsOwner204> {
-        hostPrepareReadonlyDelegationOwned204(this, settingsRoot, namespace, tool, generation, context, call.name, call.arguments)
+        hostPrepareReadonlyDelegationOwned204(this, settingsRoot, namespace, tool, generation, context, HostReadonlyDelegationInput.Raw(call.name, call.arguments))
     }
 
     public func delegationInput(context: ToolInvocationContext, prepared: PreparedToolInvocation,

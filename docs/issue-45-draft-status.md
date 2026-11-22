@@ -5244,3 +5244,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### Readonly exec target validation (E2373)
 
 [102/102 Tool tests and 13 selected Host tests passed](implementation/plan-execution-reliability.md#e2373-revalidate-the-selected-readonly-exec-target-without-exporting-its-request). Changed arguments and a removed catalog entry still refuse validation. This removes raw exports at the route, not the outstanding continuous Core refusal.
+
+### Readonly delegation reconstruction (E2374)
+
+[All 103 Tool cases and 19 selected Host cases passed](implementation/plan-execution-reliability.md#e2374-rebuild-readonly-delegation-input-without-lending-the-approved-plan) on the combined readonly route/delegation sources. The preceding Core variant preserved 40 durable authority edges but still failed the continuous grep/read-view operation. Complete Core and release acceptance remain open.

@@ -151,6 +151,33 @@ public class PreparedToolInvocation {
     func matchFrozenPlanFrame(rule: FrozenPluginPlanRule): Bool {
         rule.matches(operationPlanData204.getOrThrow())
     }
+    // These comparisons cannot return Call/Plan DATA. No caller-provided action
+    // enters this frame. A custom JSON exception is not proof that DATA returned.
+    public func displayMatchesFrozenToolName(): Bool {
+        withClosedPlanComparison({ plan => textEquals(PreparedMetadataText.CallName, plan.toolName) })
+    }
+    public func matchesRebuiltArguments(actual: ToolCanonicalArgumentsOwner204): Result<Bool> {
+        withClosedPlanComparison({ plan => actual.matchesArguments204(plan.canonicalArguments) })
+    }
+    private func withClosedPlanComparison<T>(action: (NormalizedOperationPlan) -> T): T {
+        match (detachedMetadata204) {
+            case Some(owner) =>
+                owner.beginScopedRead204(this)
+                try { action(operationPlanData204.getOrThrow()) }
+                catch (error: Exception) { owner.holdUnknown204(); throw error }
+                finally { owner.consumerReturned204() }
+            case None =>
+                requireMetadataBorrow204()
+                match (catalogConsumer204) {
+                    case Some(owner) =>
+                        let frame = owner.beginFrame204()
+                        try { action(operationPlanData204.getOrThrow()) }
+                        catch (error: Exception) { owner.holdUnknown204(); throw error }
+                        finally { frame.returnedWholeAction204() }
+                    case None => action(operationPlanData204.getOrThrow())
+                }
+        }
+    }
     // Resolve the actual display call. None means the registration is absent.
     public func resolvedHostServiceMatches(catalog: ToolCatalog, fingerprint: String, threadId: ThreadId): ?Bool {
         compareResolvedDescriptor(catalog, threadId, PreparedDescriptorCheck.DisplayService(fingerprint))

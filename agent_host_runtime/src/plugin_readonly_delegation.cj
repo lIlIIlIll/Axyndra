@@ -17,19 +17,34 @@ import yjson_support.*
 // exact ordinary contributions; aliases are arbitrary data, not host business.
 
 
+// Both paths re-enter the same live package, configuration and snapshot checks.
+// Frozen carries a revoked-after-use input view, not a callback with the plan.
+enum HostReadonlyDelegationInput {
+    Raw(String, AgentValue) | Frozen(ToolResolverInput)
+
+    func nameMatches(expected: String): Bool {
+        match (this) { case Raw(name, _) => name == expected
+            case Frozen(input) => input.textEquals(ToolResolverText.Name, expected) }
+    }
+    func copyInput(maximum: Int64): AgentValue {
+        match (this) { case Raw(_, arguments) => parseUnifiedJson(stringifyUnifiedJson(arguments), maxBytes: maximum)
+            case Frozen(input) => copyReadonlyDelegationInput(input, maximum) }
+    }
+}
+
 public func hostPreparePluginReadonlyDelegation(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
     call: ToolCall): Result<AgentValue> {
-    hostPrepareReadonlyCatalog204(host, settingsRoot, namespace, contribution, generation, context, call.name, call.arguments, None)
+    hostPrepareReadonlyCatalog204(host, settingsRoot, namespace, contribution, generation, context, HostReadonlyDelegationInput.Raw(call.name, call.arguments), None)
 }
 
 func hostPrepareReadonlyDelegationDataFrame204(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
-    callName: String, arguments: AgentValue, shared: ?SharedToolSetSnapshot159, legacy: ?ToolSetSnapshot, snapshotId: ?String): Result<AgentValue> {
+    input: HostReadonlyDelegationInput, shared: ?SharedToolSetSnapshot159, legacy: ?ToolSetSnapshot, snapshotId: ?String): Result<AgentValue> {
     match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     let descriptor = match (host.servicePackageData81(namespace, generation)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
     if (descriptor.entryKind != PluginEntryKind.NativeExecutable || !descriptor.requestedCapabilities.contains("tool.readonly") ||
-        callName != "plugin." + namespace + "." + contribution) {
+        !input.nameMatches("plugin." + namespace + "." + contribution)) {
         return hostPluginResourceError("readonly_delegation.identity_invalid", "readonly delegation requires its actual native contribution") }
     let config = match (loadHostPluginHttpConfiguration(settingsRoot, namespace, descriptor.contentDigest)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
@@ -47,7 +62,7 @@ func hostPrepareReadonlyDelegationDataFrame204(host: HostJavaScriptPluginHost, s
     for (target in grant.field("tools").getOrThrow().items) {
         let targetNamespace = httpIntentText(target, "plugin"); let targetContribution = httpIntentText(target, "contribution")
         let name = "plugin." + targetNamespace + "." + targetContribution
-        if (name == callName) { return hostPluginResourceError("readonly_delegation.recursion_denied", "delegation cannot target itself") }
+        if (input.nameMatches(name)) { return hostPluginResourceError("readonly_delegation.recursion_denied", "delegation cannot target itself") }
         let targetGeneration = host.instanceGeneration(targetNamespace)
         let actual = match (host.servicePackageData81(targetNamespace, targetGeneration)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         // First admitted tree shape is deliberately finite: this contribution
@@ -89,7 +104,7 @@ func hostPrepareReadonlyDelegationDataFrame204(host: HostJavaScriptPluginHost, s
     match (config.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     let payload = config.toolPayloadLimits(contribution)
     let maximum = match (payload) { case Some(value) => value.maxInputBytes; case None => 262144 }
-    let frozenInput = try { parseUnifiedJson(stringifyUnifiedJson(arguments), maxBytes: maximum) }
+    let frozenInput = try { input.copyInput(maximum) }
         catch (_: Exception) { return hostPluginResourceError("readonly_delegation.input_invalid", "delegation input exceeds its bounded JSON envelope") }
     let hostFields = ArrayList<ValueField>([ValueField("version", textValue(HOST_READONLY_DELEGATION_VERSION)),
             ValueField("plugin", textValue(namespace)), ValueField("package_digest", textValue(descriptor.contentDigest)),
@@ -136,11 +151,14 @@ public func hostValidatePluginReadonlyDelegation(host: HostJavaScriptPluginHost,
 func hostCheckPluginReadonlyDelegation(host: HostJavaScriptPluginHost, settingsRoot: String,
     namespace: String, contribution: String, generation: UInt64, context: ToolInvocationContext,
     prepared: PreparedToolInvocation): Result<Unit> {
-    prepared.withOperationPlan204({ plan =>
-        match (validatedReadonlyDelegationInput(host, settingsRoot, namespace, contribution, generation, context, prepared, plan)) {
-            case Result.Err(error) => Result<Unit>.Err(error); case Result.Ok(_) => Result<Unit>.Ok(())
-        }
-    })
+    if (!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent) ||
+        prepared.source.kind == PreparedInvocationSourceKind.Derived || prepared.source.operationRoot.isNone() ||
+        !prepared.displayMatchesFrozenToolName()) {
+        return hostPluginResourceError("readonly_delegation.root_invalid", "delegation requires its actual frozen canonical root") }
+    let rebuilt = prepared.withCanonicalCallInput({ input => hostPrepareReadonlyDelegationOwned204(host, settingsRoot,
+        namespace, contribution, generation, context, HostReadonlyDelegationInput.Frozen(input)) })
+    let actual = match (rebuilt) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    requireCurrentDelegationArguments(prepared.matchesRebuiltArguments(actual))
 }
 
 private func validatedReadonlyDelegationInput(host: HostJavaScriptPluginHost, settingsRoot: String,
@@ -151,10 +169,16 @@ private func validatedReadonlyDelegationInput(host: HostJavaScriptPluginHost, se
         return hostPluginResourceError("readonly_delegation.root_invalid", "delegation requires its actual frozen canonical root") }
     let input = plan.canonicalArguments.field("input").getOrThrow()
     let actual = match (hostPrepareReadonlyDelegationOwned204(host, settingsRoot, namespace, contribution, generation, context,
-        plan.toolName, input)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-    let matches = match (actual.matchesArguments204(plan.canonicalArguments)) {
-        case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
-    if (!matches) {
-        return hostPluginResourceError("readonly_delegation.grant_changed", "operator allowlist, catalog or installed generation changed") }
-    Result.Ok(input)
+        HostReadonlyDelegationInput.Raw(plan.toolName, input))) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+    match (requireCurrentDelegationArguments(actual.matchesArguments204(plan.canonicalArguments))) {
+        case Result.Err(error) => Result.Err(error); case Result.Ok(_) => Result.Ok(input) }
+}
+
+private func requireCurrentDelegationArguments(result: Result<Bool>): Result<Unit> {
+    match (result) {
+        case Result.Err(error) => Result.Err(error)
+        case Result.Ok(true) => Result.Ok(())
+        case Result.Ok(false) => hostPluginResourceError("readonly_delegation.grant_changed",
+            "operator allowlist, catalog or installed generation changed")
+    }
 }
