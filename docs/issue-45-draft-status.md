@@ -5315,3 +5315,9 @@ Disk space no longer blocks assembly. [The rebuild record](implementation/plan-e
 ### E2396: release contracts and SDK executor reads
 
 [Current release evidence](implementation/plan-execution-reliability.md#e2396-release-contracts-and-scoped-sdk-executor-reads) covers 606 checks from 16 Full plugin suites, three recovery contracts and four pre-admission rejections. The external SDK executors now copy only their result ID; all 17 SDK contract checks passed. A private read-view validation change still failed the continuous Core gate and is not part of the PR. This does not qualify the five-second profile or full release.
+
+### E2397: Full artifacts in ten terminal flows
+
+[The terminal acceptance record](implementation/plan-execution-reliability.md#e2397-ten-terminal-flows-with-current-full-artifacts) covers ten real tmux sessions with the current Full executable, gateway and explicitly imported fixture packages. The ten terminal processes exited normally. This does not exercise default Coding startup or change the failed five-second profile result.
+
+The [seven additional state contracts](implementation/plan-execution-reliability.md#e2398-state-and-recovery-release-contracts) also passed on this behavior. They do not include the continuous Core case.
