@@ -48,23 +48,28 @@ func exact(value: JsonNode, names: Array<String>): Unit {
     }
 }
 func hex(bytes: Array<Byte>): String {
-    let alphabet = "0123456789abcdef".toArray()
-    let result = ArrayList<Byte>()
-    for (byte in bytes) { result.add(alphabet[Int64(byte) / 16]); result.add(alphabet[Int64(byte) % 16]) }
-    String.fromUtf8(result.toArray())
+    let bytesHex = Array<Byte>(bytes.size * 2, repeat: 0)
+    for (index in 0..bytes.size) {
+        let byte = bytes[index]
+        let high = byte / 16u8; let low = byte % 16u8
+        bytesHex[index * 2] = if (high < 10u8) { high + 48u8 } else { high + 87u8 }
+        bytesHex[index * 2 + 1] = if (low < 10u8) { low + 48u8 } else { low + 87u8 }
+    }
+    String.fromUtf8(bytesHex)
 }
 func unhex(value: String, maximum: Int64): Array<Byte> {
     require(value.size % 2 == 0 && value.size <= maximum * 2, "dap_plugin.channel_response_invalid")
     let bytes = value.toArray()
-    let result = ArrayList<Byte>()
+    let result = Array<Byte>(bytes.size / 2, repeat: 0)
     func digit(value: Byte): Byte {
         if (value >= 48u8 && value <= 57u8) { return value - 48u8 }
         if (value >= 97u8 && value <= 102u8) { return value - 87u8 }
         throw PluginFailure("dap_plugin.channel_response_invalid")
     }
-    var index: Int64 = 0
-    while (index < bytes.size) { result.add(digit(bytes[index]) * 16u8 + digit(bytes[index + 1])); index += 2 }
-    result.toArray()
+    for (index in 0..result.size) {
+        result[index] = digit(bytes[index * 2]) * 16u8 + digit(bytes[index * 2 + 1])
+    }
+    result
 }
 func sha(value: String): String { let hash = SHA256(); hash.write(value.toArray()); hex(hash.finish()) }
 func stableId(invocation: JsonNode): String {

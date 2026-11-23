@@ -5370,3 +5370,7 @@ The file-plan executor now rejects an invalid Source, display name, frozen effec
 ### E2410: Product eligibility and the MCP cancellation observation
 
 On `840926c5346f`, all 428 eligible Product cases passed individually. The other 682 cases in the 1,110-case inventory remain deferred, not passed. All 10 selected real PTY flows and eight physical CLI/RPC/ACP pipe cases passed. The original five-second local Coding request still timed out without a POST. The MCP cancellation fixture now drains the actual backend pipe to EOF and checks the complete byte sequence; all 51 MCP protocol cases passed. DAP large-response delivery and complete Core remain open. [Builds, package protocols and canonical outcomes](implementation/plan-execution-reliability.md#e2410-current-product-and-package-protocols).
+
+### E2411: DAP large responses fit the original request window
+
+The Native DAP codec now allocates its hex output and decoded buffer at their final sizes. The independently built package passed all 18 protocol cases, including three successive three-MiB `evaluate` requests and byte-for-byte responses from the real adapter. The same original case had returned `unknown` on the preceding shipping package. This is a DAP package result, not a complete PR or Full release pass. [Source, artifact and failure-path coverage](implementation/plan-execution-reliability.md#e2411-dap-hex-buffers).
