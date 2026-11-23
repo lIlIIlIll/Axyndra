@@ -1241,11 +1241,12 @@ public class HostJavaScriptPluginServiceBroker {
                 case Some(_) => true; case None => false }
             let selected = match (route.selectBound(actualHost, catalog, rootContext, callId, arguments)) {
                 case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(value) => value }
-            if (selected.call.callId != callId || canonicalAgentValue(selected.call.arguments) != canonicalAgentValue(arguments)) {
+            let selectedCall = selected.call
+            if (selectedCall.callId != callId || canonicalAgentValue(selectedCall.arguments) != canonicalAgentValue(arguments)) {
                 if (concreteRoute159) { selected.returnOwnedTargetFrame159() }
                 return hostPluginServiceError("extension.exec_selection_changed", "readonly exec selector changed the actual request identity or arguments") }
             execTarget = Some(selected); returnsConcreteTarget159 = concreteRoute159
-            selected.call
+            selectedCall
         }
         let requestKey = if (service == "tool.readonly" ||
             (service == "file.plan.propose" && matchesRootPlan(FrozenPluginPlanRule.ReadonlyFilePlanProposals))) {
@@ -1598,11 +1599,8 @@ public class HostJavaScriptPluginServiceBroker {
         }
         match (execTarget) { case Some(target) => if (target.isNativeReadView()) {
             match (target.validate(catalog, rootContext, prepared)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            let ceiling = CapabilitySet(values: invocationPlan204.requiredCapabilities)
-            for (required in prepared.operationPlan.requiredCapabilities) {
-                if ((required.kind != CapabilityKind.WorkspaceRead && !(required.kind == CapabilityKind.ExtensionInvoke && required.resource == prepared.call.name)) ||
-                    !ceiling.allows(required.kind, resource: required.resource) || !rootContext.capabilities.allows(required.kind, resource: required.resource)) {
-                    return hostPluginResourceError("extension.exec_capability_denied", "readonly exec plan exceeds the actual parent ceiling") }
+            if (!matchesRootPlan(FrozenPluginPlanRule.AllowsNativeReadViewCapabilities(prepared, rootContext.capabilities))) {
+                return hostPluginResourceError("extension.exec_capability_denied", "readonly exec plan exceeds the actual parent ceiling")
             }
             return Result.Ok(())
         }; case None => () }

@@ -192,6 +192,8 @@ owns the reader. One reader cannot acknowledge another. Earlier raw exports
 remain charged; the rest of the Prepared call/plan migration is still open.
 Neither the plugin wire protocol nor the database format changes.
 
+`FrozenPluginPlanRule` adds `AllowsNativeReadViewCapabilities(child, current)`. Update exhaustive matches when recompiling against this Tool API. A match checks the child against the parent plan and the current capabilities; it does not validate the selected target or authorize execution.
+
 When the producer of an independently paid Prepared copy returns, reading
 `prepared.call` or `prepared.operationPlan` from that producer throws
 `IllegalStateException`, even if another reader still holds the data. If a

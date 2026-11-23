@@ -5329,3 +5329,7 @@ The previous two raw call-ID comparisons left one 16 MiB lease outstanding in a 
 ### E2400: the current Core entry still fails at read-view output
 
 Five controls passed on the `9b90494101` Core executable, including cancellation/recovery. The continuous entry failed: both nested read-view receipts report `read_view.output_capacity`. Two detached stores passed integrity checks and all six originals were unchanged. See the [ELF and reserved-receipt evidence](implementation/plan-execution-reliability.md#e2400-continuous-core-on-the-terminal-capture-fix).
+
+### E2401: Native read-view child capabilities
+
+The parent/child ceiling comparison no longer exports either Prepared graph. Native Tool passed 107/107 and all 24 original bridge lifecycle entries passed with normal process return. The continuous Core gate still failed at the two read-view receipts. See the [source and ELF qualification](implementation/plan-execution-reliability.md#e2401-native-read-view-child-capability-checks).

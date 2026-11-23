@@ -169,6 +169,18 @@ public class PreparedToolInvocation {
     public func matchesRebuiltArguments(actual: ToolCanonicalArgumentsOwner204): Result<Bool> {
         withClosedPlanComparison({ plan => actual.matchesArguments204(plan.canonicalArguments) })
     }
+    func nativeReadViewCapabilitiesWithin(parent: CapabilitySet, current: CapabilitySet): Bool {
+        withClosedPlanComparison({ plan =>
+            let name = callData204.getOrThrow().name
+            for (required in plan.requiredCapabilities) {
+                if ((required.kind != CapabilityKind.WorkspaceRead &&
+                    !(required.kind == CapabilityKind.ExtensionInvoke && required.resource == name)) ||
+                    !parent.allows(required.kind, resource: required.resource) ||
+                    !current.allows(required.kind, resource: required.resource)) { return false }
+            }
+            true
+        })
+    }
     private func withClosedPlanComparison<T>(action: (NormalizedOperationPlan) -> T): T {
         match (detachedMetadata204) {
             case Some(owner) =>

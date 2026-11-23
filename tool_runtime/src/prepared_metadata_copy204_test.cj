@@ -317,6 +317,40 @@ class PreparedMetadataCopy204Tests {
     }
 
     @TestCase
+    func nativeReadViewRequiresBothCeilingsAndTheActualDisplayName(): Unit {
+        let context = ToolInvocationContext(RunId("run"), SessionId("session"), CapabilitySet())
+        let read = Capability(CapabilityKind.WorkspaceRead, resource: "src")
+        let invoke = Capability(CapabilityKind.ExtensionInvoke, resource: "plugin.example.read")
+        let write = Capability(CapabilityKind.WorkspaceWrite, resource: "src")
+        let allowed = CapabilitySet(values: [read, invoke, write])
+        let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+        let core = MetadataCopyConsumer204(root)
+        let make = { name: String, required: Array<Capability> =>
+            let arguments = objectValue([])
+            let prepared = PreparedToolInvocation(OperationId(name), ToolCall("id", name, arguments),
+                exclusiveToolConcurrency(), PreparedAuthorization.StaticPolicy,
+                NormalizedOperationPlan("plugin.example.read", arguments, required, OperationEffectClass.ReadOnly,
+                    OperationRetryDisposition.Never, "binding"), PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+            (prepared, installMetadataFixtureFrame204(root, core, prepared))
+        }
+        let (parent, parentOwner) = make("parent", [read, invoke, write])
+        let (child, childOwner) = make("plugin.example.read", [read, invoke])
+        let (narrow, narrowOwner) = make("narrow", [read])
+        let (renamed, renamedOwner) = make("other-display", [invoke])
+        let (writer, writerOwner) = make("plugin.example.read", [write])
+        @Expect(parent.matchesFrozenPlan(FrozenPluginPlanRule.AllowsNativeReadViewCapabilities(child, allowed)))
+        @Expect(!narrow.matchesFrozenPlan(FrozenPluginPlanRule.AllowsNativeReadViewCapabilities(child, allowed)))
+        @Expect(!parent.matchesFrozenPlan(FrozenPluginPlanRule.AllowsNativeReadViewCapabilities(child, CapabilitySet(values: [invoke]))))
+        @Expect(!parent.matchesFrozenPlan(FrozenPluginPlanRule.AllowsNativeReadViewCapabilities(renamed, allowed)))
+        @Expect(!parent.matchesFrozenPlan(FrozenPluginPlanRule.AllowsNativeReadViewCapabilities(writer, allowed)))
+        let held = child.retainMetadataConsumer204().getOrThrow()
+        for (owner in [parentOwner, childOwner, narrowOwner, renamedOwner, writerOwner]) { owner.producerReturned204() }
+        root.close(); @Expect(held.textEquals(PreparedMetadataText.CallName, "plugin.example.read"))
+        @Expect(bank.usage()[1] > 0); held.returnConsumerFrame204()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func separateReadersReturnOnlyTheirOwnPreparedData(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216)
         let root = bank.acquire(131072)

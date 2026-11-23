@@ -64,7 +64,8 @@ public enum FrozenPluginPlanRule {
     ReadonlyDelegatedChild | HttpStreamParent | ChannelParent | AllowsChild(FrozenPluginChildRelation, PreparedToolInvocation) |
     DerivableParent(Bool, Bool) | PermitsDerivedIntent(NormalizedOperationPlan, String, String, String) |
     FileApplicationContentsMatch(AgentValue, AgentValue) | ReadViewFact(FrozenReadViewCheck) | Effect(OperationEffectClass) |
-    ReadonlyExecTarget(String, String, String, String) | AllowsExtension(String)
+    ReadonlyExecTarget(String, String, String, String) | AllowsExtension(String) |
+    AllowsNativeReadViewCapabilities(PreparedToolInvocation, CapabilitySet)
 
     // A broker may already own the parent plan (Task or durable Store).
     // Otherwise both Prepared participants pin their own DATA for this call.
@@ -73,6 +74,8 @@ public enum FrozenPluginPlanRule {
             case Effect(expected) => plan.effectClass == expected
             case AllowsExtension(name) =>
                 CapabilitySet(values: plan.requiredCapabilities).allows(CapabilityKind.ExtensionInvoke, resource: name)
+            case AllowsNativeReadViewCapabilities(child, current) =>
+                child.nativeReadViewCapabilitiesWithin(CapabilitySet(values: plan.requiredCapabilities), current)
             case ReadonlyExecTarget(name, version, fingerprint, schema) =>
                 plan.toolName == name && plan.implementation.toolVersion == version &&
                     plan.implementation.implementationFingerprint == fingerprint && plan.implementation.schemaDigest == schema &&
