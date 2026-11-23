@@ -14,6 +14,20 @@ private func registryDigestWorkIdentity(root: String,
     }
 }
 
+// A caller with room for only one reader must get a refusal, not a digest.
+// Manifest/path metadata and admitted digest work still use real registry custody.
+private class RegistryDigestWindow <: PluginPackageMetadataAccounting {
+    let memory: PluginRegistryStateMemory
+    let limit: Int64
+    init(memory: PluginRegistryStateMemory, limit: Int64) { this.memory = memory; this.limit = limit }
+    public func beforeDocument(source: String): Unit { memory.beforeDocument(source) }
+    public func beforeTreePath(bytes: Int64): Unit { memory.beforeTreePath(bytes) }
+    public func beforeDigestWork(bytes: Int64): Unit {
+        if (bytes > limit) { throw LogicalJsonPayloadError("package digest work limit") }
+        memory.beforeDigestWork(bytes)
+    }
+}
+
 @Test
 class RegistryDigestWorkTests {
     @TestCase
@@ -39,6 +53,10 @@ class RegistryDigestWorkTests {
             // v2 path/mode/size format. The worker file sorts last, not first.
             @Expect(registryDigestWorkIdentity(packageRoot, None),
                 "sha256:968cdf3f244eda72d420783a047fdb9b883b23d67721eaa7b353947719137c63")
+            var refused = false
+            try { let _ = registryDigestWorkIdentity(packageRoot, Some(RegistryDigestWindow(memory, 131071))) }
+            catch (error: LogicalJsonPayloadError) { refused = error.message == "package digest work limit" }
+            @Expect(refused)
             @Expect(registryDigestWorkIdentity(packageRoot, Some(memory)),
                 "sha256:968cdf3f244eda72d420783a047fdb9b883b23d67721eaa7b353947719137c63")
             largest[largest.size - 1] += 1u8

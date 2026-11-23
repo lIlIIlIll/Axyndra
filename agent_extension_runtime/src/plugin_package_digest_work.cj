@@ -27,10 +27,10 @@ func pluginAppendTreeDigestEntry(payload: StringBuilder, relativePath: String,
 // Its payer remains owned by the caller until this entire helper has returned.
 func pluginParallelContentDigest(root: String, paths: ArrayList<String>, largestPath: String,
     accounting: PluginPackageMetadataAccounting): PluginPackageResult<String> {
-    // Per-file retained results/preflight records, one 64 KiB worker scratch,
-    // and 8 KiB Future/control. The original scratch belongs to the base frame.
-    // Refusal occurs before constructing any of these working objects.
-    accounting.beforeDigestWork(paths.size * 1024 + 65536 + 8192)
+    // This inspection owns both readers. Fund both buffers before allocating
+    // either one; callers need not supply an implicit parent scratch reserve.
+    let scratchBytes: Int64 = 65536
+    accounting.beforeDigestWork(paths.size * 1024 + 2 * scratchBytes + 8192)
     let entries = ArrayList<PluginPackageDigestWorkEntry>()
     var verifiedBytes: Int64 = 0
     var selected: Int64 = -1
@@ -61,10 +61,10 @@ func pluginParallelContentDigest(root: String, paths: ArrayList<String>, largest
     let workerPath = selectedEntry.relativePath
     let workerSize = selectedEntry.size
     let workerExecutable = selectedEntry.executable
-    let digestScratch = Array<Byte>(65536, repeat: 0)
+    let digestScratch = Array<Byte>(scratchBytes, repeat: 0)
     let worker = spawn {
         pluginPackageDigestWorkRead(root, workerPath, workerSize, workerExecutable,
-            Array<Byte>(65536, repeat: 0))
+            Array<Byte>(scratchBytes, repeat: 0))
     }
     var workerDigest: ?PluginPackageResult<String> = None
     try {
