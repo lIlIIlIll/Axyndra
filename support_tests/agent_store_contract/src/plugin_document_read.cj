@@ -20,7 +20,12 @@ func pluginDocumentReadContracts(): Unit {
         "observation-wrong-run", "observation-failed", "observation-double", "observation-retained", "observation-alias"]) {
         documentReadScenario(committed, scenario)
     } }
-    println("Plugin document ContextRead Store contract passed: 42 scenarios")
+    for (committed in [false, true]) {
+        for (scenario in ["journal-funded", "journal-saturated", "journal-revoked"]) {
+            documentReadScenario(committed, scenario)
+        }
+    }
+    println("Plugin document ContextRead Store contract passed: 48 scenarios")
 }
 
 func documentReadScenario(committed: Bool, scenario: String, payloadMode!: String = ""): Unit {
@@ -115,6 +120,46 @@ func documentReadScenario(committed: Bool, scenario: String, payloadMode!: Strin
             if ((scenario == "guard-before" && index == 1) || (scenario == "guard-after" && index == 2)) {
                 Result<Unit>.Err(AgentError(AgentErrorKind.PermissionDenied, "document.guard_fixture", "revoked actual boundary"))
             } else { Result.Ok(()) }
+        }
+        if (scenario.startsWith("journal-")) {
+            let bank = LogicalJsonOwnerBudget(maximumTransfers: if (scenario == "journal-saturated") { 1 } else { 2 })
+            database.bindDocumentStorageBackend("axyndra:workflow", "todo", SqliteOpaqueRowJournal(
+                "axyndra:workflow", "todo", "workspace", "settings", { bytes => bank.acquire(bytes) },
+                httpIntentText(binding, "configuration_digest"), { =>
+                    if (scenario == "journal-revoked" && bank.usage()[0] > 0) {
+                        Result<Unit>.Err(AgentError(AgentErrorKind.PermissionDenied, "document.journal_revoked", "journal permission revoked before observation"))
+                    } else { Result<Unit>.Ok(()) }
+                }))
+            let result = store.readPluginDocuments(source, selectedPlan, guard)
+            expect(bank.usage()[0] == 0 && bank.usage()[1] == 0, label + " transaction released its snapshot and independent fence payments")
+            let fences = database.query("SELECT payload FROM audit_events WHERE kind='row_journal_observed' AND operation_id=? AND run_id=? AND thread_id=?",
+                [SqlParameter.Text(operation.value), SqlParameter.Text(run.value), SqlParameter.Text(thread.value)])
+            if (scenario != "journal-funded") {
+                expect(result.isError() && fences.isEmpty() && database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 0,
+                    label + " unpayable or revoked independent SQL fence produced no fact or receipt")
+                if (scenario == "journal-revoked") { expect(result.error().getOrThrow().code == "document.journal_revoked", label + " actual independent permission check") }
+                return
+            }
+            let value = httpContractRequire(result, label + " full journal and independent SQL observation fit together")
+            let snapshot = database.readDocumentStorageBackend(thread, LaneId("main"), "axyndra:workflow", "todo").getOrThrow()
+            let doc = value.field("documents").getOrThrow().items[0]
+            expect(pluginDocumentReadResultValid(value, request) && httpIntentText(doc, "json") == snapshot.encoded &&
+                httpIntentText(doc, "sha256") == modelPolicySha256Text(snapshot.encoded) && doc.field("revision").getOrThrow().asNumberText() == snapshot.revision.toString(),
+                label + " original bound journal bytes and revision")
+            expect(fences.size == 1, label + " one independent durable SQL observation")
+            let fence = decodeStoredValue(fences[0].required(0))
+            expect(httpIntentText(fence, "snapshot_sha256") == modelPolicySha256Text(snapshot.encoded) &&
+                httpIntentText(fence, "read_item_id") == source.canonicalItemId.value &&
+                httpIntentText(fence, "read_plan_sha256") == modelPolicySha256Text(database.query("SELECT normalized_plan FROM operations WHERE id=? AND run_id=?",
+                    [SqlParameter.Text(operation.value), SqlParameter.Text(run.value)])[0].required(0)), label + " fence belongs to the actual durable plan")
+            let resolved = httpContractRequire(runtime.resolveOperation(ItemId("result-" + operation.value), operation,
+                CanonicalToolCallId(call.callId), plan, OperationAttemptStage.Executing,
+                Result<ToolInvocationResult>.Ok(ToolInvocationResult.Completed(ToolResult(call.callId, value))),
+                "receipt-" + operation.value, 13, expectedRunId: Some(run), expectedEpoch: Some(active.epoch)), label + " actual journal receipt")
+            let fact = httpContractRequire(store.loadContextReadFact(operation, run), label + " durable journal fact")
+            expect(resolved.semanticCommit.isSome() && isStoreCommitted(resolved.semanticCommit.getOrThrow()) &&
+                fact.origin.parentCallItemId == parentItem.value && fact.outputDigest == modelPolicySha256Text(stringifyUnifiedJson(value)), label + " journal fact bound to the actual parent")
+            return
         }
         let observer = DocumentReadObservationFixture(scenario)
         let materializer = DocumentPayloadFixture(payloadMode)

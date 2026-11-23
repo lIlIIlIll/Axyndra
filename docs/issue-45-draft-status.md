@@ -5406,3 +5406,7 @@ A request rejected by the local snapshot encoder never reached the approval gate
 ### E2419 — broker selection no longer requires exporting the parent plan
 
 [Tool 111/111, five Native Core controls, AST and bridge 24/24](implementation/plan-execution-reliability.md#e2419-inspect-broker-intent-counts-grants-and-transport-bindings-without-exporting-the-parent). Continuous Core still failed on the grep and read-view Receipts. RPC refusal diagnostics identified outstanding main and child model-lane snapshots, not a refundable amount. The Draft remains incomplete; no GC, original provider deadline or full-release pass is claimed.
+
+### E2420 — One inline journal snapshot, independent SQL observation
+
+The bound Store path no longer pays for an extra materialization just to measure the same bytes. [Direct and Committed Source evidence](implementation/plan-execution-reliability.md#e2420-inline-document-reads-keep-one-snapshot-and-a-separate-sql-fence): 48 inline/observation and 106 payload-reference scenarios passed, including rejection under saturation and independent revocation. The separate Product Prompt run passed automatic Skill selection but failed starting the explicitly activated Skill. Continuous Core and release acceptance remain open; PR stays Draft.

@@ -49,6 +49,11 @@ func requirePluginDocumentReadScope(transaction: SqliteTransaction, source: Dire
     lane
 }
 
+private func inlineDocumentReadValue(key: String, revision: Int64, raw: String): AgentValue {
+    objectValue([ValueField("key", textValue(key)), ValueField("revision", integerValue(revision)),
+        ValueField("json", textValue(raw)), ValueField("sha256", textValue(modelPolicySha256Text(raw)))])
+}
+
 func readPluginDocumentsInTransaction(transaction: SqliteTransaction, source: DirectToolCallRef,
     plan: NormalizedOperationPlan, materializer!: ?PluginDocumentPayloadMaterializer = None): AgentValue {
     let lane = if(pluginDocumentContextReadRequestValid(plan.canonicalArguments)){
@@ -62,6 +67,27 @@ func readPluginDocumentsInTransaction(transaction: SqliteTransaction, source: Di
     let documents = ArrayList<AgentValue>()
     var rawBytes: Int64 = 0
     for (key in request.field("keys").getOrThrow().items) {
+        // A bound backend already materializes the whole snapshot to answer a
+        // length query. Measure that exact value, then let recordRead perform
+        // its independent source, revision and SQL fence checks as before.
+        if (!referenced) {
+            match (transaction.documentStorageBackend(origin.ownerNamespace, key.text)) {
+                case Some(backend) =>
+                    let observed = backend.read(transaction, source.threadId, lane, origin.ownerNamespace, key.text)
+                    if (observed.threadId.value != source.threadId.value || observed.laneId.value != lane.value ||
+                        observed.namespace != origin.ownerNamespace || observed.key != key.text || observed.revision <= 0) {
+                        throw IllegalStateException("document read encountered corrupt metadata")
+                    }
+                    if (observed.encoded.size > RUN_CONTEXT_SNAPSHOT_MAX_BYTES - rawBytes) {
+                        throw IllegalStateException("document read exceeds canonical context fact capacity")
+                    }
+                    rawBytes += observed.encoded.size
+                    backend.recordRead(transaction, source, plan, observed)
+                    documents.add(inlineDocumentReadValue(key.text, observed.revision, observed.encoded))
+                    continue
+                case None => ()
+            }
+        }
         // Bound length before selecting payload. No data is exposed through a
         // metadata-only preflight; the actual read is here after handoff.
         let lengths = queryPluginDocumentRows(transaction,"SELECT length(CAST(payload AS BLOB)),revision FROM plugin_documents " +
@@ -94,11 +120,7 @@ func readPluginDocumentsInTransaction(transaction: SqliteTransaction, source: Di
         let raw = if (rows.isEmpty()) { "null" } else { rows[0].required(1) }
         if (rows.size > 1 || revision < 0 || (!rows.isEmpty() && revision == 0)) {
             throw IllegalStateException("document read encountered corrupt metadata") }
-        match(transaction.documentStorageBackend(origin.ownerNamespace,key.text)){
-            case Some(backend)=>backend.recordRead(transaction,source,plan,
-                PluginDocumentSnapshot(source.threadId,lane,origin.ownerNamespace,key.text,revision,raw));case None=>()}
-        documents.add(objectValue([ValueField("key", textValue(key.text)), ValueField("revision", integerValue(revision)),
-            ValueField("json", textValue(raw)), ValueField("sha256", textValue(modelPolicySha256Text(raw)))]))
+        documents.add(inlineDocumentReadValue(key.text, revision, raw))
     }
     let value = objectValue([ValueField("schema", textValue(if (referenced) {
             PLUGIN_DOCUMENT_PAYLOAD_READ_RESULT_SCHEMA } else { PLUGIN_DOCUMENT_READ_RESULT_SCHEMA })),
