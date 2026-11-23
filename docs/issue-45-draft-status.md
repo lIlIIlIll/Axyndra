@@ -5398,3 +5398,7 @@ The session queue fixture now installs and selects its compaction policy in its 
 ### E2417 — Native content invocation at the C2N boundary
 
 An actual selected-Skill context run hit the native stack guard while reading from its installed worker. Moving two completed checks out of the long-lived JavaScript invocation frame reduced its static stack allocation by 3,072 bytes. The previously failing Memory upload progressed. The later automatic context request remains unresolved. Eleven fixed-SDK Native extension cases passed; no stack limit, payload bound, identity check or ACK condition changed.
+
+### E2418 — Reject invalid local model snapshots before reserving an anti-replay identity
+
+A request rejected by the local snapshot encoder never reached the approval gate or model endpoint but used to leave a permanent cache entry. The port now freezes the request once before charging the separate anti-replay identity. A local refusal still returns `Held`; a failure after an actual gate call still retains its charge and blocks cache retirement. The regression failed before the fix; all 22 naturally enumerated `model_provider_runtime` tests passed after it. This does not settle the Product compaction deadline or the five-second first provider reply.

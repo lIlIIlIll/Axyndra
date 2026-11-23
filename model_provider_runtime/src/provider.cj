@@ -77,7 +77,14 @@ public class PluginModelPort <: ModelPort & ReturningModelInputPort159 & Returni
         try { executeFrame159(request, events) } finally { endInputFrame159() }
     }
     private func executeFrame159(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
-        executeInputFrame159(request, events, request.requestId, None<ProviderInputIdentity159>)
+        let frozen = match (freezeExecutionInput(request)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        executeInputFrame159(request, events, request.requestId, frozen, None<ProviderInputIdentity159>)
+    }
+    private func freezeExecutionInput(request: ModelRequest): Result<String> {
+        try { providerIdentifier(request.requestId); Result.Ok(snapshot(request)) }
+        catch (_: Exception) { providerFailure<String>(AgentErrorKind.InvalidInput,
+            "model.provider_input_invalid", AttemptFailureKind.ProviderProtocolError) }
     }
     private func beginInputFrame159(allowClosing!: Bool = false): Bool {
         lock.lock(); try {
@@ -134,10 +141,7 @@ public class PluginModelPort <: ModelPort & ReturningModelInputPort159 & Returni
     }
 
     private func executeInputFrame159(request: ModelRequest, events: ModelEventSink,
-        requestId: String, retained: ?ProviderInputIdentity159): Result<ModelReply> {
-        let frozen = try { providerIdentifier(requestId); snapshot(request) }
-            catch (_: Exception) { return providerFailure(AgentErrorKind.InvalidInput,
-                "model.provider_input_invalid", AttemptFailureKind.ProviderProtocolError) }
+        requestId: String, frozen: String, retained: ?ProviderInputIdentity159): Result<ModelReply> {
         let neutral = providerField(parseUnifiedJson(frozen, maxBytes: 67108864), "request")
         let decoded = match (modelRequestFromSnapshotValue(neutral, requestId)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
@@ -217,18 +221,19 @@ public class PluginModelPort <: ModelPort & ReturningModelInputPort159 & Returni
     }
     private func executeReturningInput159Frame159(request: ModelRequest, events: ModelEventSink,
         funding: ModelInputDataBudget159): ModelInputReturn159 {
-        // Validate the original bounded identifier before constructing any
-        // additional String, node or callback. The original error is retained.
-        try { providerIdentifier(request.requestId) }
-        catch (_: Exception) { return ModelInputReturn159.Held(providerFailure<ModelReply>(
-            AgentErrorKind.InvalidInput, "model.provider_input_invalid", AttemptFailureKind.ProviderProtocolError)) }
+        // The caller already funds the input and its snapshot. A locally rejected
+        // request never needs a separate, longer-lived anti-replay identity.
+        let frozen = match (freezeExecutionInput(request)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return ModelInputReturn159.Held(Result<ModelReply>.Err(error))
+        }
         let paid = funding.reserveRetainedModelMetadata159(8192 + 8 * request.requestId.size)
         let retained = ProviderInputIdentity159(paid)
         retained.copyIdentity159(request.requestId)
         lock.lock()
         try { retained.portNext159 = inputIdentities159; inputIdentities159 = Some(retained) }
         finally { lock.unlock() }
-        let result = executeInputFrame159(request, events, retained.text159(), Some(retained))
+        let result = executeInputFrame159(request, events, retained.text159(), frozen, Some(retained))
         // The whole producer/callback/codec frame is gone. Only a successful
         // concrete exchange can certify return; unknown errors keep custody.
         if (result.isOk()) {

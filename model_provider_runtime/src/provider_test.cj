@@ -47,6 +47,17 @@ class ProviderTestEndpoint <: ModelProviderEndpoint {
     public func cancel(requestId: String): Result<Unit> { cancelled += 1; Result.Ok(()) }
 }
 
+private class ProviderTestInputFunding <: ModelInputDataBudget159 {
+    let owner: LogicalJsonOwnerReservation
+    var requests: Int64 = 0
+    init(owner: LogicalJsonOwnerReservation) { this.owner = owner }
+    public func reserveRetainedModelMetadata159(bytes: Int64): LogicalJsonOwnerReservation {
+        let paid = owner.deriveRetainedLease()
+        try { paid.ensureRetainedPeak(bytes); requests++; paid }
+        catch (error: Exception) { paid.close(); throw error }
+    }
+}
+
 class ProviderTestObservations {
     var completed: Int64 = 0
     var progress: Int64 = 0
@@ -76,6 +87,32 @@ class ModelProviderBoundaryTests {
         let drift = parseUnifiedJson(value); drift.put("binding_digest", textValue(modelPolicySha256Text("other")))
         @Expect(!port.validateTranscriptSnapshot(drift.stringify()))
         @Expect(!port.validateTranscriptSnapshot("{}"))
+    }
+    @TestCase
+    func localSnapshotRefusalDoesNotCreateAnAntiReplayIdentity(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 33554432)
+        let source = bank.acquire(131072)
+        try {
+            let funding = ProviderTestInputFunding(source)
+            let gate = ProviderTestGate(); let endpoint = ProviderTestEndpoint()
+            let port = PluginModelPort(providerTestBinding(), gate, endpoint)
+            let unsupported = providerTestRequest(tools: [ModelToolDefinition("probe", "probe", objectValue([]))])
+            @Expect(match (port.executeReturningInput159(unsupported, { _ => () }, funding)) {
+                case ModelInputReturn159.Held(value) => value.error().getOrThrow().code == "model.provider_input_invalid"
+                case _ => false }, true)
+            @Expect(gate.calls == 0 && endpoint.calls == 0 && funding.requests == 0)
+            @Expect(port.retireInputCache159().isOk())
+
+            // A real external gate has received the copied request, even when it denies dispatch.
+            // Its failure is not evidence that any published input reference has returned.
+            let denied = PluginModelPort(providerTestBinding(), gate, endpoint)
+            gate.allowed = false
+            @Expect(match (denied.executeReturningInput159(providerTestRequest(), { _ => () }, funding)) {
+                case ModelInputReturn159.Held(value) => value.error().getOrThrow().code == "fixture.grant_denied"
+                case _ => false }, true)
+            @Expect(gate.calls == 1 && endpoint.calls == 0 && funding.requests == 1)
+            @Expect(denied.retireInputCache159().error().getOrThrow().code == "model.input_cache_pending")
+        } finally { source.close() }
     }
     @TestCase
     func wrongSchemaOrCapabilityFailsBeforeAuthorityAndIo(): Unit {
