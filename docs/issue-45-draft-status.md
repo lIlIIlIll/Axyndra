@@ -5382,3 +5382,7 @@ The ordinary broker now checks the displayed and frozen plugin names and both ca
 ### E2413: grievance fixture preserves a missing store until the first explicit write
 
 The standalone `grievances_contract` now creates the settings directory only after verifying that a read of a missing store reports no database and no rows. Its original list, filter, cleanup, persistence and corrupt-store checks all passed. This changes the fixture, not Product’s read behavior. Other standalone failures still prevent release acceptance. [Package and canonical evidence](implementation/plan-execution-reliability.md#e2413-standalone-contracts-and-canonical-failures).
+
+### E2414 — Installed Workflow child execution (fixture; Draft)
+
+The standalone subagent fixture now selects `task` and `yield` before enabling the actual Workflow package. The former denial was `tool.hook_denied` (`plugin.document_grant_missing`), with zero derived admissions. With the two operator rows, the original end-to-end test passed: one completed child, its transcript and local fixture request, and no write, edit, GitHub or shell tool in the child request. No document grant or default Product policy changed. `product_rpc_contract` did not run: its compiler reached the original 900-second deadline. Continuous Core, the first provider reply and final release acceptance remain open; PR stays Draft.
