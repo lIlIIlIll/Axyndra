@@ -5303,3 +5303,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2393: current build and PTY pass; fixed-capacity Core still rejects output
 
 [The locked refusal and production evidence](implementation/plan-execution-reliability.md#e2393-current-core-refusal-production-build-and-terminal-checks) binds the `fe56c99b10` behavior: no observed raw exports from `prepareDerived`, but the output still exceeded the bank by 5,902,936 bytes. Eleven production builds, the real broker controls and ten local PTY cases passed. Fresh distribution assembly was blocked at disk preflight. Neither those PTYs nor the prior paired benchmark qualify the packaged five-second provider gate. Full Product and release remain incomplete; keep the PR Draft.
+
+### E2394: fixed-SDK rebuild and Memory package verification
+
+Disk space no longer blocks assembly. [The rebuild record](implementation/plan-execution-reliability.md#e2394-fixed-sdk-rebuild-and-memory-package-verification) binds 22 production artifacts, 138 Memory Native tests, 40 Memory protocol tests, and three Product cases to checkout `98a27242d7`. The Product executable lists 1,110 cases. Its 674 deferred GC cases were not executed. The two local profile replies in this record came from the **baseline** package. The current Coding request, continuous Core, and complete release remain open.
