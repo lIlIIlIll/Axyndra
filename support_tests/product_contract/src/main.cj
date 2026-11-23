@@ -1123,11 +1123,11 @@ func runConfigFileContracts(root: String): Unit {
         preCompaction.compaction.maxInputTokens == 100000 && preCompaction.compaction.requestMaxMessages == 24 &&
             preCompaction.compaction.triggerPercent == 88 && preCompaction.compaction.targetPercent == 60 &&
             preCompaction.compaction.summaryStrategy == "structured" && preCompaction.compaction.summaryModel == "" &&
-            preCompaction.compaction.summaryTimeoutMillis == 5000 &&
+            preCompaction.compaction.summaryTimeoutMillis == 15000 &&
             preCompaction.compaction.summaryMaxOutputTokens == 800 &&
             preCompaction.compaction.summaryFailurePolicy == "fallback_structured" &&
             preCompaction.compaction.modelOverrides.isEmpty(),
-        "configs created before compaction settings retain compatible defaults"
+        "schema v1 without a compaction section uses the documented operator defaults"
     )
     Directory.create(root + "/invalid-model-compaction", recursive: true)
     File.writeTo(
@@ -4648,10 +4648,11 @@ func productToolEnvironmentIsSafe(environment: ToolEnvironmentView): Bool {
 
 func runSessionQueueContracts(root: String): Unit {
     let config = ProductConfig(
-        stateRoot: root + "/queue-state", workspaceRoot: root,
+        settingsRoot: root + "/queue-settings", stateRoot: root + "/queue-state", workspaceRoot: root,
         fixture: true, approvalMode: ApprovalMode.Yolo, asyncEnabled: false
     )
     let product = openLegacyWorkspaceProduct(config: config).value().getOrThrow()
+    installContractCompactionPolicy(product)
     let app = product.applicationSession()
     let source = app.id()
     app.enqueue("source-input", "steer", "source work").value().getOrThrow()
@@ -4671,7 +4672,10 @@ func runSessionQueueContracts(root: String): Unit {
     app.clearQueued()
     expect(app.queuedCount() == 0, "clear removes durable target inputs from active view")
     app.switchSession(source).value().getOrThrow()
-    let fork = app.forkCurrent().value().getOrThrow()
+    let fork = match (app.forkCurrent()) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException("queue fork: " + error.code)
+    }
     expect(app.queuedCount() == 0 && fork.value != source.value,
         "fork detaches source pending inputs")
     app.switchSession(source).value().getOrThrow()

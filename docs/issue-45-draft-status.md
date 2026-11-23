@@ -5390,3 +5390,7 @@ The standalone subagent fixture now selects `task` and `yield` before enabling t
 ### E2415 — Explicit funding for both package digest readers
 
 Parallel package inspection now asks its caller to fund both 64 KiB buffers before either is allocated. The same shared bank limits apply. With only 131,071 bytes available for digest work, the Native regression refused the inspection; the actual Registry payer accepted the same tree, matched its v2 digest and recovered its pre-test owner/byte counts after close. This is a resource-accounting correction, not a first-reply or release pass.
+
+### E2416 — A real compaction policy for the queue fork contract
+
+The session queue fixture now installs and selects its compaction policy in its own settings directory before forking. The queue contract passed, including source/target isolation, durable withdrawal, failed clear and reopen. The old-schema config test now checks the 15-second default authorized in E812; explicit timeouts and the five-second local provider gate are unchanged. The provider configuration scope still fails when closing its installed runtime. This is not a complete Product pass.
