@@ -2222,6 +2222,9 @@ class ActualProcessBrokerRoot180{
 
     func serve180():Unit{
         var pendingAccept:?ActualProcessBrokerSlot180=None<ActualProcessBrokerSlot180>
+        // Recently accepted peers can retire while accept is asleep. Recheck
+        // their actual returns promptly, then back off to the idle cadence.
+        var pollMillis: Int64 = 100
         while(true){
             // The same registered accept payment survives empty polls. Only
             // the returned helper may retire it; persistent owners do not
@@ -2237,16 +2240,20 @@ class ActualProcessBrokerRoot180{
                 for(slot in slots){if(slot.reserveBeforeAccept180()){pendingAccept=Some(slot);break}}}
             if(pendingAccept.isNone()){sleep(Duration.millisecond*20);continue}
             let slot=pendingAccept.getOrThrow()
-            let client=try{acceptWholeHelper180()}
-            catch(_:SocketTimeoutException){continue}
+            let client=try{acceptWholeHelper180(pollMillis)}
+            catch(_:SocketTimeoutException){
+                pollMillis = if (pollMillis < 50) { pollMillis * 2 } else { 100 }
+                continue
+            }
             catch(error:Exception){
                 // An unexpected accept exception retains its original slot.
                 slot.retainOriginal180(error);startupFailure=Some(error);return}
             slot.installAndSpawn180(client);pendingAccept=None<ActualProcessBrokerSlot180>
+            pollMillis = 10
         }
     }
-    private func acceptWholeHelper180():UnixSocket{
-        server.getOrThrow().accept(timeout:Some(Duration.millisecond*100))}
+    private func acceptWholeHelper180(pollMillis: Int64):UnixSocket{
+        server.getOrThrow().accept(timeout:Some(Duration.millisecond*pollMillis))}
     // A control response is only a scalar observation. Its own original peer,
     // output and Future must still return before the idle Root can exit.
     private func answerLifetimeObservations180(pendingAccept:?ActualProcessBrokerSlot180):Unit{

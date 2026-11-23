@@ -5333,3 +5333,7 @@ Five controls passed on the `9b90494101` Core executable, including cancellation
 ### E2401: Native read-view child capabilities
 
 The parent/child ceiling comparison no longer exports either Prepared graph. Native Tool passed 107/107 and all 24 original bridge lifecycle entries passed with normal process return. The continuous Core gate still failed at the two read-view receipts. See the [source and ELF qualification](implementation/plan-execution-reliability.md#e2401-native-read-view-child-capability-checks).
+
+### E2402: broker return latency, cold dispatch and Core ownership
+
+The broker now checks for actual peer returns sooner after accepting work. Two real RPC clients shared a worker; closing the first left the second working, and the last close removed the worker without forced cleanup. Cold CLI commands improved but still trailed the matched base. Neither the private plugin link experiment nor the current Core run passed its original gate. See the [artifact-specific results](implementation/plan-execution-reliability.md#e2402-broker-return-latency-and-remaining-refusals).
