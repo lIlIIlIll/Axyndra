@@ -5311,3 +5311,7 @@ Disk space no longer blocks assembly. [The rebuild record](implementation/plan-e
 ### E2395: packaged acceptance and remaining failures
 
 [The packaged acceptance record](implementation/plan-execution-reliability.md#e2395-packaged-product-todo-and-local-provider-results) covers all three release recipes on `fe56c99b10` behavior. Product: 434 of 1,110 passed; 676 are deferred, not passed. The installed Coding Todo PTY passed. The first packaged local provider reply missed five seconds; the rebuilt base answered both requests. The continuous Core still rejects read-view output, and cold help and inspect remain slower than the base. Keep the PR Draft.
+
+### E2396: release contracts and SDK executor reads
+
+[Current release evidence](implementation/plan-execution-reliability.md#e2396-release-contracts-and-scoped-sdk-executor-reads) covers 606 checks from 16 Full plugin suites, three recovery contracts and four pre-admission rejections. The external SDK executors now copy only their result ID; all 17 SDK contract checks passed. A private read-view validation change still failed the continuous Core gate and is not part of the PR. This does not qualify the five-second profile or full release.

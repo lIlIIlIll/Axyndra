@@ -730,13 +730,9 @@ class DemoTool <: ToolExecutor {
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let _ = context
-        let call = ToolCall(
-            prepared.call.callId,
-            prepared.call.name,
-            prepared.operationPlan.canonicalArguments
-        )
+        let callId = prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })
         calls += 1
-        Result.Ok(ToolResult(call.callId, objectValue([ValueField("ok", boolValue(true))])))
+        Result.Ok(ToolResult(callId, objectValue([ValueField("ok", boolValue(true))])))
     }
 }
 
@@ -748,11 +744,7 @@ class ToolContextCaptureTool <: ToolExecutor {
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        let call = ToolCall(
-            prepared.call.callId,
-            prepared.call.name,
-            prepared.operationPlan.canonicalArguments
-        )
+        let callId = prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })
         calls += 1
         valid = context.workspaceRoot == "/sdk/explicit-workspace" &&
             context.cwd == "/sdk/explicit-workspace/src" &&
@@ -760,7 +752,7 @@ class ToolContextCaptureTool <: ToolExecutor {
             context.environment.names().size == 1 &&
             context.services.contains(ToolServiceKind.Custom, name: "sdk-context-service") &&
             !context.cancellation.isCancelled()
-        Result.Ok(ToolResult(call.callId, objectValue([ValueField("valid", boolValue(valid))])))
+        Result.Ok(ToolResult(callId, objectValue([ValueField("valid", boolValue(valid))])))
     }
 }
 

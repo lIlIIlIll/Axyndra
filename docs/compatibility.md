@@ -106,6 +106,16 @@ sideEffectResolver: Some({ input =>
 
 The pure Host helpers for Context Read, Read View, readonly delegation and the HTTP root also take the new input in `agent_domain`: replace the `host` prefix with `resolver` (for example, `hostContextReadCapabilities` becomes `resolverContextReadCapabilities`). For non-descriptor code that already owns a real `ToolCall`, use `withToolResolverInput(call, resolverContextReadCapabilities)`. Registration and invocation remain distinct; a missing invocation is not permission to synthesize a call or a grant.
 
+## Return a tool result from an SDK executor
+
+An executor that only needs to identify its result does not need to export `prepared.call` or `prepared.operationPlan`. Copy the display call ID while the input is valid:
+
+```cangjie
+let callId = prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })
+```
+
+Pass `callId` to `ToolResult`. To inspect **frozen arguments**, use `withCanonicalCallInput` instead of reading display arguments. Both projections expire when the callback ends; a copied string remains usable. Neither projection grants execution or returns an earlier raw export. See the two executors in [the SDK contract](../support_tests/sdk_contract/src/fakes.cj).
+
 ## Migrate a derived Operation store
 
 The host-side `OperationRuntimePort.settleDerivedOperation` takes a fourth
