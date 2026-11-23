@@ -5350,3 +5350,7 @@ The complete `tool.readonly` path still exports its frozen target name during al
 ### E2405: only two of six private preview copies had an observed terminal return
 
 On the private preview-copy build, the continuous Core fixture created six separately charged argument copies. Two reached the real result ACK and removed their own child entries from the shared ledger. The other four had no observed removal; none may be treated as returned. The subsequent 16,777,216-byte read-view reservation was **5,785,384 bytes over capacity**. Both reserved Receipts failed. This is a capacity result, not a SIGSEGV classification or a GC pass. The candidate is not in the PR. [Method, executable and SQLite evidence](implementation/plan-execution-reliability.md#e2405-preview-copy-payments-and-actual-terminal-returns).
+
+### E2406: eight physical frontend controls passed; first-request CPU attributed
+
+All eight selected CLI/RPC/ACP pipe tests passed on the rebuilt App test executable. Each retained its own physical pipe proof. They do not qualify the full frontend. In a separate diagnostic on the E2402 Coding package, 495 of 577 first-request user CPU samples landed in `libcrypto.so.3`. Only eleven recovered call chains named `pluginPackageFileDigest`; the missing frames are not proof of additional hash calls. No local HTTP POST arrived. [Artifacts, scope and sampling method](implementation/plan-execution-reliability.md#e2406-physical-frontend-controls-and-first-request-cpu-samples).
