@@ -5346,3 +5346,7 @@ The broker no longer exports a root plan to check its width, required capability
 ### E2404: E2403 export boundary and E2402 release evidence
 
 The complete `tool.readonly` path still exports its frozen target name during alias selection (13 actual calls); file-plan result handling also retains raw metadata. On the separately rebuilt E2402 artifacts, 431 Product cases passed, three crashed with direct GC evidence, and 676 were not rerun. The seven-record performance gates passed on both arms, but cold CLI regressed and neither operator profile arm met the first-response deadline. The empty-home profile failed even earlier during plugin setup. [Measurements, artifact identities and exclusions](implementation/plan-execution-reliability.md#e2404-actual-delegation-exports-and-e2402-release-measurements).
+
+### E2405: only two of six private preview copies had an observed terminal return
+
+On the private preview-copy build, the continuous Core fixture created six separately charged argument copies. Two reached the real result ACK and removed their own child entries from the shared ledger. The other four had no observed removal; none may be treated as returned. The subsequent 16,777,216-byte read-view reservation was **5,785,384 bytes over capacity**. Both reserved Receipts failed. This is a capacity result, not a SIGSEGV classification or a GC pass. The candidate is not in the PR. [Method, executable and SQLite evidence](implementation/plan-execution-reliability.md#e2405-preview-copy-payments-and-actual-terminal-returns).
