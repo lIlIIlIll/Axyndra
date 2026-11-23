@@ -599,6 +599,11 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         product.tools(threadId: Some(ThreadId(sessionId.value)))
     }
 
+    // Same catalog and thread as tools(), without publishing any definitions.
+    public func hasPublishedTool(name: String): Bool {
+        product.hasPublishedTool159e(name, threadId: Some(ThreadId(sessionId.value)))
+    }
+
     public func activeTools(): Array<ModelToolDefinition> {
         if (planModeEnabled || vibeModeEnabled) {
             product.toolsFor(product.readonlyToolCapabilities(sessionId),

@@ -44,14 +44,8 @@ class RpcHostToolBridge {
             case Result.Err(error) => return Result.Err(error)
         }
         for (candidate in parsed) {
-            for (tool in session.tools()) {
-                if (tool.name == candidate.name &&
-                    !containsDefinition(definitions, candidate.name)) {
-                    return hostToolError(
-                        "host tool conflicts with an active tool: " +
-                            candidate.name
-                    )
-                }
+            if (!containsDefinition(definitions, candidate.name) && session.hasPublishedTool(candidate.name)) {
+                return hostToolError("host tool conflicts with an active tool: " + candidate.name)
             }
         }
         for (definition in definitions) {

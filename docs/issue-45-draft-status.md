@@ -5414,3 +5414,5 @@ The bound Store path no longer pays for an extra materialization just to measure
 ### E2421 — Native payload selection without a raw plan export
 
 [112/112 Tool cases, five Core controls, AST and 24 bridge cases](implementation/plan-execution-reliability.md#e2421-inspect-the-frozen-native-payload-limits-without-exporting-the-plan) passed on the scoped code. Continuous Core still failed at both read-view Receipts. The first local provider reply and complete Prompt flow remain unaccepted. The raw Prepared API is not fully migrated and GC remains deferred.
+
+E2422 — RPC host-tool collision checking is now a thread-scoped membership query. Two real servers still reject a conflicting registration; clearing the owning server removes the tool, and transient catalog consumers are returned. The same targeted Native case failed before and passed after (`rpc-tool-selection/{red,green}/qualification.json`; one of 35 cases). Full RPC, Core, bootstrap timing and release remain unqualified. PR remains Draft; GC stays deferred.
