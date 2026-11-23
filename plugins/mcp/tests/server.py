@@ -2,7 +2,6 @@
 """A real stdio MCP 2026-07-28 peer. It records every physical input frame."""
 import json
 import sys
-import time
 from pathlib import Path
 
 mode, record = sys.argv[1], Path(sys.argv[2])
@@ -57,8 +56,8 @@ for line in sys.stdin.buffer:
         if mode == 'eof':
             sys.exit(0)
         if mode == 'hang':
-            time.sleep(30)
-            sys.exit(0)
+            # Leave the call unanswered, but keep recording input until EOF.
+            continue
         if mode == 'input':
             result = {'resultType': 'input_required', 'requestState': 'needs-a-new-user-decision'}
         elif mode == 'large':

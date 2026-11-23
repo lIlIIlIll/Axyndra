@@ -426,7 +426,10 @@ class NativeMcpClientTests(unittest.TestCase):
     def test_cancellation_aborts_session_without_unapproved_cancel_write(self):
         with Peer('hang') as peer:
             self.assertTrue(peer.start()['ok'])
+            startup = peer.observed()
+            self.assertEqual([json.loads(line)['method'] for line in startup], ['server/discover', 'tools/list'])
             prepared = peer.prepare()
+            frozen = bytes.fromhex(prepared['result']['intents'][0]['bytes_hex'])
             frame = peer.invocation({'action': 'call', 'tool': local_name(), 'input': {},
                 'host_plan': {'version': 'process-channel-intent-v1', 'binding': {}, 'intents': prepared['result']['intents']}})
             peer.current = frame
@@ -448,10 +451,12 @@ class NativeMcpClientTests(unittest.TestCase):
                 self.assertEqual(response['service'], 'process.channel.read')
                 peer.answer(response)
             self.assertLess(time.monotonic() - started, 2)
-            # No MCP notifications/cancelled frame is authorized by the frozen
-            # tools/call bytes. Host cancellation owns process cleanup.
-            self.assertEqual(len(peer.observed()), 3)
             self.assertEqual(peer.prepare(call='after-cancel')['result']['error'], 'mcp_plugin.session_closed')
+            # Flushing a pipe does not mean the backend has recorded its bytes.
+            # EOF drains every write, including any unauthorized cancellation.
+            peer.origin.stdin.close()
+            self.assertEqual(peer.origin.wait(timeout=3), 0)
+            self.assertEqual(peer.observed(), [*startup, frozen])
 
     def test_service_error_is_never_idle_or_eof(self):
         with Peer() as peer:

@@ -5366,3 +5366,7 @@ The shipping host was hashing plugin files in all 511 first-request samples with
 ### E2409: invalid preview requests rejected before retaining plan DATA
 
 The file-plan executor now rejects an invalid Source, display name, frozen effect/network policy, or cancellation before retaining a full-plan reader. The actual generator, package revalidation, approved write path and result ACK are unchanged. Native Tool passed **109/109**. The real AST path and all five Core controls passed; the continuous Core gate still failed on `read_view.output_capacity`. Separately, the preceding shipping Full package passed all 606 endpoint checks. [Matched concurrency, cancellation and physical-reaping measurements](implementation/plan-execution-reliability.md#e2409-preview-rejection-and-matched-extension-results).
+
+### E2410: Product eligibility and the MCP cancellation observation
+
+On `840926c5346f`, all 428 eligible Product cases passed individually. The other 682 cases in the 1,110-case inventory remain deferred, not passed. All 10 selected real PTY flows and eight physical CLI/RPC/ACP pipe cases passed. The original five-second local Coding request still timed out without a POST. The MCP cancellation fixture now drains the actual backend pipe to EOF and checks the complete byte sequence; all 51 MCP protocol cases passed. DAP large-response delivery and complete Core remain open. [Builds, package protocols and canonical outcomes](implementation/plan-execution-reliability.md#e2410-current-product-and-package-protocols).
