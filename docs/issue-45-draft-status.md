@@ -5341,4 +5341,8 @@ The broker now checks for actual peer returns sooner after accepting work. Two r
 
 ### E2403: read-only delegation root checks
 
-The broker no longer exports a root plan to check its width, required capability kinds or current connection identity. All 108 Native Tool tests, 24 bridge cases, five integration controls and the independent AST approval/recovery fixture passed. The complete Core fixture still failed on both reserved read-view receipts. The separate file-plan result path still has an unacknowledgeable raw export. [Source and SQLite evidence](implementation/plan-execution-reliability.md#e2403-read-only-delegation-without-exporting-the-root-plan).
+The broker no longer exports a root plan to check its width, required capability kinds or current connection identity. All 108 Native Tool tests, 24 bridge cases, five integration controls and the independent AST approval/recovery fixture passed. The complete Core fixture still failed on both reserved read-view receipts. Alias selection and the separate file-plan result path still export raw metadata. [Source and SQLite evidence](implementation/plan-execution-reliability.md#e2403-scoped-checks-of-the-read-only-delegation-root).
+
+### E2404: E2403 export boundary and E2402 release evidence
+
+The complete `tool.readonly` path still exports its frozen target name during alias selection (13 actual calls); file-plan result handling also retains raw metadata. On the separately rebuilt E2402 artifacts, 431 Product cases passed, three crashed with direct GC evidence, and 676 were not rerun. The seven-record performance gates passed on both arms, but cold CLI regressed and neither operator profile arm met the first-response deadline. The empty-home profile failed even earlier during plugin setup. [Measurements, artifact identities and exclusions](implementation/plan-execution-reliability.md#e2404-actual-delegation-exports-and-e2402-release-measurements).
