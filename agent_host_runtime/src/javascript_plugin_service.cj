@@ -1307,24 +1307,20 @@ public class HostJavaScriptPluginServiceBroker {
                 rootPrepared.source.kind==PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
                 !matchesRootPlan(FrozenPluginPlanRule.ReadonlyFilePlanProposals)){
                 return hostPluginResourceError("readonly_delegation.file_plan_denied","actual operator has not granted file previews")}
-            let frozen=invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
-            if(requestCount>readonlyDelegationInteger(frozen,"max_calls")){
+            if (!matchesRootPlan(FrozenPluginPlanRule.ReadonlyCallWithinWidth(requestCount))) {
                 return hostPluginResourceError("readonly_delegation.call_limit","operator readonly delegation width is exhausted")}
-            if(!hostPluginPlanRequires(invocationPlan204,CapabilityKind.WorkspaceRead) ||
-                !hostPluginPlanRequires(invocationPlan204,CapabilityKind.ExtensionInvoke) ||
+            if (!matchesRootPlan(FrozenPluginPlanRule.RequiresCapability(CapabilityKind.WorkspaceRead)) ||
+                !matchesRootPlan(FrozenPluginPlanRule.RequiresCapability(CapabilityKind.ExtensionInvoke)) ||
                 !matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))){
                 return hostPluginResourceError("readonly_delegation.capability_denied","preview exceeds the actual Root ceiling")}
-            let actual=identity.getOrThrow()
-            return actual.host.checkReadonlyDelegation(rootContext, rootPrepared, actual.namespace,
-                httpIntentText(frozen, "contribution"), actual.generation)
+            return identity.getOrThrow().checkReadonlyRoot(rootContext, rootPrepared)
         }
         if (service == "tool.readonly") {
             if (identity.isNone() || channelBinding.isSome() || httpStreamBinding.isSome() ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
                 !matchesRootPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) {
                 return hostPluginResourceError("readonly_delegation.root_invalid", "only an actual frozen canonical root can delegate") }
-            let host = invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
-            if (requestCount > readonlyDelegationInteger(host, "max_calls")) {
+            if (!matchesRootPlan(FrozenPluginPlanRule.ReadonlyCallWithinWidth(requestCount))) {
                 return hostPluginResourceError("readonly_delegation.call_limit", "operator readonly delegation width is exhausted") }
             if (!matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))) {
                 return hostPluginResourceError("readonly_delegation.capability_denied", "delegation exceeds the actual Run capability ceiling") }

@@ -5337,3 +5337,8 @@ The parent/child ceiling comparison no longer exports either Prepared graph. Nat
 ### E2402: broker return latency, cold dispatch and Core ownership
 
 The broker now checks for actual peer returns sooner after accepting work. Two real RPC clients shared a worker; closing the first left the second working, and the last close removed the worker without forced cleanup. Cold CLI commands improved but still trailed the matched base. Neither the private plugin link experiment nor the current Core run passed its original gate. See the [artifact-specific results](implementation/plan-execution-reliability.md#e2402-broker-return-latency-and-remaining-refusals).
+
+
+### E2403: read-only delegation root checks
+
+The broker no longer exports a root plan to check its width, required capability kinds or current connection identity. All 108 Native Tool tests, 24 bridge cases, five integration controls and the independent AST approval/recovery fixture passed. The complete Core fixture still failed on both reserved read-view receipts. The separate file-plan result path still has an unacknowledgeable raw export. [Source and SQLite evidence](implementation/plan-execution-reliability.md#e2403-read-only-delegation-without-exporting-the-root-plan).

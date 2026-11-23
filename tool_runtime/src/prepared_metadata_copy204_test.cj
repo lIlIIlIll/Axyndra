@@ -656,6 +656,28 @@ class PreparedMetadataCopy204Tests {
         @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
     }
     @TestCase
+    func delegationWidthAndRequiredKindsDoNotExportTheirFrozenPlan(): Unit {
+        let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("width-run"), SessionId("width-session"), CapabilitySet())
+        let arguments = objectValue([ValueField("host_plan", objectValue([ValueField("max_calls", integerValue(3))]))])
+        let call = ToolCall("width-call", "width-tool", arguments)
+        let prepared = PreparedToolInvocation(OperationId("width-operation"), call, exclusiveToolConcurrency(),
+            PreparedAuthorization.StaticPolicy, NormalizedOperationPlan(call.name, arguments,
+                [Capability(CapabilityKind.WorkspaceRead)], OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "width-binding"),
+            PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        let producer = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyCallWithinWidth(3)))
+        @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyCallWithinWidth(4)))
+        @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.RequiresCapability(CapabilityKind.WorkspaceRead)))
+        @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.RequiresCapability(CapabilityKind.ExtensionInvoke)))
+        producer.producerReturned204(); root.close()
+        @Expect(reader.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyCallWithinWidth(3)))
+        @Expect(bank.usage()[1] > 0)
+        reader.returnConsumerFrame204()
+        @Expect(bank.usage()[1], 0)
+    }
+    @TestCase
     func callOnlyPublicExportKeepsItsIndependentBackingHeld():Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged:16777216); let root = bank.acquire(131072)
         let core = MetadataCopyConsumer204(root)

@@ -65,13 +65,17 @@ public enum FrozenPluginPlanRule {
     DerivableParent(Bool, Bool) | PermitsDerivedIntent(NormalizedOperationPlan, String, String, String) |
     FileApplicationContentsMatch(AgentValue, AgentValue) | ReadViewFact(FrozenReadViewCheck) | Effect(OperationEffectClass) |
     ReadonlyExecTarget(String, String, String, String) | AllowsExtension(String) |
-    AllowsNativeReadViewCapabilities(PreparedToolInvocation, CapabilitySet)
+    AllowsNativeReadViewCapabilities(PreparedToolInvocation, CapabilitySet) |
+    ReadonlyCallWithinWidth(Int64) | RequiresCapability(CapabilityKind)
 
     // A broker may already own the parent plan (Task or durable Store).
     // Otherwise both Prepared participants pin their own DATA for this call.
     public func matches(plan: NormalizedOperationPlan): Bool {
         match (this) {
             case Effect(expected) => plan.effectClass == expected
+            case ReadonlyCallWithinWidth(count) =>
+                count <= readonlyDelegationInteger(plan.canonicalArguments.field("host_plan").getOrThrow(), "max_calls")
+            case RequiresCapability(kind) => requiresCapability(plan.requiredCapabilities, kind)
             case AllowsExtension(name) =>
                 CapabilitySet(values: plan.requiredCapabilities).allows(CapabilityKind.ExtensionInvoke, resource: name)
             case AllowsNativeReadViewCapabilities(child, current) =>

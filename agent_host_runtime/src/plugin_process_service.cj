@@ -43,10 +43,25 @@ public class HostPluginServiceIdentity {
         Result.Ok(bound)
     }
 
+    // Use the sealed root's independently owned name only when it is the
+    // actual frozen Tool. A nested child cannot borrow its ancestor's name.
+    func checkReadonlyRoot(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<Unit> {
+        let root = match (prepared.source.operationRoot) {
+            case Some(value) => value
+            case None => return hostPluginResourceError("readonly_delegation.root_invalid", "delegation requires its actual frozen canonical root")
+        }
+        let name = root.toolName()
+        let prefix = "plugin." + namespace + "."
+        if (prepared.source.kind == PreparedInvocationSourceKind.Derived || !name.startsWith(prefix) ||
+            !prepared.textEquals(PreparedMetadataText.PlanToolName, name)) {
+            return hostPluginResourceError("readonly_delegation.root_invalid", "delegation requires its actual frozen canonical root")
+        }
+        host.checkReadonlyDelegation(context, prepared, namespace, name[prefix.size..], generation)
+    }
+
     public func readonlyDelegationArguments(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         arguments: AgentValue): Result<ToolCall> {
-        let contribution = httpIntentText(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow(), "contribution")
-        match (host.checkReadonlyDelegation(context, prepared, namespace, contribution, generation)) {
+        match (checkReadonlyRoot(context, prepared)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         if (!httpIntentExactFields(arguments, ["tool", "input"]) || arguments.field("input").getOrThrow().unifiedKind != ValueKind.Object) {
             return hostPluginResourceError("readonly_delegation.arguments_invalid", "readonly service selects one frozen alias and object input") }

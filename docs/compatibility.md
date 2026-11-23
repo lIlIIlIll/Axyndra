@@ -194,6 +194,8 @@ Neither the plugin wire protocol nor the database format changes.
 
 `FrozenPluginPlanRule` adds `AllowsNativeReadViewCapabilities(child, current)`. Update exhaustive matches when recompiling against this Tool API. A match checks the child against the parent plan and the current capabilities; it does not validate the selected target or authorize execution.
 
+The broker also uses `ReadonlyCallWithinWidth(count)` and `RequiresCapability(kind)`. Include both cases in exhaustive matches. They inspect the frozen plan, not the live grant; callers must still check the current connection and capability ceiling. No database or plugin-wire migration is required.
+
 When the producer of an independently paid Prepared copy returns, reading
 `prepared.call` or `prepared.operationPlan` from that producer throws
 `IllegalStateException`, even if another reader still holds the data. If a
