@@ -210,6 +210,12 @@ class FixtureRequestSnapshot159 {
     func systemContains159(value: String): Bool {
         lock.lock(); try { request.getOrThrow().system.contains(value) } finally { lock.unlock() }
     }
+    func systemIndex159(marker: String): ?Int64 {
+        lock.lock(); try { request.getOrThrow().system.indexOf(marker) } finally { lock.unlock() }
+    }
+    func cacheMatches159(policy: ModelCachePolicy, key: String): Bool {
+        lock.lock(); try { let value = request.getOrThrow(); value.cachePolicy == policy && value.cacheKey == key } finally { lock.unlock() }
+    }
     func firstMessageTextStartsWith159(value: String): Bool {
         lock.lock(); try {
             let messages = request.getOrThrow().messages
@@ -265,6 +271,14 @@ public class FixtureRequestObservation159 {
     public func hasRequest159(): Bool { lock.lock(); try { owner.isSome() } finally { lock.unlock() } }
     public func systemContains159(value: String): Bool {
         lock.lock(); try { match (owner) { case Some(actual) => actual.systemContains159(value); case None => false } }
+        finally { lock.unlock() }
+    }
+    public func systemIndex159(marker: String): ?Int64 {
+        lock.lock(); try { match (owner) { case Some(actual) => actual.systemIndex159(marker); case None => None<Int64> } }
+        finally { lock.unlock() }
+    }
+    public func cacheMatches159(policy: ModelCachePolicy, key: String): Bool {
+        lock.lock(); try { match (owner) { case Some(actual) => actual.cacheMatches159(policy, key); case None => false } }
         finally { lock.unlock() }
     }
     public func firstMessageTextStartsWith159(value: String): Bool {

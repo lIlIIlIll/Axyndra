@@ -31,6 +31,7 @@ private func executeFixtureOwnedFrame159(port: FixtureModelPort, funding: ModelI
     let input = ModelRequest("fixture", [ModelMessage(ModelRole.User, [ModelBlock(ModelBlockKind.Text, text: text)])],
         system: "independently paid system", tools: [ModelToolDefinition("fixture.only", "description",
             objectValue([ValueField("type", textValue("object"))]))], requestId: "fixture-paid-request",
+        cachePolicy: ModelCachePolicy.StablePrefix, cacheKey: "independent-fixture-key",
         transportHardTimeoutMillis: 37)
     @Expect(match (port.executeReturningInput159(input, { _ => () }, funding)) {
         case ModelInputReturn159.Returned(value) => value.isOk()
@@ -58,6 +59,24 @@ class FixtureRequestCustody159Tests {
             @Expect(match (result) { case ModelInputReturn159.Returned(value) => value.isOk(); case _ => false }, true)
             @Expect(port.withLastRequest159({ view => view.firstMessageTextStartsWith159("[checkpoint]") }), false)
         }
+        port.retireLastRequest159(); source.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
+    func promptMarkerAndCacheObservationsRejectStaleOrDifferentRequests(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 33554432)
+        let source = bank.acquire(131072); let port = FixtureModelPort(); let observed = FixtureObservedView159()
+        executeFixtureOwnedFrame159(port, FixtureRequestFunding159(source), "fixture input")
+        @Expect(port.withLastRequest159({ view =>
+            observed.value = Some(view)
+            view.systemIndex159("paid") == Some<Int64>(14) && view.systemIndex159("absent").isNone() &&
+                view.cacheMatches159(ModelCachePolicy.StablePrefix, "independent-fixture-key") &&
+                !view.cacheMatches159(ModelCachePolicy.Default, "independent-fixture-key") &&
+                !view.cacheMatches159(ModelCachePolicy.StablePrefix, "other-key") }), true)
+        let stale = observed.value.getOrThrow()
+        @Expect(stale.systemIndex159("paid").isNone(), true)
+        @Expect(stale.cacheMatches159(ModelCachePolicy.StablePrefix, "independent-fixture-key"), false)
         port.retireLastRequest159(); source.close()
         @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
     }

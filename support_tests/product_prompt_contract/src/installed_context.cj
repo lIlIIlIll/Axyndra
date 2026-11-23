@@ -18,6 +18,26 @@ func promptConfigureReadScopes(settings: String): Unit {
     File.writeTo(settings + "/plugins/read-scopes.json",
         ("{\"version\":1,\"roots\":[\"$" + "{settings_root}/managed-skills\",\"$" + "{settings_root}/skills\"]}").toArray())
 }
+// Read scopes authorize a host read; the selected provider still needs its
+// own ordered discovery roots. Keep the installed package and its content lock.
+func promptSelectSkillRoots(product: ProductRuntime): Unit {
+    let path = product.settingsRoot + "/plugins/context.json"
+    let selection = parseUnifiedJson(String.fromUtf8(File.readFrom(path)))
+    let workspace = selection.field("resources").getOrThrow().items[0]
+    expect(httpIntentText(workspace, "path") == "workspace", "installed Coding profile selects the workspace")
+    let resources = ArrayList<AgentValue>()
+    let roots = ArrayList<AgentValue>()
+    for ((name, suffix) in [("managed", "managed-skills"), ("user", "skills")]) {
+        let resource = parseUnifiedJson(stringifyUnifiedJson(workspace))
+        resource.put("source", textValue("$" + "{settings_root}/" + suffix))
+        resource.put("path", textValue(name))
+        resources.add(resource); roots.add(textValue(name))
+    }
+    resources.add(workspace); roots.add(textValue("workspace"))
+    selection.put("resources", listValue(resources.toArray()))
+    selection.field("query").getOrThrow().put("resource_roots", listValue(roots.toArray()))
+    File.writeTo(path, stringifyUnifiedJson(selection).toArray())
+}
 func promptStoredContext(product: ProductRuntime, run: RunId): InvocationContextProjection {
     let database = SqliteDatabase(product.stateRoot + "/state.db")
     try {
@@ -29,7 +49,10 @@ func promptSelectedContext(product: ProductRuntime, prompt: String): InvocationC
     let request = product.request(prompt)
     expect(request.initializeContext && request.contextSnapshot.contributions().isEmpty(),
         "normal installed selection defers all host reads to the real Run")
-    expect(product.client.start(request, { _ => () }).isOk(), "installed provider completes actual context preparation")
+    match (product.client.start(request, { _ => () })) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException("installed provider context preparation: " + error.code + "; reason hash=" + modelPolicySha256Text(error.message))
+    }
     promptStoredContext(product, request.runId)
 }
 func promptContribution(snapshot: InvocationContextProjection, id: String): ?InvocationContextContribution {
@@ -76,9 +99,7 @@ class PromptRegistryCopyDebt {
     }
 }
 var promptRegistryCopyDebt: ?PromptRegistryCopyDebt = None<PromptRegistryCopyDebt>
-// Installed workflow goal identity, reused by every session instead of
-// re-importing the package the registry already holds.
-var promptInstalledGoalComponent: ?(String, String) = None<(String, String)>
+let PROMPT_WORKFLOW_NAMESPACE = "axyndra:workflow"
 
 // The copied descriptor text is paid from the SAME private registry bank the
 // source path uses, exactly as the sibling installed contracts do. No payment
@@ -114,23 +135,19 @@ func promptWithRegistryCopies(action: () -> Unit): Unit {
     }
 }
 
-func promptCreateGoal(product: ProductRuntime, session: SessionId, objective: String): Unit {
-    promptWithRegistryCopies({ =>
-    // The package is imported once per settings root. This helper runs for every
-    // session, so a second import of the same package must reuse the identity
-    // already installed rather than being refused as a duplicate namespace.
-    let (namespace, digest) = match (promptInstalledGoalComponent) {
-        case Some(value) => value
-        case None =>
-            let record = match (product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow(), PluginInstallScope.Workspace)) {
-                case PluginRegistryResult.Ok(value) => value
-                case PluginRegistryResult.Err(_) => throw IllegalStateException("workflow goal component import failed") }
-            let installed = (promptRegistryText(record.descriptor.copyText(PluginDescriptorText.Namespace)),
-                promptRegistryText(record.descriptor.copyText(PluginDescriptorText.ContentDigest)))
-            record.close()
-            promptInstalledGoalComponent = Some(installed)
-            installed
-    }
+func promptInstallGoal(product: ProductRuntime): Unit {
+    promptWithRegistryCopies({ => configurePromptGoal(product) })
+}
+
+private func configurePromptGoal(product: ProductRuntime): Unit {
+    let record = match (product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow(), PluginInstallScope.Workspace)) {
+        case PluginRegistryResult.Ok(value) => value
+        case PluginRegistryResult.Err(error) => error.close(); throw IllegalStateException("workflow goal component import failed") }
+    let namespace = PROMPT_WORKFLOW_NAMESPACE
+    let digest = try {
+        expect(record.descriptor.textEquals(PluginDescriptorText.Namespace, namespace), "expected installed Workflow namespace")
+        promptRegistryText(record.descriptor.copyText(PluginDescriptorText.ContentDigest))
+    } finally { record.close() }
     let directory = product.settingsRoot + "/plugins"
     if (!exists(Path(directory))) { Directory.create(directory, recursive: true) }
     let goalRight = objectValue([ValueField("key", textValue("goal")), ValueField("read", boolValue(true)), ValueField("write", boolValue(true))])
@@ -145,14 +162,16 @@ func promptCreateGoal(product: ProductRuntime, session: SessionId, objective: St
         ValueField("command", textValue("goal"))])).toArray())
     match (product.setPluginEnabled(namespace, true, PluginInstallScope.Workspace)) {
         case PluginRegistryResult.Ok(discard) => discard.close()
-        case PluginRegistryResult.Err(_) => throw IllegalStateException("workflow goal component enable failed") }
+        case PluginRegistryResult.Err(error) => error.close(); throw IllegalStateException("workflow goal component enable failed") }
+}
+
+func promptCreateGoal(product: ProductRuntime, session: SessionId, objective: String): Unit {
     let application = product.applicationSession(sessionId: Some(session))
-    let routes = application.javascriptPluginCommands().filter { value => value.extensionId == namespace && value.name == "goal" }
+    let routes = application.javascriptPluginCommands().filter { value => value.extensionId == PROMPT_WORKFLOW_NAMESPACE && value.name == "goal" }
     if (routes.size != 1) { throw IllegalStateException("the selected workflow goal command route is unavailable") }
     match (application.invokeJavaScriptPluginCommand(routes[0].routeName, "set \"" + objective + "\"", { _, _ => () })) {
         case Result.Ok(_) => ()
         case Result.Err(error) => throw IllegalStateException("canonical goal creation failed: " + error.code) }
-    })
 }
 
 // Install and enable one real component through the public operator path. The

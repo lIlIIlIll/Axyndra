@@ -14,13 +14,14 @@ func verifyAutomaticSkillRuns(product: ProductRuntime, probe: FixtureModelPort, 
     expect(product.client.start(automatic, {_ => ()}).isOk(), "automatic Skill Run completes")
     let frozen = promptStoredContext(product, automatic.runId)
     expect(promptContribution(frozen, "reviewer").getOrThrow().references()[0].content.isNone(), "references remain lazy")
-    let active = probe.lastRequest.getOrThrow()
-    expect(active.system.contains("REVIEWER-INSTRUCTIONS") && !active.system.contains("REFERENCE-MUST-STAY-LAZY") && active.cacheKey == cacheKey,
+    expect(probe.withLastRequest159({ view => view.systemContains159("REVIEWER-INSTRUCTIONS") &&
+        !view.systemContains159("REFERENCE-MUST-STAY-LAZY") && view.cacheMatches159(ModelCachePolicy.StablePrefix, cacheKey) }),
         "automatic instructions reach Core without changing stable cache identity")
     let unrelated = product.request("compute seven plus nine", sessionId: Some(session))
     expect(product.client.start(unrelated, {_ => ()}).isOk(), "unrelated next Run completes")
     expect(!promptHasSelected(promptStoredContext(product, unrelated.runId)), "a new Run does not inherit prior selections")
-    expect(!probe.lastRequest.getOrThrow().system.contains("REVIEWER-INSTRUCTIONS") && probe.lastRequest.getOrThrow().cacheKey == cacheKey,
+    expect(probe.withLastRequest159({ view => !view.systemContains159("REVIEWER-INSTRUCTIONS") &&
+        view.cacheMatches159(ModelCachePolicy.StablePrefix, cacheKey) }),
         "the subsequent Run omits inactive instructions and preserves stable cache identity")
 }
 
@@ -35,13 +36,14 @@ func verifyAutomaticSkillDiscovery(temporary: String): Unit {
     let product = openProduct(config: ProductConfig(settingsRoot: settings, stateRoot: temporary + "/state", workspaceRoot: workspace,
         fixture: true, approvalMode: ApprovalMode.Yolo, distributionRoot: promptDistributionRoot())).value().getOrThrow()
     try {
+        promptSelectSkillRoots(product)
         let first = promptSelectedContext(product, "$local-review")
         expect(promptContribution(first, "local-review").getOrThrow().content.contains("FROZEN-INSTRUCTIONS"), "actual approved body is frozen")
         File.writeTo(directory + "/SKILL.md", (header + "NEW-INSTRUCTIONS").toArray())
         expect(promptContribution(first, "local-review").getOrThrow().content.contains("FROZEN-INSTRUCTIONS"), "editing cannot mutate the existing snapshot")
         let explicit = product.request("unrelated", contextSnapshot: Some(first))
         expect(!explicit.initializeContext && product.client.start(explicit, { _ => () }).isOk(), "explicit immutable context bypasses automatic reads")
-        expect(product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("FROZEN-INSTRUCTIONS"), "explicit context does not reload source")
+        expect(product.fixtureProbe.getOrThrow().withLastRequest159({ view => view.systemContains159("FROZEN-INSTRUCTIONS") }), "explicit context does not reload source")
         let second = promptSelectedContext(product, "$local-review")
         expect(promptContribution(second, "local-review").getOrThrow().content.contains("NEW-INSTRUCTIONS"), "later Run refreshes exact body")
         expect(promptReference(product, first, "local-review", "checklist.md", "automatic-reference") == "LAZY-REFERENCE", "lazy canonical read preserves old declaration")
@@ -50,7 +52,7 @@ func verifyAutomaticSkillDiscovery(temporary: String): Unit {
         let bytes = ArrayList<Byte>(); for (byte in header.toArray()) { bytes.add(byte) }; bytes.add(255)
         File.writeTo(directory + "/SKILL.md", bytes.toArray())
         let invalid = promptSelectedContext(product, "$local-review")
-        expect(!promptHasSelected(invalid) && product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("Review code changes"),
+        expect(!promptHasSelected(invalid) && product.fixtureProbe.getOrThrow().withLastRequest159({ view => view.systemContains159("Review code changes") }),
             "bounded header metadata remains visible but observed invalid UTF8 body is not activated")
         File.writeTo(directory + "/SKILL.md", "---\nname: incomplete\ndescription: no delimiter".toArray())
         let incomplete = promptSelectedContext(product, "$local-review")
