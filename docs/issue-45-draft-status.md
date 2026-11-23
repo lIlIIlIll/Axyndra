@@ -5358,3 +5358,7 @@ All eight selected CLI/RPC/ACP pipe tests passed on the rebuilt App test executa
 ### E2407: current Product, release and terminal results
 
 All eleven production stages and sixteen selected Minimal/Coding/Full release checks passed. Current Product: **428 passed, three crashed, 679 previously deferred cases not run**. Each new fault has a saved GC bitmap/stack-root trace. All ten real terminal cases passed. The original matched performance gate passed on both arms; cold CLI still regressed. Neither the shipping Coding host nor the private digest candidate delivered the first reply within five seconds. [Results and limits](implementation/plan-execution-reliability.md#e2407-current-release-product-pty-and-first-reply).
+
+### E2408: all 511 sampled crypto leaves identified; smaller packages missed the deadline
+
+The shipping host was hashing plugin files in all 511 first-request samples with a libcrypto leaf (559 user samples total). This identifies CPU work, not 511 separate verifications or time spent waiting. A private smaller Coding distribution passed 451 endpoint checks but neither installed-record arm reached the local HTTP fixture in five seconds. Each required cleanup of five descendant processes. Neither the build change nor a timeout increase is in the PR. [Unwind cross-check, package boundaries and retained Run states](implementation/plan-execution-reliability.md#e2408-first-request-package-hashing-and-a-rejected-smaller-distribution).
