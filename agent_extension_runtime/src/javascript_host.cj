@@ -606,17 +606,8 @@ public class JavaScriptExtensionHost {
             return hostError("extension.service_limit_invalid", "service request quota is outside the host-selected profile limit")
         }
         let descriptor: ?JavaScriptToolDescriptor = if (isView) { None } else { findTool(name) }
-        if (isContent) {
-            var declared = false
-            if (isView) { declared = hasView(name) }
-            else {
-                let providers = if (identity.kind == "provider") { policyProvidersValue }
-                    else if (identity.kind == "context_provider") { contextProvidersValue } else { resourceProvidersValue }
-                for (provider in providers where provider.name == name) { declared = true }
-            }
-            if (!isNativeExecutableHostProfile(request.profile) || !declared || serviceRequestLimit != 0 || (isView && observer.isSome())) {
-                return hostError("extension.content_provider_not_registered", "pure content query requires its exact typed declaration and zero services")
-            }
+        if (isContent && !acceptsContentInvocation(name, identity.kind, isView, serviceRequestLimit, observer.isSome())) {
+            return hostError("extension.content_provider_not_registered", "pure content query requires its exact typed declaration and zero services")
         }
         if (isPrepare && !isNativeExecutableHostProfile(request.profile)) {
             return hostError("extension.prepare_unsupported", "pure preparation requires a native executable contribution")
@@ -642,15 +633,11 @@ public class JavaScriptExtensionHost {
                 "tool is not registered by the extension: " + name
             )
         }
-        match (inputAttachment) { case Some(value) =>
-            if (identity.kind != "tool" || !isNativeExecutableHostProfile(request.profile) || descriptor.isNone() ||
-                !toolInputAttachmentEvidenceValid(value) || httpIntentText(value, "thread_id") != identity.threadId ||
-                httpIntentText(value, "run_id") != identity.runId || readonlyDelegationInteger(value, "epoch") != identity.epoch ||
-                httpIntentText(value, "operation_id") != identity.operationId || httpIntentText(value, "call_id") != identity.callId ||
-                httpIntentText(value.field("profile").getOrThrow(), "field") != descriptor.getOrThrow().inputAttachmentField ||
-                readonlyDelegationInteger(value.field("profile").getOrThrow(), "max_bytes") != descriptor.getOrThrow().inputAttachmentMaxBytes) {
+        match (inputAttachment) {
+            case Some(value) => if (invalidInvocationAttachment(value, identity, descriptor)) {
                 return hostError("extension.input_attachment_invalid", "input attachment does not belong to the actual declared ordinary Tool") }
-            case None => () }
+            case None => ()
+        }
         let prepareInputLimit = if (isView) { min(PLUGIN_VIEW_MAX_BYTES, request.maxFrameBytes - 4096) }
         else if (isContent) { if (contentPayload) { CONTENT_PAYLOAD_INPUT_BYTES } else { min(196608, request.maxFrameBytes - 4096) } } else if (identity.kind == "service_prepare" && payloadLimits.isSome()) {
             payloadLimits.getOrThrow().maxInputBytes + 65536
@@ -803,6 +790,30 @@ public class JavaScriptExtensionHost {
             endInvocation()
         }
         hostError("extension.protocol_failed", "extension invocation loop ended")
+    }
+
+    // Declaration and attachment checks finish before the nested Native read.
+    // Their JSON temporaries need not occupy the invocation frame during callbacks.
+    private func acceptsContentInvocation(name: String, kind: String, isView: Bool,
+        serviceRequestLimit: Int64, hasObserver: Bool): Bool {
+        var declared = false
+        if (isView) { declared = hasView(name) }
+        else {
+            let providers = if (kind == "provider") { policyProvidersValue }
+                else if (kind == "context_provider") { contextProvidersValue } else { resourceProvidersValue }
+            for (provider in providers where provider.name == name) { declared = true }
+        }
+        isNativeExecutableHostProfile(request.profile) && declared && serviceRequestLimit == 0 && !(isView && hasObserver)
+    }
+
+    private func invalidInvocationAttachment(value: AgentValue, identity: JavaScriptHostInvocationIdentity,
+        descriptor: ?JavaScriptToolDescriptor): Bool {
+        identity.kind != "tool" || !isNativeExecutableHostProfile(request.profile) || descriptor.isNone() ||
+            !toolInputAttachmentEvidenceValid(value) || httpIntentText(value, "thread_id") != identity.threadId ||
+            httpIntentText(value, "run_id") != identity.runId || readonlyDelegationInteger(value, "epoch") != identity.epoch ||
+            httpIntentText(value, "operation_id") != identity.operationId || httpIntentText(value, "call_id") != identity.callId ||
+            httpIntentText(value.field("profile").getOrThrow(), "field") != descriptor.getOrThrow().inputAttachmentField ||
+            readonlyDelegationInteger(value.field("profile").getOrThrow(), "max_bytes") != descriptor.getOrThrow().inputAttachmentMaxBytes
     }
 
     // Error translation has no live frame while the worker invokes nested

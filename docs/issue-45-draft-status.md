@@ -5394,3 +5394,7 @@ Parallel package inspection now asks its caller to fund both 64 KiB buffers befo
 ### E2416 — A real compaction policy for the queue fork contract
 
 The session queue fixture now installs and selects its compaction policy in its own settings directory before forking. The queue contract passed, including source/target isolation, durable withdrawal, failed clear and reopen. The old-schema config test now checks the 15-second default authorized in E812; explicit timeouts and the five-second local provider gate are unchanged. The provider configuration scope still fails when closing its installed runtime. This is not a complete Product pass.
+
+### E2417 — Native content invocation at the C2N boundary
+
+An actual selected-Skill context run hit the native stack guard while reading from its installed worker. Moving two completed checks out of the long-lived JavaScript invocation frame reduced its static stack allocation by 3,072 bytes. The previously failing Memory upload progressed. The later automatic context request remains unresolved. Eleven fixed-SDK Native extension cases passed; no stack limit, payload bound, identity check or ACK condition changed.
