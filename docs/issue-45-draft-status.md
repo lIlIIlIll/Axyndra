@@ -5325,3 +5325,7 @@ The [seven additional state contracts](implementation/plan-execution-reliability
 ### E2399: closed identity check at terminal capture
 
 The previous two raw call-ID comparisons left one 16 MiB lease outstanding in a focused Native Tool regression. Both now compare in place: the matching and rejected identities retain their original semantics and the separately held metadata reader, not the producer’s return, controls final release. The regression and all 106 Native Tool cases passed. [Implementation and ELF](implementation/plan-execution-reliability.md#e2399-terminal-capture-compares-identity-without-exporting-prepared-data). Core capacity, remaining Prepared consumers and full release acceptance stay open; deferred GC earns no pass credit.
+
+### E2400: the current Core entry still fails at read-view output
+
+Five controls passed on the `9b90494101` Core executable, including cancellation/recovery. The continuous entry failed: both nested read-view receipts report `read_view.output_capacity`. Two detached stores passed integrity checks and all six originals were unchanged. See the [ELF and reserved-receipt evidence](implementation/plan-execution-reliability.md#e2400-continuous-core-on-the-terminal-capture-fix).
