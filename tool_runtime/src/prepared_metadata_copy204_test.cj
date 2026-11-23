@@ -137,6 +137,35 @@ class PreparedMetadataCopy204Tests {
         @Expect(!matches(operations, patch("digest", "5.0")))
     }
     @TestCase
+    func ordinaryServiceComparesFrozenAndCurrentCapabilitiesWithoutPublishingThePlan(): Unit {
+        let name = "plugin.fixture.read"
+        let read = Capability(CapabilityKind.WorkspaceRead)
+        let invoke = Capability(CapabilityKind.ExtensionInvoke, resource: name)
+        let other = Capability(CapabilityKind.ExtensionInvoke, resource: "plugin.other.read")
+        let current = CapabilitySet(values: [read, invoke])
+        let context = ToolInvocationContext(RunId("ceiling-run"), SessionId("session"), current)
+        let args = objectValue([])
+        for (required in [[read, invoke], [invoke], [read, other]]) {
+            let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+            let plan = NormalizedOperationPlan(name, args, required, OperationEffectClass.ReadOnly,
+                OperationRetryDisposition.Never, "bound")
+            let prepared = PreparedToolInvocation(OperationId("service"), ToolCall("id", name, args), exclusiveToolConcurrency(),
+                PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+            let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+            let reader = prepared.retainMetadataConsumer204().getOrThrow()
+            let permitted = { caps: CapabilitySet, needsRead: Bool =>
+                prepared.matchesFrozenPlan(FrozenPluginPlanRule.PluginServiceCeiling(caps, needsRead)) }
+            @Expect(permitted(current, true), required.size == 2 && required[1].resource == name)
+            @Expect(permitted(current, false), required[required.size - 1].resource == name)
+            @Expect(!permitted(CapabilitySet(values: [read, other]), false))
+            @Expect(!permitted(CapabilitySet(values: [invoke]), true))
+            owner.producerReturned204(); root.close()
+            @Expect(bank.usage()[0] > 0)
+            reader.returnConsumerFrame204()
+            @Expect(bank.usage()[0], 0)
+        }
+    }
+    @TestCase
     func readonlyExecTargetRequiresCurrentIdentityAndThePlanCapabilityResource(): Unit {
         let name = "plugin.fixture.read"; let args = objectValue([])
         let context = ToolInvocationContext(RunId("readonly-run"), SessionId("session"), CapabilitySet())

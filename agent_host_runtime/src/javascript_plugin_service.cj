@@ -437,6 +437,10 @@ public class HostJavaScriptPluginServiceBroker {
         if (taskBorrowSelected204) { return rule.matches(taskBorrowedPlan204.getOrThrow()) }
         rootPrepared.matchesFrozenPlan(rule)
     }
+    private func matchesInvocationName(): Bool {
+        if (taskBorrowSelected204) { return taskCallIdentity.getOrThrow().name == taskBorrowedPlan204.getOrThrow().toolName }
+        rootPrepared.displayMatchesFrozenToolName()
+    }
     private let childSnapshotLock159 = Mutex()
     private var ownedChildContext159: ?ToolInvocationContext = None<ToolInvocationContext>
     private prop childContext: ToolInvocationContext {
@@ -1399,13 +1403,8 @@ public class HostJavaScriptPluginServiceBroker {
             }
             return Result.Ok(())
         }
-        if (invocationName204 != invocationPlan204.toolName ||
-            !invocationName204.startsWith("plugin.") ||
-            !CapabilitySet(values: invocationPlan204.requiredCapabilities).allows(CapabilityKind.ExtensionInvoke, resource: invocationName204) ||
-            !rootContext.capabilities.allows(CapabilityKind.ExtensionInvoke, resource: invocationName204) ||
-            (service != "network.http" &&
-                (!hostPluginPlanRequires(invocationPlan204, CapabilityKind.WorkspaceRead) ||
-                !rootContext.capabilities.allows(CapabilityKind.WorkspaceRead)))) {
+        if (!matchesInvocationName() ||
+            !matchesRootPlan(FrozenPluginPlanRule.PluginServiceCeiling(rootContext.capabilities, service != "network.http"))) {
             return hostPluginServiceAgentResult<Unit>(AgentError(
                 AgentErrorKind.PermissionDenied,
                 "extension.service_capability_denied",

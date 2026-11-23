@@ -5374,3 +5374,7 @@ On `840926c5346f`, all 428 eligible Product cases passed individually. The other
 ### E2411: DAP large responses fit the original request window
 
 The Native DAP codec now allocates its hex output and decoded buffer at their final sizes. The independently built package passed all 18 protocol cases, including three successive three-MiB `evaluate` requests and byte-for-byte responses from the real adapter. The same original case had returned `unknown` on the preceding shipping package. This is a DAP package result, not a complete PR or Full release pass. [Source, artifact and failure-path coverage](implementation/plan-execution-reliability.md#e2411-dap-hex-buffers).
+
+### E2412: compare the broker’s capability ceiling without exporting a Prepared plan
+
+The ordinary broker now checks the displayed and frozen plugin names and both capability sets without handing the whole plan to the service. The separately held Task path still uses its actual paid reader. Tool passed 110/110; the actual AST path, 24 bridge cases and five Core controls passed. The continuous Core gate still failed with `read_view.output_capacity`; both failed Receipts are retained. [Checks, DATA ownership and compatibility](implementation/plan-execution-reliability.md#e2412-ordinary-plugin-service-capability-check).
