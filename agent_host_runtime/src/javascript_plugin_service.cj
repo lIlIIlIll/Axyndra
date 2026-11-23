@@ -441,6 +441,15 @@ public class HostJavaScriptPluginServiceBroker {
         if (taskBorrowSelected204) { return taskCallIdentity.getOrThrow().name == taskBorrowedPlan204.getOrThrow().toolName }
         rootPrepared.displayMatchesFrozenToolName()
     }
+    // Only after confirming the exact parent schema. Counts do not export its DATA.
+    private func frozenIntentCount(): Int64 {
+        if (taskBorrowSelected204) {
+            return taskBorrowedPlan204.getOrThrow().canonicalArguments.field("host_plan").getOrThrow()
+                .field("intents").getOrThrow().items.size
+        }
+        rootPrepared.withCanonicalCallInput({ input =>
+            input.count([ToolResolverStep.Field("host_plan"), ToolResolverStep.Field("intents")]) })
+    }
     private let childSnapshotLock159 = Mutex()
     private var ownedChildContext159: ?ToolInvocationContext = None<ToolInvocationContext>
     private prop childContext: ToolInvocationContext {
@@ -668,7 +677,7 @@ public class HostJavaScriptPluginServiceBroker {
         childLock111.lock()
         try {
             childClosed111 = true
-            let count=invocationPlan204.canonicalArguments.field("host_plan").getOrThrow().field("intents").getOrThrow().items.size
+            let count=frozenIntentCount()
             match(ownedAwait166){case Some(value)=>if(!value.consumed()){
                 return hostChildRecovery111("Native terminal omitted its actual frozen waiting response")};case None=>()}
             if (childFailed111 || childAdmitted111.size != count) {
@@ -763,7 +772,7 @@ public class HostJavaScriptPluginServiceBroker {
         documentLock.lock()
         try {
             documentClosed = true
-            let expected = invocationPlan204.canonicalArguments.field("host_plan").getOrThrow().field("intents").getOrThrow().items.size
+            let expected = frozenIntentCount()
             if (documentFailed || documentCompleted != expected) {
                 return Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "plugin.document_outcome_unknown",
                     "native terminal omitted or contradicted an exact durable document outcome")) }
@@ -1357,9 +1366,7 @@ public class HostJavaScriptPluginServiceBroker {
         if (httpStreamBinding.isSome()) {
             if (service != "network.http.stream" || !matchesRootPlan(FrozenPluginPlanRule.HttpStreamParent) ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
-                invocationName204 != invocationPlan204.toolName ||
-                canonicalAgentValue(invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
-                    .field("binding").getOrThrow()) != httpStreamBinding.getOrThrow()) {
+                !matchesInvocationName() || !matchesRootPlan(FrozenPluginPlanRule.TransportBinding(httpStreamBinding.getOrThrow()))) {
                 return hostPluginResourceError("http.stream_parent_invalid", "HTTP stream broker requires its actual canonical root")
             }
             if (!matchesRootPlan(FrozenPluginPlanRule.CapabilitiesWithin(rootContext.capabilities))) {
@@ -1373,9 +1380,7 @@ public class HostJavaScriptPluginServiceBroker {
         if (channelBinding.isSome()) {
             if ((service != "process.channel.write" && service != "file.plan.propose") || !matchesRootPlan(FrozenPluginPlanRule.ChannelParent) ||
                 rootPrepared.source.kind == PreparedInvocationSourceKind.Derived || rootPrepared.source.operationRoot.isNone() ||
-                invocationName204 != invocationPlan204.toolName ||
-                canonicalAgentValue(invocationPlan204.canonicalArguments.field("host_plan").getOrThrow()
-                    .field("binding").getOrThrow()) != channelBinding.getOrThrow()) {
+                !matchesInvocationName() || !matchesRootPlan(FrozenPluginPlanRule.TransportBinding(channelBinding.getOrThrow()))) {
                 return hostPluginResourceError("channel.parent_invalid", "channel broker requires its host-held exact canonical root")
             }
             if (service == "file.plan.propose" && (identity.isNone() ||

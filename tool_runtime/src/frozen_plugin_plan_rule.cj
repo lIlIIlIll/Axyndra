@@ -66,7 +66,7 @@ public enum FrozenPluginPlanRule {
     FileApplicationContentsMatch(AgentValue, AgentValue) | ReadViewFact(FrozenReadViewCheck) | Effect(OperationEffectClass) |
     ReadonlyExecTarget(String, String, String, String) | AllowsExtension(String) |
     AllowsNativeReadViewCapabilities(PreparedToolInvocation, CapabilitySet) |
-    PluginServiceCeiling(CapabilitySet, Bool) |
+    PluginServiceCeiling(CapabilitySet, Bool) | TransportBinding(String) |
     ReadonlyCallWithinWidth(Int64) | RequiresCapability(CapabilityKind)
 
     // A broker may already own the parent plan (Task or durable Store).
@@ -79,6 +79,14 @@ public enum FrozenPluginPlanRule {
             case RequiresCapability(kind) => requiresCapability(plan.requiredCapabilities, kind)
             case AllowsExtension(name) =>
                 CapabilitySet(values: plan.requiredCapabilities).allows(CapabilityKind.ExtensionInvoke, resource: name)
+            case TransportBinding(expected) =>
+                match (plan.canonicalArguments.field("host_plan")) {
+                    case Some(host) => match (host.field("binding")) {
+                        case Some(binding) => canonicalAgentValueMatches(binding, expected)
+                        case None => false
+                    }
+                    case None => false
+                }
             case PluginServiceCeiling(current, needsRead) =>
                 let name = plan.toolName
                 name.startsWith("plugin.") && CapabilitySet(values: plan.requiredCapabilities).allows(

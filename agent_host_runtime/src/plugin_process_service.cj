@@ -2,6 +2,7 @@ package agent_host_runtime
 
 import agent_plugin_registry.*
 import agent_ports.*
+import agent_sdk.PluginContributionKind
 
 
 
@@ -95,12 +96,20 @@ public class HostPluginServiceIdentity {
             if (service == "process.readview") { return hostPluginResourceError("read_view.not_requested", "package has not requested read views") }
             return Result.Ok(())
         }
-        let plan = prepared.operationPlan.canonicalArguments.field("host_plan")
-        let contribution = match (plan) { case Some(value) => httpIntentText(value, "contribution"); case None => "" }
+        // Select the current descriptor's own string; the frozen input never escapes its reader.
+        let contribution = prepared.withCanonicalCallInput<String>({ input: ToolResolverInput =>
+            let path = [ToolResolverStep.Field("host_plan"), ToolResolverStep.Field("contribution")]
+            if (input.hasKind(path, JsonKind.String)) {
+                for (entry in descriptor.contributions where entry.kind == PluginContributionKind.Tool &&
+                    input.textEquals(ToolResolverText.Scalar(path), entry.name)) { return entry.name }
+            }
+            ""
+        })
         match (host.checkReadViewInput(prepared, namespace, contribution, generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
         }
-        let readGranted = plan.getOrThrow().field("read_granted").getOrThrow().asBool()
+        let readGranted = prepared.withCanonicalCallInput({ input =>
+            input.boolean([ToolResolverStep.Field("host_plan"), ToolResolverStep.Field("read_granted")]) })
         if (service == "process.readview" || (!readGranted && service == "file.plan.propose")) { return Result.Ok(()) }
         hostPluginResourceError("read_view.service_denied", "read-view invocation cannot escape its exact host resource services")
     }

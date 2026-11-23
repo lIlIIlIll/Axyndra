@@ -5402,3 +5402,7 @@ An actual selected-Skill context run hit the native stack guard while reading fr
 ### E2418 — Reject invalid local model snapshots before reserving an anti-replay identity
 
 A request rejected by the local snapshot encoder never reached the approval gate or model endpoint but used to leave a permanent cache entry. The port now freezes the request once before charging the separate anti-replay identity. A local refusal still returns `Held`; a failure after an actual gate call still retains its charge and blocks cache retirement. The regression failed before the fix; all 22 naturally enumerated `model_provider_runtime` tests passed after it. This does not settle the Product compaction deadline or the five-second first provider reply.
+
+### E2419 — broker selection no longer requires exporting the parent plan
+
+[Tool 111/111, five Native Core controls, AST and bridge 24/24](implementation/plan-execution-reliability.md#e2419-inspect-broker-intent-counts-grants-and-transport-bindings-without-exporting-the-parent). Continuous Core still failed on the grep and read-view Receipts. RPC refusal diagnostics identified outstanding main and child model-lane snapshots, not a refundable amount. The Draft remains incomplete; no GC, original provider deadline or full-release pass is claimed.

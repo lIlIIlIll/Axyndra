@@ -55,6 +55,28 @@ private class PlanRuleObservationNode <: JsonNode {
 @Test
 class PreparedMetadataCopy204Tests {
     @TestCase
+    func transportBindingChecksTheFrozenValueWithoutExportingIt(): Unit {
+        let context = ToolInvocationContext(RunId("transport-run"), SessionId("transport-session"), CapabilitySet())
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let binding = objectValue([ValueField("origin", textValue("example.test")), ValueField("port", integerValue(443))])
+        let canonical = canonicalAgentValue(binding)
+        let host = objectValue([ValueField("binding", binding)])
+        let prepared = metadataFixture204(context, objectValue([ValueField("host_plan", host)]))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        binding.put("port", integerValue(80))
+        @Expect(prepared.matchesFrozenPlan(FrozenPluginPlanRule.TransportBinding(canonical)))
+        @Expect(!prepared.matchesFrozenPlan(FrozenPluginPlanRule.TransportBinding(canonicalAgentValue(binding))))
+        owner.producerReturned204(); root.close()
+        @Expect(reader.matchesFrozenPlan(FrozenPluginPlanRule.TransportBinding(canonical)))
+        @Expect(bank.usage()[1] > 0)
+        reader.returnConsumerFrame204(); @Expect(bank.usage()[1], 0)
+        let absent = metadataFixture204(context, objectValue([]))
+        @Expect(!absent.matchesFrozenPlan(FrozenPluginPlanRule.TransportBinding("null")))
+        let empty = metadataFixture204(context, objectValue([ValueField("host_plan", objectValue([]))]))
+        @Expect(!empty.matchesFrozenPlan(FrozenPluginPlanRule.TransportBinding("null")))
+    }
+    @TestCase
     func terminalCaptureComparesCallIdentityWithoutExportingMetadata(): Unit {
         let context = ToolInvocationContext(RunId("run"), SessionId("session"), CapabilitySet())
         let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
