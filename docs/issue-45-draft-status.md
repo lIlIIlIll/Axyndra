@@ -5354,3 +5354,7 @@ On the private preview-copy build, the continuous Core fixture created six separ
 ### E2406: eight physical frontend controls passed; first-request CPU attributed
 
 All eight selected CLI/RPC/ACP pipe tests passed on the rebuilt App test executable. Each retained its own physical pipe proof. They do not qualify the full frontend. In a separate diagnostic on the E2402 Coding package, 495 of 577 first-request user CPU samples landed in `libcrypto.so.3`. Only eleven recovered call chains named `pluginPackageFileDigest`; the missing frames are not proof of additional hash calls. No local HTTP POST arrived. [Artifacts, scope and sampling method](implementation/plan-execution-reliability.md#e2406-physical-frontend-controls-and-first-request-cpu-samples).
+
+### E2407: current Product, release and terminal results
+
+All eleven production stages and sixteen selected Minimal/Coding/Full release checks passed. Current Product: **428 passed, three crashed, 679 previously deferred cases not run**. Each new fault has a saved GC bitmap/stack-root trace. All ten real terminal cases passed. The original matched performance gate passed on both arms; cold CLI still regressed. Neither the shipping Coding host nor the private digest candidate delivered the first reply within five seconds. [Results and limits](implementation/plan-execution-reliability.md#e2407-current-release-product-pty-and-first-reply).
