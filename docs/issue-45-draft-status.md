@@ -5410,3 +5410,7 @@ A request rejected by the local snapshot encoder never reached the approval gate
 ### E2420 — One inline journal snapshot, independent SQL observation
 
 The bound Store path no longer pays for an extra materialization just to measure the same bytes. [Direct and Committed Source evidence](implementation/plan-execution-reliability.md#e2420-inline-document-reads-keep-one-snapshot-and-a-separate-sql-fence): 48 inline/observation and 106 payload-reference scenarios passed, including rejection under saturation and independent revocation. The separate Product Prompt run passed automatic Skill selection but failed starting the explicitly activated Skill. Continuous Core and release acceptance remain open; PR stays Draft.
+
+### E2421 — Native payload selection without a raw plan export
+
+[112/112 Tool cases, five Core controls, AST and 24 bridge cases](implementation/plan-execution-reliability.md#e2421-inspect-the-frozen-native-payload-limits-without-exporting-the-plan) passed on the scoped code. Continuous Core still failed at both read-view Receipts. The first local provider reply and complete Prompt flow remain unaccepted. The raw Prepared API is not fully migrated and GC remains deferred.

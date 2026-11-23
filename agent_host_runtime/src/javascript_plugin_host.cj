@@ -2847,13 +2847,22 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         try { input.withData({ arguments => executeTaskInputFrame204(context, prepared, executionObservation, plan, call, arguments, returned) }) }
         finally { if (returned[0]) { let _ = input.retireAfterCompleteTaskFrame() } }
     }
+    private func wirePayloadLimits(shape: FrozenToolPayloadShape): Result<?OrdinaryToolPayloadLimits> {
+        match (shape) {
+            case FrozenToolPayloadShape.Unselected => Result.Ok(None<OrdinaryToolPayloadLimits>)
+            case FrozenToolPayloadShape.Rejected => hostPluginResourceError("plugin.tool_payload_selection_invalid",
+                "ordinary payload selection requires the exact available native Tool")
+            case FrozenToolPayloadShape.Limits(input, result, response, message) =>
+                Result.Ok(Some(OrdinaryToolPayloadLimits(toolName, maxInputBytes: input, maxResultBytes: result,
+                    maxServiceResponseBytes: response, maxMessageBytes: message)))
+        }
+    }
     private func executeTaskInputFrame204(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         executionObservation: ?HostToolExecutionCancellationObservation, plan: NormalizedOperationPlan, call: HostTaskCallIdentity,
-        invocationArguments: AgentValue, returned: Array<Bool>): Result<ToolResult> {        let toolPayload: ?OrdinaryToolPayloadLimits = if (isFrozenReadonlyDelegationParentPlan(plan)) {
-            ordinaryToolPayloadLimitsFromValue(plan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
-        } else if (isFrozenPluginDocumentParentPlan(plan) || isFrozenReadViewParentPlan(plan)) {
-            ordinaryToolPayloadLimitsFromValue(plan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
-        } else { None }
+        invocationArguments: AgentValue, returned: Array<Bool>): Result<ToolResult> {
+        let toolPayload = match (wirePayloadLimits(FrozenToolPayloadShape.inspect(plan, toolName))) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value
+        }
         let identity = JavaScriptHostInvocationIdentity(
             threadId: context.sessionId.value,
             runId: context.runId.value,
@@ -2911,11 +2920,9 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         let invocationArguments = match (host.ordinaryToolInput(context, prepared, extensionId, toolName, instanceGeneration)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
         }
-        let toolPayload: ?OrdinaryToolPayloadLimits = if (prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadonlyDelegationParent)) {
-            ordinaryToolPayloadLimitsFromValue(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
-        } else if (prepared.matchesFrozenPlan(FrozenPluginPlanRule.DocumentParent) || prepared.matchesFrozenPlan(FrozenPluginPlanRule.ReadViewParent)) {
-            ordinaryToolPayloadLimitsFromValue(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
-        } else { None }
+        let toolPayload = match (wirePayloadLimits(prepared.ordinaryPayloadShape(toolName))) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value
+        }
         let identity = JavaScriptHostInvocationIdentity(
             threadId: context.sessionId.value,
             runId: context.runId.value,

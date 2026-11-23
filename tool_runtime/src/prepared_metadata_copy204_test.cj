@@ -77,6 +77,43 @@ class PreparedMetadataCopy204Tests {
         @Expect(!empty.matchesFrozenPlan(FrozenPluginPlanRule.TransportBinding("null")))
     }
     @TestCase
+    func frozenPayloadLimitsReturnOnlyCheckedScalars(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("payload-run"), SessionId("payload-session"), CapabilitySet())
+        let digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        let host = objectValue([ValueField("version", textValue(HOST_READONLY_DELEGATION_VERSION)),
+            ValueField("plugin", textValue("axyndra:program")), ValueField("package_digest", textValue(digest)),
+            ValueField("generation", textValue("1")), ValueField("contribution", textValue("run")),
+            ValueField("configuration_digest", textValue("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")),
+            ValueField("tool_set_id", textValue("snapshot")), ValueField("tools", listValue([])),
+            ValueField("max_calls", integerValue(1)), ValueField("max_depth", integerValue(2))])
+        host.put("tool_payload_limits", OrdinaryToolPayloadLimits("run", maxInputBytes: 8192,
+            maxResultBytes: 4096, maxServiceResponseBytes: 2048, maxMessageBytes: 12288).value())
+        host.put("file_plan_proposals", boolValue(true))
+        host.put("input_attachment", objectValue([ValueField("field", textValue("code")), ValueField("max_bytes", integerValue(16))]))
+        let name = "plugin.axyndra:program.run"
+        let plan = NormalizedOperationPlan(name, objectValue([ValueField("input", objectValue([])), ValueField("host_plan", host)]),
+            [Capability(CapabilityKind.ExtensionInvoke, resource: name)], OperationEffectClass.ReadOnly,
+            OperationRetryDisposition.Never, "binding", implementationFingerprint: "axyndra:program:" + digest,
+            replayDisposition: Some(ReplayDisposition.NeverReplay))
+        let prepared = PreparedToolInvocation(OperationId("rule-operation"), ToolCall("id", name, objectValue([])),
+            exclusiveToolConcurrency(), PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        host.put("tool_payload_limits", nullValue())
+        let shape = prepared.ordinaryPayloadShape("run")
+        @Expect(match (prepared.ordinaryPayloadShape("other")) {
+            case FrozenToolPayloadShape.Rejected => true; case _ => false })
+        @Expect(match (FrozenToolPayloadShape.inspect(plan, "run")) {
+            case FrozenToolPayloadShape.Unselected => true; case _ => false })
+        owner.producerReturned204(); root.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+        @Expect(match (shape) { case FrozenToolPayloadShape.Limits(i, o, s, m) =>
+            i == 8192 && o == 4096 && s == 2048 && m == 12288; case _ => false })
+        var returned = false
+        try { let _ = prepared.ordinaryPayloadShape("run") } catch (_: IllegalStateException) { returned = true }
+        @Expect(returned)
+    }
+    @TestCase
     func terminalCaptureComparesCallIdentityWithoutExportingMetadata(): Unit {
         let context = ToolInvocationContext(RunId("run"), SessionId("session"), CapabilitySet())
         let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)

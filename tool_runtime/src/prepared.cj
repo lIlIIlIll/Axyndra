@@ -205,6 +205,9 @@ public class PreparedToolInvocation {
                 }
         }
     }
+    public func ordinaryPayloadShape(contribution: String): FrozenToolPayloadShape {
+        withClosedPlanComparison({ plan => FrozenToolPayloadShape.inspect(plan, contribution) })
+    }
     // Resolve the actual display call. None means the registration is absent.
     public func resolvedHostServiceMatches(catalog: ToolCatalog, fingerprint: String, threadId: ThreadId): ?Bool {
         compareResolvedDescriptor(catalog, threadId, PreparedDescriptorCheck.DisplayService(fingerprint))

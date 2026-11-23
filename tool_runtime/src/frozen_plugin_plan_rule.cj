@@ -4,6 +4,27 @@ import agent_domain.*
 import yjson.*
 import yjson_support.*
 
+// Frozen transport limits contain no references into the plan. The actual
+// host contribution supplies its own name when it constructs the wire profile.
+public enum FrozenToolPayloadShape {
+    Unselected | Rejected | Limits(Int64, Int64, Int64, Int64)
+
+    public static func inspect(plan: NormalizedOperationPlan, contribution: String): FrozenToolPayloadShape {
+        if (!isFrozenReadonlyDelegationParentPlan(plan) && !isFrozenPluginDocumentParentPlan(plan) &&
+            !isFrozenReadViewParentPlan(plan)) { return Unselected }
+        let raw = match (plan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits")) {
+            case Some(value) => value; case None => return Unselected
+        }
+        if (raw.unifiedKind == ValueKind.Null) { return Unselected }
+        match (ordinaryToolPayloadLimitsFromValue(raw)) {
+            case None => Rejected
+            case Some(value) => if (value.contribution == contribution) {
+                Limits(value.maxInputBytes, value.maxResultBytes, value.maxServiceResponseBytes, value.maxMessageBytes)
+            } else { Rejected }
+        }
+    }
+}
+
 // Closed questions about the frozen plan. A match neither exports the plan nor
 // grants execution; Source, capability and durable admission checks are separate.
 public enum FrozenPluginChildRelation {
