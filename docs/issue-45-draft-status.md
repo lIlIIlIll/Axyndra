@@ -5378,3 +5378,7 @@ The Native DAP codec now allocates its hex output and decoded buffer at their fi
 ### E2412: compare the broker’s capability ceiling without exporting a Prepared plan
 
 The ordinary broker now checks the displayed and frozen plugin names and both capability sets without handing the whole plan to the service. The separately held Task path still uses its actual paid reader. Tool passed 110/110; the actual AST path, 24 bridge cases and five Core controls passed. The continuous Core gate still failed with `read_view.output_capacity`; both failed Receipts are retained. [Checks, DATA ownership and compatibility](implementation/plan-execution-reliability.md#e2412-ordinary-plugin-service-capability-check).
+
+### E2413: grievance fixture preserves a missing store until the first explicit write
+
+The standalone `grievances_contract` now creates the settings directory only after verifying that a read of a missing store reports no database and no rows. Its original list, filter, cleanup, persistence and corrupt-store checks all passed. This changes the fixture, not Product’s read behavior. Other standalone failures still prevent release acceptance. [Package and canonical evidence](implementation/plan-execution-reliability.md#e2413-standalone-contracts-and-canonical-failures).

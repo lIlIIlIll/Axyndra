@@ -29,6 +29,7 @@ main(): Int64 {
             "missing store is distinguished from an empty store"
         )
 
+        Directory.create(root + "/settings", recursive: true)
         File.writeTo(
             root + "/settings/grievances.json",
             (
