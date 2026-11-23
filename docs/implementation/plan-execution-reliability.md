@@ -12335,3 +12335,29 @@ The independent `prepare_memory_latest_context_plugin.py` fixture passed all 138
 Product executable `765d6fb4ef3d51eab7b1b9e259f8da42a8f2826fb498c1c42d1a884c27945457` enumerated 1,110 cases. Three `DistributionExistingNativeRecordTests` passed: quarantine after a writer error, quarantine after a mismatched handshake on reopen, and return of registry custody after writing the effective lock. The first case reported one pass and 1,109 filtered cases. The driver initially rejected that valid total; the repository's filtered-result parser qualified the original stdout without rerunning the case. E2385's 674 named GC exclusions were recovered from its recorded qualification and verified against this inventory.
 
 Baseline `4d88fa6072` rebuilt with the same SDK. Both local `provider_profiles_blackbox` requests passed on the packaged baseline (`ed6f3da863ae`): 566 ms and 440 ms, each with its own HTTP POST and expected reply. These timings do not qualify the current Coding package. `recovery/qualification.json` binds the build, Memory, Product, and baseline receipts. No external model was called.
+
+### E2395: packaged Product, Todo and local provider results
+
+**Scope.** The E2394 rebuild on `98a27242d7` (behavior `fe56c99b10`) produced Minimal, Coding and Full with 0, 9 and 17 packages. All 16 selected assembly and entrypoint checks passed: Minimal assembly/clean/offline; Coding assembly/Skills/Program/Shell/clean/setup; Full the same six plus Eval. Minimal executable: `ff11c712a090a703abd764cb4b2a61d78ef7ef91a03c38d0f9477f19fa9c8fdc`. Coding and Full executable: `0cb06a1c9d9386d11c4bd2b09f9ad8dde4e64b68ffb5336eed748a509b862703`. Their plugin sets differ. These are not complete release passes.
+
+**Product.** ELF `765d6fb4ef3d51eab7b1b9e259f8da42a8f2826fb498c1c42d1a884c27945457` enumerated 1,110 cases; 674 previously deferred cases were not run. Of the other 436, 410 initially passed. Two lifecycle-manager crash cores, matched to the ELF and exact case, show `RouteObject → WCollector::ForwardObjectExclusive` and `CheckAndPush → GCTib::ForEachBitmapWord → GCPhasePreForward`. Those two samples are deferred. The other 24 initially failed: the driver had installed the native fixtures outside their required directory layout and recursive `cjpm test --skip-build` did not see the compiled Product target. With official fixture names, identical fixture bytes and the identical Product target bound at the recursive default, all 24 passed. Final disjoint inventory: **434 passed, 676 deferred**. No deferral is a pass. Evidence: `eligible-repaired/qualified.json` and `eligible-cores/qualified.json`.
+
+**Todo.** On an operator with all nine Coding packages installed via the Minimal management CLI, the real PTY completed two Runs. Four actual user decisions approved the waiting operations; all six Operations had committed, completed Receipts. One Todo document persisted the `in_progress` task, and there were zero model attempts. The watcher confirmed closure. This verifies the installed-operator flow, not first boot. Evidence: `todo-pinned/summary.json`.
+
+**Five-second profiles.** With the rebuilt base `4d88fa6072`, both local profiles answered (566 and 440 ms). Current Coding installed and enabled all nine verified trees before the first model call. Its local peer received the expected POST at +4,797 ms; the CLI timed out at +5,003 ms and did not try the second profile. A detached, integrity-checked copy of the unchanged database and WAL puts Run admission at +2,878 ms, context completion at +3,382 ms, model attempt at +4,069 ms and dispatch claim at +4,176 ms. Cancellation was recorded at +5,024 ms; the Run finished at +5,027 ms. The attempt has a request ID but no provider terminal timestamp. A private packaging experiment removed 19,211,392 bytes of static symbols from the nine plugin executables without changing the host, SDK libraries, original compiler outputs or tree verification. It also missed five seconds; its watcher had to clean up survivors. It is not published. Evidence: `profiles/sql.json`, `symbol-package/summary.json`, `symbol-profiles/summary.json`.
+
+**Matched measurements.** Rebuilt base and current Coding both passed the seven absolute gates. P95 under the same setup:
+
+| Measurement | Samples per arm | Base | Current |
+|---|---:|---:|---:|
+| Extension cold start (µs) | 12 | 63,708 | 60,222 |
+| First extension call (µs) | 12 | 1,691 | 1,387 |
+| Steady IPC (µs) | 240 | 2,096 | 627 |
+| Host RSS (bytes) | 12 | 29,372,416 | 20,881,408 |
+| Cancellation including 100 ms trigger (µs) | 12 | 138,191 | 139,541 |
+| CLI `/help` (µs) | 20 | 99,982 | 452,195 |
+| CLI `/plugins inspect` (µs) | 20 | 120,439 | 473,028 |
+
+The two CLI regressions remain open. These samples do not extend the scope of the earlier paired-worker result. Evidence: `matched/{baseline,current}/result.json`.
+
+**Core.** A private candidate used the sealed root's call ID for a legacy worker result only when equal to the Prepared display ID. Five Native controls passed (direct success, failed child, broker configuration, budget and cancellation/recovery). The unsplit Core still recorded `read_view.output_capacity` for `plugin.axyndra:workspace.grep` and `host.process.readview`. Both databases passed `quick_check`; all six original files retained their hashes and all 40 authority edges matched. No refusal-time bank measurement was taken on this run. No candidate change, early refund or wider budget is adopted. Evidence: `candidate-core/bound-controls/sql-qualification.json`.

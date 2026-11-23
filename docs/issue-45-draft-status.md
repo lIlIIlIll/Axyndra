@@ -5307,3 +5307,7 @@ The [file application check](implementation/plan-execution-reliability.md#e2361-
 ### E2394: fixed-SDK rebuild and Memory package verification
 
 Disk space no longer blocks assembly. [The rebuild record](implementation/plan-execution-reliability.md#e2394-fixed-sdk-rebuild-and-memory-package-verification) binds 22 production artifacts, 138 Memory Native tests, 40 Memory protocol tests, and three Product cases to checkout `98a27242d7`. The Product executable lists 1,110 cases. Its 674 deferred GC cases were not executed. The two local profile replies in this record came from the **baseline** package. The current Coding request, continuous Core, and complete release remain open.
+
+### E2395: packaged acceptance and remaining failures
+
+[The packaged acceptance record](implementation/plan-execution-reliability.md#e2395-packaged-product-todo-and-local-provider-results) covers all three release recipes on `fe56c99b10` behavior. Product: 434 of 1,110 passed; 676 are deferred, not passed. The installed Coding Todo PTY passed. The first packaged local provider reply missed five seconds; the rebuilt base answered both requests. The continuous Core still rejects read-view output, and cold help and inspect remain slower than the base. Keep the PR Draft.
