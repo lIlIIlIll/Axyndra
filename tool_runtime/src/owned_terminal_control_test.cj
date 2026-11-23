@@ -6,18 +6,18 @@ import std.sync.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
-private class TerminalControlDataOwner249 <: OperationTerminalDataOwner {
+class TerminalControlDataOwner249 <: OperationTerminalDataOwner {
     let visits=AtomicInt64(0)
     public func withRetainedOutput(_:ToolResultPayloadLease,
         _:(AgentValue,LogicalJsonOwnerReservation,Int64,()->Result<Unit>)->Unit):Result<Unit>{
         let _=visits.fetchAdd(1);Result.Ok(())
     }
 }
-func terminalControl249(check:()->Result<Unit>):OwnedToolExecutionControl{
+func terminalControl249(check:()->Result<Unit>, parent!: ?PreparedToolInvocation = None):OwnedToolExecutionControl{
     OwnedToolExecutionControl(None<PreparedToolInvocation>,check,
         {_,_,_=>ownedControlError<ToolPreparation>()},
         {_,_=>ownedControlError<OwnedToolExecutionContinuation>()},
-        {_,_=>ownedControlError<ToolInvocationResult>()})
+        {_,_=>ownedControlError<ToolInvocationResult>()}, terminalParent: parent)
 }
 
 // Resource/capture boundary controls only; no fabricated Prepared/Source or

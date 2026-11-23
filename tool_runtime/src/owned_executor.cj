@@ -199,7 +199,7 @@ public class OwnedToolExecutionControl {
             match(available()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             if(preparedInputMode){return ownedPreparedWaitingError<OwnedToolExecutionProgress>("tool.prepared_input_action_only")}
             let parent=match(terminalParent){case Some(value)=>value;case None=>return ownedControlError<OwnedToolExecutionProgress>()}
-            if(result.callId!=parent.call.callId || result.receiptId!=parent.operationId.value || result.payloadLease.isNone()){
+            if(!parent.textEquals(PreparedMetadataText.CallId, result.callId) || result.receiptId!=parent.operationId.value || result.payloadLease.isNone()){
                 return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,"tool.live_terminal_capture_changed",
                     "terminal output must retain this invocation's actual parent allocation"))}
             match(check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}

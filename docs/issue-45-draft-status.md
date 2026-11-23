@@ -5321,3 +5321,7 @@ Disk space no longer blocks assembly. [The rebuild record](implementation/plan-e
 [The terminal acceptance record](implementation/plan-execution-reliability.md#e2397-ten-terminal-flows-with-current-full-artifacts) covers ten real tmux sessions with the current Full executable, gateway and explicitly imported fixture packages. The ten terminal processes exited normally. This does not exercise default Coding startup or change the failed five-second profile result.
 
 The [seven additional state contracts](implementation/plan-execution-reliability.md#e2398-state-and-recovery-release-contracts) also passed on this behavior. They do not include the continuous Core case.
+
+### E2399: closed identity check at terminal capture
+
+The previous two raw call-ID comparisons left one 16 MiB lease outstanding in a focused Native Tool regression. Both now compare in place: the matching and rejected identities retain their original semantics and the separately held metadata reader, not the producer’s return, controls final release. The regression and all 106 Native Tool cases passed. [Implementation and ELF](implementation/plan-execution-reliability.md#e2399-terminal-capture-compares-identity-without-exporting-prepared-data). Core capacity, remaining Prepared consumers and full release acceptance stay open; deferred GC earns no pass credit.

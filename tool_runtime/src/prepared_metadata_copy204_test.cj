@@ -55,6 +55,35 @@ private class PlanRuleObservationNode <: JsonNode {
 @Test
 class PreparedMetadataCopy204Tests {
     @TestCase
+    func terminalCaptureComparesCallIdentityWithoutExportingMetadata(): Unit {
+        let context = ToolInvocationContext(RunId("run"), SessionId("session"), CapabilitySet())
+        let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+        let prepared = metadataFixture204(context, objectValue([]))
+        let producer = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        @Expect(terminalIdentityFrame(prepared, "another-call"), "tool.live_terminal_capture_changed")
+        @Expect(terminalIdentityFrame(prepared, "copy-call"), "matched")
+        producer.producerReturned204(); root.close()
+        @Expect(reader.textEquals(PreparedMetadataText.CallId, "copy-call"))
+        @Expect(bank.usage()[0] > 0)
+        reader.returnConsumerFrame204()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+    private func terminalIdentityFrame(prepared: PreparedToolInvocation, callId: String): String {
+        let control = terminalControl249({ => Result<Unit>.Ok(()) }, parent: Some(prepared))
+        let data = TerminalControlDataOwner249(); let releases = [0]
+        let result = ToolResult(callId, nullValue(), receiptId: "copy-operation",
+            payloadLease: Some(ToolResultPayloadLease({ => releases[0]++ })))
+        try {
+            match (control.completeParent(result, data)) {
+                case Result.Err(error) => error.code
+                case Result.Ok(OwnedToolExecutionProgress.Terminal(value)) =>
+                    if (control.ownsTerminal(value, prepared) && data.visits.load() == 0) { "matched" } else { "mismatch" }
+                case _ => "unexpected progress"
+            }
+        } finally { control.close(); result.releasePayload(); @Expect(releases[0], 1) }
+    }
+    @TestCase
     func derivedSourceReusesOnlyAnEqualRetainedRootCallId(): Unit {
         let context = ToolInvocationContext(RunId("run"), SessionId("session"), CapabilitySet())
         for (same in [true, false]) {

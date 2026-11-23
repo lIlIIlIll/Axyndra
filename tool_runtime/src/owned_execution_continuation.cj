@@ -190,7 +190,7 @@ public class OwnedToolTerminalCompletion {
     }
     func capturedBy(actual:OwnedToolTerminalIdentity,prepared:PreparedToolInvocation):Bool{
         refEq(identity,actual) && refEq(parent,prepared) && result.payloadLease.isSome() &&
-            refEq(lease,result.payloadLease.getOrThrow()) && result.callId==prepared.call.callId &&
+            refEq(lease,result.payloadLease.getOrThrow()) && prepared.textEquals(PreparedMetadataText.CallId, result.callId) &&
             result.receiptId==prepared.operationId.value
     }
 }
