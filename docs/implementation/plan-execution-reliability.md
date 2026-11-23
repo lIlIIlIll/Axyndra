@@ -12473,3 +12473,26 @@ Of these samples, 109 reached Registry row loading, 95 dependency checks (50 dur
 **Private size experiment; not adopted.** The candidate assembled the actual Coding distribution with ThinLTO for nine repository plugin executables and retained each complete post-RPATH image outside the install tree before removing non-allocated symbols. All nine executable comparisons matched every allocated section, and all bundled libraries matched shipping content. Selected tree bytes fell from 318,839,208 to 243,283,759; 8,124,417 of the difference came from removing non-allocated symbols. Assembly, clean environment, setup and 451 actual endpoint cases passed. The host and SDK were unchanged.
 
 Neither installed-record arm reached the local HTTP fixture: with optimized installed trees the original caller timed out at 5,002.951 ms; with shipping installed trees and optimized distribution defaults it timed out at 5,003.822 ms. Both attempts had claimed dispatch and ended cancelled, without a provider terminal time. At capture the Runs were respectively `cancelling` and `cancelled`. Five descendants in each arm required cleanup; no natural-reaping or first-reply pass is claimed. Detached read-only checks preserved both original SQLite stores. Evidence: `release-symbols/{loadable-sections.json,qualification.json,protocols/summary.json}`.
+
+### E2409: preview rejection and matched extension results
+
+**Preview.** `PluginFilePlanProposeExecutor` checks the derived Source and its root/parent, the exact display name, the frozen read-only effect and denied network mode, then cancellation. These are rejection checks, not authorization. Only a request that passes them retains a full-plan reader. The generator still validates the proposal, parent, package and workspace; cancellation, package revalidation, write approval and the actual result ACK are unchanged.
+
+The three changed Cangjie sources over `599c507fc8` produced Tool ELF `97df317789b8d4cf34e00fb38548e0f8c6aa65860e8d0aec82b94f9c5dbda57d`: 109 enumerated and 109 passed. The new case distinguishes the display and frozen names, rejects write and HostNetwork policies and checks that an independent reader stays paid after producer return until its actual release. Cold-built Core ELF `809b32e40ad0db1694800d2b7c5181aa412d6d750c231b626a2a1e8249647c02` passed the actual AST preview/forged and stale denial/approved write/recovery contract, three direct broker cases, Program budget and cancellation/recovery. Unsplit Core exited 1. Two detached `quick_check`-clean stores with six original files unchanged showed 3 and 37 derived Source edges; `plugin.axyndra:workspace.grep` and `host.process.readview` both recorded `read_view.output_capacity`. Evidence: `preview-admission/{unit/green/full.json,ast/run.json,core/bound-controls/sql-qualification.json}`.
+
+**Matched extension workers.** Base `4d88fa6072` and pre-preview shipping source `ca26d189d4` used the same official SDK, normalized yjson lock, JS/TS fixtures, working paths and original drivers. The output driver differs only in the current API’s required payload release after checking the result. Each size had 12 overlapping pairs of distinct workers; progress and close-to-PID-disappearance have 24 observations. The identical cancellation drivers collected 12 samples per arm. All four compiled programs exited normally with closed process custody. Nearest-rank P95 (µs):
+
+| Measurement | Base | Current |
+|---|---:|---:|
+| 256-byte pair span | 10,200 | 1,624 |
+| 32 KiB pair span | 82,334 | 2,888 |
+| 256-byte progress | 1,462 | 1,316 |
+| 32 KiB progress | 2,120 | 1,121 |
+| 256-byte close to observed PID disappearance | 10,226 | 20,064 |
+| 32 KiB close to observed PID disappearance | 12,613 | 20,477 |
+| Cancellation trigger to returned result | 37,633 | 40,202 |
+| Cancellation trigger to observed PID disappearance | 37,667 | 40,244 |
+
+Both output spans improved, but close-to-reap and cancellation tails increased in this run. A missing PID does not acknowledge DATA. The original baseline checkout’s tracked dependency lock differed from the matched lock; an initial denied-network build and an attempted local lookup did not compile or produce samples. Evidence: `verified-draft/concurrent/qualification.json`. The standalone fixtures depend on neither Product nor Tool, the only modules changed by this preview fix.
+
+**Full endpoint protocols.** The E2406 shipping Full package passed **606/606** across 16 protocol checkers: 491 ran independently; 115 came from four checks already run on the same assembly. All 17 trees matched before and after. This is not a current full application, provider, 63 MiB Memory, or release pass. Evidence: `verified-draft/full-wires/summary.json`.

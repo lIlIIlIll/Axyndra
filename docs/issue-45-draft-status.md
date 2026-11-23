@@ -5362,3 +5362,7 @@ All eleven production stages and sixteen selected Minimal/Coding/Full release ch
 ### E2408: all 511 sampled crypto leaves identified; smaller packages missed the deadline
 
 The shipping host was hashing plugin files in all 511 first-request samples with a libcrypto leaf (559 user samples total). This identifies CPU work, not 511 separate verifications or time spent waiting. A private smaller Coding distribution passed 451 endpoint checks but neither installed-record arm reached the local HTTP fixture in five seconds. Each required cleanup of five descendant processes. Neither the build change nor a timeout increase is in the PR. [Unwind cross-check, package boundaries and retained Run states](implementation/plan-execution-reliability.md#e2408-first-request-package-hashing-and-a-rejected-smaller-distribution).
+
+### E2409: invalid preview requests rejected before retaining plan DATA
+
+The file-plan executor now rejects an invalid Source, display name, frozen effect/network policy, or cancellation before retaining a full-plan reader. The actual generator, package revalidation, approved write path and result ACK are unchanged. Native Tool passed **109/109**. The real AST path and all five Core controls passed; the continuous Core gate still failed on `read_view.output_capacity`. Separately, the preceding shipping Full package passed all 606 endpoint checks. [Matched concurrency, cancellation and physical-reaping measurements](implementation/plan-execution-reliability.md#e2409-preview-rejection-and-matched-extension-results).

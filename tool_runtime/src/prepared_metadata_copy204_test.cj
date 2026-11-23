@@ -69,6 +69,30 @@ class PreparedMetadataCopy204Tests {
         reader.returnConsumerFrame204()
         @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
     }
+    @TestCase
+    func readonlyOfflineCallChecksTheDisplayAndRetiresOnlyTheActualReader(): Unit {
+        checkReadonlyOfflineCall(OperationEffectClass.ReadOnly, NetworkPolicyMode.Denied, true)
+        checkReadonlyOfflineCall(OperationEffectClass.WorkspaceMutation, NetworkPolicyMode.Denied, false)
+        checkReadonlyOfflineCall(OperationEffectClass.ReadOnly, NetworkPolicyMode.HostNetwork, false)
+    }
+    private func checkReadonlyOfflineCall(effect: OperationEffectClass, network: NetworkPolicyMode, expected: Bool): Unit {
+        let context = ToolInvocationContext(RunId("run"), SessionId("session"), CapabilitySet())
+        let call = ToolCall("preview-call", "display-name", objectValue([]))
+        let plan = NormalizedOperationPlan("frozen-name", objectValue([]), [Capability(CapabilityKind.WorkspaceRead)],
+            effect, OperationRetryDisposition.Never, "preview-binding", networkPolicy: Some(NetworkPolicy(network)))
+        let prepared = PreparedToolInvocation(OperationId("preview-operation"), call, exclusiveToolConcurrency(),
+            PreparedAuthorization.StaticPolicy, plan, PreparedInvocationSource(PreparedInvocationSourceKind.Direct, context))
+        let bank = LogicalJsonOwnerBudget(); let root = bank.acquire(131072)
+        let producer = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        let reader = prepared.retainMetadataConsumer204().getOrThrow()
+        @Expect(prepared.matchesReadonlyOfflineCall("frozen-name"), false)
+        @Expect(prepared.matchesReadonlyOfflineCall("display-name"), expected)
+        producer.producerReturned204(); root.close()
+        @Expect(reader.textEquals(PreparedMetadataText.CallId, "preview-call"))
+        @Expect(bank.usage()[0] > 0)
+        reader.returnConsumerFrame204()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
     private func terminalIdentityFrame(prepared: PreparedToolInvocation, callId: String): String {
         let control = terminalControl249({ => Result<Unit>.Ok(()) }, parent: Some(prepared))
         let data = TerminalControlDataOwner249(); let releases = [0]

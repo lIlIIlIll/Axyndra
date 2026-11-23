@@ -59,22 +59,20 @@ class PluginFilePlanProposeExecutor <: ToolExecutor {
     }
 
     public func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
-        productFilePlanResultMetadata204(prepared, { plan, call =>
-            executeFilePlanFrame204(context, prepared, plan, call) })
-    }
-    private func executeFilePlanFrame204(context: ToolInvocationContext,
-        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolResolverInput): Result<ToolResult> {
         if (prepared.source.kind != PreparedInvocationSourceKind.Derived ||
             prepared.source.parentOperationId.isNone() || prepared.source.operationRoot.isNone() ||
-            !call.textEquals(ToolResolverText.Name, PLUGIN_FILE_PLAN_TOOL) ||
-            plan.effectClass != OperationEffectClass.ReadOnly ||
-            !networkPolicyModeIsDenied(plan.networkPolicy.mode)) {
+            !prepared.matchesReadonlyOfflineCall(PLUGIN_FILE_PLAN_TOOL)) {
             return pluginProcessError("application_plan.source_invalid", "file.plan.propose requires an admitted read-only plugin child Operation")
         }
         match (context.cancellation.check()) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
+        productFilePlanResultMetadata204(prepared, { plan, call =>
+            executeFilePlanFrame204(context, prepared, plan, call) })
+    }
+    private func executeFilePlanFrame204(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, plan: NormalizedOperationPlan, call: ToolResolverInput): Result<ToolResult> {
         let arguments = plan.canonicalArguments
         if (!applicationPlanObjectShape(arguments,
             ["plugin", "generation", "package_digest", "proposal", "managed_binding"],

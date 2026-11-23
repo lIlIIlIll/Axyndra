@@ -166,6 +166,11 @@ public class PreparedToolInvocation {
     public func displayMatchesFrozenToolName(): Bool {
         withClosedPlanComparison({ plan => textEquals(PreparedMetadataText.CallName, plan.toolName) })
     }
+    // A rejection filter, not an admission. Neither the display call nor the plan leaves this frame.
+    public func matchesReadonlyOfflineCall(name: String): Bool {
+        withClosedPlanComparison({ plan => callData204.getOrThrow().name == name &&
+            plan.effectClass == OperationEffectClass.ReadOnly && networkPolicyModeIsDenied(plan.networkPolicy.mode) })
+    }
     public func matchesRebuiltArguments(actual: ToolCanonicalArgumentsOwner204): Result<Bool> {
         withClosedPlanComparison({ plan => actual.matchesArguments204(plan.canonicalArguments) })
     }
