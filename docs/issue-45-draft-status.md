@@ -5471,3 +5471,6 @@ The failing Run's own rows show the Program operation `committed` with a `tool_i
 ### E2439 — Stored Program result has the SDK fields; it is an error result
 
 Decoding the exact reserved ToolResult shows `program_sdk`, `program_artifact` and `program_sha256` present with `status=partial`, `error_code=tool_program.subcall_failed` and `is_error=t`. E2437 is refuted; the missing projection comes from the failed Receipt, not from absent fields. Which sub-call failed is not named by this payload, so the read-view attribution stays an inference.
+### E2440 — Failing child decoded: grep read view refused for output capacity
+
+Following `derived_operation_admissions.parent_operation_id` from the Program operation: its single derived child is `plugin.axyndra:workspace.grep`, Receipt `failed`, detail naming `read_view.output_capacity` / "shared logical JSON output capacity is exhausted". The capacity attribution is now decoded, not inferred; the chain runs from live bank owners to the Program `partial` result to the blank inspection projection.

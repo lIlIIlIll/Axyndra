@@ -12839,3 +12839,25 @@ What actually hides those fields from inspection is the error status. `inspectAt
 The substantive failure is `tool_program.subcall_failed`, i.e. a Program sub-call returned an error. The read-view receipts recorded elsewhere in this contract report `read_view.output_capacity`, and `host.process.readview` and `plugin.axyndra:workspace.grep` are the two failed child rows in the same Run, but this payload does not name which sub-call failed. Attributing the Receipt failure to the read-view capacity refusal therefore stays an inference, not decoded evidence.
 
 No production accounting, quota, inspection projection, or test assertion was changed. The aggregate Core contract still fails.
+### E2440: the failing child is the grep read view, refused for output capacity
+
+Following `derived_operation_admissions.parent_operation_id` from the exact `plugin.axyndra:program.run` operation (derived Operations never get their own Thread ToolResult, so their settled Receipt is the only record) produced the missing link:
+
+```
+roots=1
+children=1
+child tool=plugin.axyndra:workspace.grep  outcome=failed
+detail=…:outputo1:25:errors25:read_view.output_capacity7:messages48:shared logical JSON output capacity is exhausted…
+```
+
+So the Program's single derived child is the workspace grep read view, its Receipt settled `failed`, and its own detail names `read_view.output_capacity` with the exact message "shared logical JSON output capacity is exhausted". The earlier attribution is now decoded evidence rather than inference: the Program ToolResult's `tool_program.subcall_failed` is this child's capacity refusal.
+
+The complete chain, each step backed by a stored row rather than a source reading:
+
+1. The shared bank is charged by live owners (E2427 per-origin split: two registry roots, one checkpoint slot, one Native document).
+2. Reservations are refused at that point; E2426/E2427 record 16,777,216 required against 140,676,576 charged of 150,994,944.
+3. The `host.process.readview` child and the derived grep child receive `read_view.output_capacity`; the grep child's Receipt detail states it verbatim.
+4. The Program operation therefore settles `partial` with `tool_program.subcall_failed`, its Receipt `failed`, and its ToolResult still carries `program_sdk`, `program_artifact` and `program_sha256` (E2439).
+5. Because the Receipt is not `completed`, the attachment-evidence query returns nothing, so inspection projects empty SDK and artifact fields (E2439).
+
+Nothing in this chain is a projection bug, a missing refund, or a fixture-retention mistake. It is the documented 16 MiB per-reservation floor meeting a bank already holding legitimate live owners. Closing it needs a capacity or sequencing decision that this session has not been authorised to take, and no production accounting, quota, floor, or test assertion was changed.
