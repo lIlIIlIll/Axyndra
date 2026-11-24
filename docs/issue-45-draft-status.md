@@ -5431,3 +5431,7 @@ The deferred `RegistrySessionCliRetirement161Tests` SIGSEGV keeps its historical
 ### E2426 — Exact Core read-view refusal arithmetic
 
 On final source `aeddce7217` (Core ELF `e9c53861…`), the read-view child is refused 128 KiB against a bank charged 140,676,488 of 150,994,944, short 6,458,760. At refusal: 3 `NativeControlMetadata` slots billing 73,239,944, one `NativeDocument` slot billing 67,108,864, and about 327,680 bytes of fixed buffers. Live high-water charges only; no leak is established. Continuous Core still fails.
+
+### E2427 — Core refusal is real saturation
+
+Per-origin tagging shows the 128 KiB read-view child refused against live owners only: 2 registry roots (56,462,784), 1 checkpoint slot (16,777,216), 1 Native document at its ceiling (67,108,864), short 6,458,816. No late refund was observed, so raising the quota or releasing an owner early is unsupported.

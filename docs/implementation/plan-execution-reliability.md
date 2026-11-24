@@ -12637,3 +12637,22 @@ Who was charged at that instant, by explicit per-acquisition tags rather than a 
 | fixed transport buffers | 0 message slots | ≈327,680 |
 
 The `NativeDocument` slot is at the 64 MiB per-reservation ceiling while the read-view child asks for only 128 KiB; both derive from the same `max(16 MiB, 8 × bytes)` contract, so the ceiling itself is not the shortfall. These are live high-water charges, not proven leaks: this measurement fixes the payer set and amount at refusal, and does not show that any of those owners has actually finished its consumer. Evidence: `evidence/core-final/qualification.json`; the same file binds the diagnostic ELF and the run's exit status.
+
+### E2427: the Core read-view refusal is genuine saturation, not a leaked owner
+
+Tagging each acquisition at its call site (temporary diagnostic build, reverted before this record) split the E2426 charge by actual producer. At the refusal of the 128 KiB read-view child, on final source `aeddce7217`:
+
+| Origin | Slots | Billed |
+|---|---:|---:|
+| registry metadata root | 2 | 56,462,784 |
+| owned checkpoint slot | 1 | 16,777,216 |
+| Native document | 1 | 67,108,864 |
+| fixed transport buffers | — | 327,680 |
+
+Total 140,676,544 of 150,994,944; free 10,318,400; required 16,777,216; short 6,458,816.
+
+Every charged owner is live at that instant: nothing was observed to have returned and been refunded late. The 16 MiB shortfall is the per-reservation floor meeting a bank that three legitimate long-lived owners already occupy, so neither raising the quota nor releasing an owner early is supported by this evidence.
+
+Each `PluginRegistry` instance holds one root custody reservation, and `PluginRegistry.close` releases it only through `metadataCustody.close` after every payment is closed. Two roots are therefore two live registries, not a duplicate allocation inside one. The continuous contract opens a single Product registry for this scenario, so the pairing needs a separate lifecycle check before it is called a defect.
+
+Evidence: `evidence/core-final/qualification.json` (per-callsite table, diagnostic and final ELF hashes, exit status). No production accounting, quota, floor, or owner lifetime was changed.
