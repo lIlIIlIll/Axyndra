@@ -12780,3 +12780,21 @@ The 5/5 scoped-return measurement in E2434 only sampled the global bank count an
 Consequently the "genuine saturation, not a leak" conclusion in E2433 also stays provisional: identifying which descendants keep that allocation alive is still open work, and no evidence yet distinguishes a legitimate long-lived consumer from an unreturned one.
 
 E2431's arithmetic (charged 140,676,576 of 150,994,944, short 6,458,816) and the per-origin split are unaffected.
+### E2437: the Program row exists, but its stored result carries no attachment fields
+
+Printing the failing Run's own inspection rows on the final source removed the remaining ambiguity:
+
+```
+tool=host.process.readview              sdk= artifact= argsDigest=d14eee53…
+tool=plugin.axyndra:workspace.grep      sdk= artifact= argsDigest=b8f264db…
+tool=plugin.axyndra:program.run         sdk= artifact= argsDigest=674ea946…
+count=3
+```
+
+So the Program operation *is* persisted with a complete arguments digest, and the `RunState.Completed` assertion that precedes it is satisfied. What is absent is only the Program SDK and artifact projection.
+
+The plugin explains why. `programWithInputAttachment` appends `program_sdk`, `program_artifact` and `program_sha256` only when `programInputAttachment` returned `Some`, and that requires the invocation to carry an `input_attachment` field with a matching frozen profile and artifact. When no attachment was staged the plugin emits its normal result with none of those fields. `inspectAttachedProgramEvidence` therefore finds nothing, and the fallback `inspectProgramEvidence` only reports `tool-program-sdk-v1/worker-protocol-v1` for a tool literally named `run_program`, which this contribution is not.
+
+The chain is thus: the shared bank is saturated, so the Program input attachment is not staged, so the Program runs without attachment evidence, so the inspection projection is empty. That is consistent with the earlier `input_attachment.capacity` refusals recorded for this contract, and it is a consequence of the same saturation, not an inspection defect.
+
+This remains a diagnostic conclusion: no production accounting, quota, floor, inspection projection, or test assertion was changed, and the aggregate Core contract still fails. Evidence: the run's rows in `core-inspect.log`.

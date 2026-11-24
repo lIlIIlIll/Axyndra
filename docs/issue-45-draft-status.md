@@ -5462,3 +5462,6 @@ Clean rebuild of `abd3d88665`, ELF `e9c53861…`: `--direct-native-positive`, `-
 ### E2436 — Correction: registry root does close
 
 `finishLocked` closes the allocation when `costs` empties, so a released custody with live bytes means surviving descendants, not an unclosable root slot. E2434's 5/5 measurement only sampled the global bank, so the saturation conclusion stays provisional.
+### E2437 — Program row exists; only its attachment projection is missing
+
+The failing Run persists `plugin.axyndra:program.run` with a full arguments digest, but `program_sdk`/artifact are empty because the invocation carried no `input_attachment`: the plugin only emits those fields when an attachment is staged, and the saturated bank prevented staging. Inspection is not at fault; the Core failure remains the same saturation.
