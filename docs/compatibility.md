@@ -192,6 +192,18 @@ owns the reader. One reader cannot acknowledge another. Earlier raw exports
 remain charged; the rest of the Prepared call/plan migration is still open.
 Neither the plugin wire protocol nor the database format changes.
 
+When an executor needs the frozen arguments as JSON for a non-Host consumer
+such as the RPC host-tool bridge, do not read `prepared.operationPlan`. Fund a
+reservation from the same shared bank and use
+`prepared.withCanonicalArgumentsText(payment, { text => … })`: it measures the
+JSON length, pays that peak, then materialises an independent copy whose text
+is readable only inside the callback. The callback's result must not retain the
+text; anything the recipient needs later has to be copied into its own paid
+owner. The same call replaces `prepared.call` for the call ID: read it with
+`prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })`.
+`agent_rpc`'s `RpcHostToolBridge` already uses this shape and closes its payment
+after the frame is emitted.
+
 `FrozenPluginPlanRule` adds `AllowsNativeReadViewCapabilities(child, current)`. Update exhaustive matches when recompiling against this Tool API. A match checks the child against the parent plan and the current capabilities; it does not validate the selected target or authorize execution.
 
 The broker also uses `ReadonlyCallWithinWidth(count)` and `RequiresCapability(kind)`. Include both cases in exhaustive matches. They inspect the frozen plan, not the live grant; callers must still check the current connection and capability ceiling. No database or plugin-wire migration is required.
