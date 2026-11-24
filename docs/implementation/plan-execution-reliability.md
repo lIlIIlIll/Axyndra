@@ -12674,3 +12674,29 @@ The second root sits exactly on the 16 MiB per-reservation floor, so its own reg
 Two consequences follow. The read-view refusal is caused by the fixture keeping copies paid after their readers returned, so the contract cannot pass while that retention is unconditional. Returning those copies is a fixture change, not a quota change, and it must drop every strong reference before closing each loan; a refund while a `SupportRegistryRecordData96` row or its parsed graph is still reachable would under-count the peak the contract intends to assert.
 
 Evidence: `evidence/core-final/qualification.json` (per-root table). No production accounting, quota, floor, owner lifetime, or test assertion was changed in this recording.
+### E2429: correction — a 16 MiB registry root is the floor, not evidence of release
+
+E2428 read the second root's exact 16,777,216 bytes as "its metadata already returned, only leases remain". That inference is wrong. `LogicalJsonOwnerBudget.acquire` charges `max(16 MiB, 8 × bytes)`, so a root custody created with 4096 declared bytes costs exactly 16 MiB, and later `ensureRetainedPeak` calls for small metadata never raise it. Landing on 16 MiB therefore proves nothing about whether its payments closed; only the first root, at 39,685,632 bytes, exceeds the floor.
+
+The proposed fix was also measured and does not apply. `supportRegistryReturnCopies96` was added at the end of `runProductFileApplicationPlanContracts` and returned `before=31/56,700,280 after=31/56,700,280`: the loan list is empty on this path, and the failure at `Run inspection…` precedes every `supportRegistry*96` call site in `--core-and-recovery-contract`. That change was reverted; no test assertion, quota, floor or production accounting was altered.
+
+What remains established is only the refusal arithmetic and the per-origin split from E2427. Which owner keeps the second product's registry payment open is still unknown, so no fixture edit is justified yet.
+### E2430: the file-plan registry is fully released before the refusal
+
+Printing each `PluginRegistryMetadataCustody` transition on the final source (temporary diagnostic build, reverted before this record) settles the E2427 second-root question:
+
+```
+init   …/settings
+init   …/file-plan-artifact-failure-settings
+close  …/file-plan-artifact-failure-settings pending=0
+released …/file-plan-artifact-failure-settings
+refusal request=131072
+close  …/settings pending=0
+released …/settings
+```
+
+The file-plan registry reaches `released` — its root reservation closed — before the read-view child is refused. So the 16 MiB root counted in E2427 was not that registry: the per-origin tags name an `init` site, and a second custody can be created from the same settings root. The refusal-time owners therefore need re-identification; E2428's fixture-retention reading and E2429's floor correction both remain as recorded, and neither is a fix.
+
+The remaining candidate is the primary `…/settings` root together with its payments, which is still open at the refusal by design: it is the Product's own registry and closes only after the contract returns. Whether any of its payments should already have been returned is not yet shown.
+
+Evidence: `evidence/core-final/core-custody.log`, plus `qualification.json` for the arithmetic. No instrumentation remains.

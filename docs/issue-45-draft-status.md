@@ -5438,3 +5438,9 @@ Per-origin tagging shows the 128 KiB read-view child refused against live owners
 ### E2428 — Second Core registry root is fixture retention
 
 Per-root tagging: `…/settings` bills 39,685,632 and `…/file-plan-artifact-failure-settings` bills exactly the 16 MiB floor, meaning that registry released its metadata and only derived leases remain. Those leases are the contract's own `SupportRegistryCopyDebt96` list, which is never closed. The Core refusal is therefore fixture retention; returning it is a fixture fix, not a quota change.
+### E2429 — Correction: 16 MiB is the floor, not proof of release
+
+E2428's reading was wrong: `max(16 MiB, 8 × bytes)` means a small registry root costs exactly 16 MiB and never grows, so that figure says nothing about returned payments. The proposed fixture return measured `before == after` (56,700,280) and was reverted; the second root's holder remains unidentified.
+### E2430 — File-plan registry releases before the refusal
+
+A custody-transition trace shows the second Product's registry reaching `released` (root closed) before the read-view refusal, so the E2427 16 MiB root there was not it. Refusal-time ownership needs re-identification; nothing was changed.
