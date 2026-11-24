@@ -5444,3 +5444,6 @@ E2428's reading was wrong: `max(16 MiB, 8 × bytes)` means a small registry root
 ### E2430 — File-plan registry releases before the refusal
 
 A custody-transition trace shows the second Product's registry reaching `released` (root closed) before the read-view refusal, so the E2427 16 MiB root there was not it. Refusal-time ownership needs re-identification; nothing was changed.
+### E2431 — Correction: second Core registry root is not released
+
+Same-run evidence contradicts E2430: the file-plan registry reports `released=true live=0` yet keeps 58 allocation leases and its full 16,777,216-byte charge. `finishLocked` only checks its own `costs` map, so inventory-derived leases keep the reservation charged. Fixture retention (E2428) is likewise refuted.

@@ -12700,3 +12700,21 @@ The file-plan registry reaches `released` — its root reservation closed — be
 The remaining candidate is the primary `…/settings` root together with its payments, which is still open at the refusal by design: it is the Product's own registry and closes only after the contract returns. Whether any of its payments should already have been returned is not yet shown.
 
 Evidence: `evidence/core-final/core-custody.log`, plus `qualification.json` for the arithmetic. No instrumentation remains.
+### E2431: correction — the file-plan registry root is never physically released
+
+E2430 relied on a custody trace from one run and a bank snapshot from another. Binding both to a single execution settles it differently. In run `tmpDirn66Say`:
+
+```
+…/settings                          rootClosed=false released=false live=10 total=866376
+                                    allocSum=34479688 allocCost=39685576 allocLeases=277
+…/file-plan-artifact-failure-settings rootClosed=true  released=true  live=0 total=0
+                                    allocSum=5557920  allocCost=16777216  allocLeases=58
+```
+
+At that same refusal the bank still billed that root 16,777,216 bytes. So the earlier reading — "released before the refusal, so the 16 MiB was something else" — was wrong in both directions: the second root still reports `released=true` while keeping 58 live allocation leases and its full 16 MiB charge, and the first root's 39,685,600 bytes is likewise a live high-water total.
+
+`PluginRegistryMetadataCustody.finishLocked` closes the allocation only when `costs` is empty, and `costs` lists only payments opened directly by the custody. A derived `LogicalJsonSharedCustody` lease taken from that same allocation — `deriveRetainedData113`, `openPayment`, or a copied-data payment — keeps the underlying reservation charged after the custody's own bookkeeping empties. The lease log shows such derive/close pairs continuing after the registry root closed.
+
+This refutes the fixture-retention reading of E2428 as well: the surviving charge belongs to registry-derived allocation leases, not to the contract's `SupportRegistryCopyDebt96` list, which measured empty on this path (E2429).
+
+Whether those 58 leases are legitimately live consumers or a leaked chain is still unproven; identifying their producer is the next step. Nothing was changed in production accounting, quota, or the test.
