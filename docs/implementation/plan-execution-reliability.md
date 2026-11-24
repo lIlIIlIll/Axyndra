@@ -12798,3 +12798,20 @@ The plugin explains why. `programWithInputAttachment` appends `program_sdk`, `pr
 The chain is: the shared bank is saturated, so the Program input attachment is not staged, so the Program runs without attachment evidence, so the projection is empty. That matches the earlier `input_attachment.capacity` refusals recorded for this contract: both are consequences of the same saturation, not an inspection defect.
 
 This is a diagnostic conclusion only. No production accounting, quota, floor, inspection projection, or test assertion changed, and the aggregate Core contract still fails. Evidence: the run's rows in `core-inspect.log`.
+### E2438: correction — the Program attachment was staged; its Receipt failed
+
+E2437 concluded that no Program `input_attachment` was staged. Reading the failing Run's own persisted rows refutes that:
+
+```
+PRIVATE_OP1438 rows=1
+PRIVATE_OP1438 id=operation-semantic-run-…-tool-0 state=committed outcome=failed
+PRIVATE_ATTACH1438 count=1
+```
+
+The Program operation exists and is `committed`, a `tool_input_attached` audit event exists for that Run, and the Receipt outcome is `failed`.
+
+That single fact explains the empty projection without any inspection defect. `completedToolInputAttachmentEvidence` requires `receipt.outcome='completed'` in its SQL. With a failed Receipt it returns `None`, so `inspectProgramEvidence` is used instead; that fallback only reports `tool-program-sdk-v1/worker-protocol-v1` for a tool literally named `run_program`, and this contribution is `plugin.axyndra:program.run`.
+
+The corrected chain is: the shared bank refuses the read-view child, so the Program run's Receipt settles as `failed`, so its attachment evidence is not offered to inspection, so the SDK and artifact fields stay empty. Attachment staging itself worked.
+
+This also confirms the child refusal actually occurs in this exact run, which the earlier note could not show. No production accounting, quota, inspection projection, or test assertion was changed; the aggregate Core contract still fails.

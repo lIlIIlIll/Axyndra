@@ -5465,3 +5465,6 @@ Clean rebuild of `abd3d88665`, ELF `e9c53861…`: `--direct-native-positive`, `-
 ### E2437 — Program row exists; only its attachment projection is missing
 
 The failing Run persists `plugin.axyndra:program.run` with a full arguments digest, but `program_sdk`/artifact are empty because the invocation carried no `input_attachment`: the plugin only emits those fields when an attachment is staged, and the saturated bank prevented staging. Inspection is not at fault; the Core failure remains the same saturation.
+### E2438 — Correction: Program attachment staged, Receipt failed
+
+The failing Run's own rows show the Program operation `committed` with a `tool_input_attached` audit event and `outcome=failed`. `completedToolInputAttachmentEvidence` requires a completed Receipt, so it returns `None` and the fallback ignores the qualified tool name. The child read-view refusal is confirmed in this run; staging worked.
