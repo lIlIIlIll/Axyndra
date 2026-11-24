@@ -5450,3 +5450,6 @@ Same-run evidence contradicts E2430: the file-plan registry reports `released=tr
 ### E2432 — Surviving registry leases are native-fixture retention
 
 `program_native_contract/fixture.cj` keeps its own `supportRegistryCopies96` list and never closes it; `FixtureRegistryText` derives a lease per descriptor copy and per `publish()`, held for the whole contract by `NativeProgramContractBinding`. Those child leases keep the registry root charged after the custody reports `released`. Earlier return attempt cleared the other package's (empty) list. No change made.
+### E2433 — Core refusal is genuine saturation
+
+The fixture's registry-derived leases back `package_digest` values embedded in the frozen plan and reachable for the whole Run, so holding them is correct and closing early would under-count. The 144 MiB refusal is real saturation by live owners; E2428/E2430 are superseded.

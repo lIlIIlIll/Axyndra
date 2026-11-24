@@ -12732,3 +12732,18 @@ This is why the earlier attempt to return loans from `product_thread_runtime_con
 The surviving charge is therefore fixture retention of the same kind the code comment already documents ("Original configuration/public fixture text has no retirement protocol, so those independent loans remain paid"), applied to text derived from registry copies. Returning it requires the fixture to drop every `FixtureRegistryText` value and every published string before closing those leases; a refund while a binding field or a published occurrence is still reachable would under-count the peak the contract asserts. No such change has been made, and the continuous Core contract still fails.
 
 Evidence: source reading of `fixture.cj:382-430` and `main.cj:4900-4990`; the lease counts are from the single run recorded in E2431 (`core-ledger.log`).
+### E2433: the fixture registry leases are contractual, not a fixable leak
+
+E2432 identified where the file-plan registry's surviving leases come from. Checking what their values are used for closes the question of whether returning them is legitimate.
+
+`FixtureRegistryText.publish()` derives one lease and returns the text, which `NativeProgramContractBinding.configure` places directly into the frozen program plan as `package_digest` for the workspace and program entries (`fixture.cj:96` and `:104`). Those plan values stay reachable for the whole Run, so the copies are genuinely live for as long as the contract asserts them. Closing those leases before the run finished would under-count exactly the peak the shared-bank contract is meant to protect.
+
+Three conclusions follow, and the earlier readings are corrected:
+
+- The 16 MiB file-plan root charge is not stale bookkeeping left over from a closed registry; it is the root reservation that these child leases keep alive, which is why `released` and a live 16 MiB charge coexist.
+- The fixture's `supportRegistryCopies96` list is a deliberate retention of copies whose text survives into the plan, matching the documented rule that fixture/public text has no retirement protocol.
+- Therefore the continuous Core refusal is genuine saturation of the 144 MiB bank by legitimate live owners, not a leak that a return path can close.
+
+A further reason not to drain that list: both `NativeProgramContractBinding` instances in the contract (`main.cj:2286` for the primary Run and `:4822` for the failure Product) append to the same package-global `supportRegistryCopies96`, so a blanket refund at the end of the file-plan segment would release fixture DATA that the primary binding still reaches.
+
+E2427's arithmetic stands; E2428 and E2430 are superseded by E2431 and this entry. What remains open is the product-level question the contract is actually testing — the read-view child needs its 16 MiB floor while a checkpoint slot and two registry allocations are live — and that is a capacity or sequencing decision, not a missing refund.
