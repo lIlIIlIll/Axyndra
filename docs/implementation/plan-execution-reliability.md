@@ -12782,6 +12782,8 @@ Consequently the "genuine saturation, not a leak" conclusion in E2433 also stays
 E2431's arithmetic (charged 140,676,576 of 150,994,944, short 6,458,816) and the per-origin split are unaffected.
 ### E2437: the Program row exists, but its stored result carries no attachment fields
 
+**Superseded by E2439.** The stored ToolResult does contain `program_sdk`, `program_artifact` and `program_sha256`; the projection is blank because the Receipt failed, not because the fields are absent.
+
 Printing the failing Run's own inspection rows on the final source removed the remaining ambiguity:
 
 ```
@@ -12814,4 +12816,26 @@ That single fact explains the empty projection without any inspection defect. `c
 
 The corrected chain is: the shared bank refuses the read-view child, so the Program run's Receipt settles as `failed`, so its attachment evidence is not offered to inspection, so the SDK and artifact fields stay empty. Attachment staging itself worked.
 
-This also confirms the child refusal actually occurs in this exact run, which the earlier note could not show. No production accounting, quota, inspection projection, or test assertion was changed; the aggregate Core contract still fails.
+The Receipt failure itself is decoded in E2439; which sub-call failed is not named by the payload, so attributing it to the read-view capacity refusal remains an inference. No production accounting, quota, inspection projection, or test assertion was changed; the aggregate Core contract still fails.
+### E2439: the stored result does carry the Program SDK fields; it is an error result
+
+Reading the exact reserved ToolResult payload for the committed Program operation (decoded from `items.payload`) settles what the projection cannot:
+
+```
+status=s7:partial
+error_code=s27:tool_program.subcall_failed
+error_message=s31:sub-operation returned an error
+program_artifact=s76:blob:sha256:6182f8b1…
+program_sha256=s64:6182f8b1…
+program_sdk=s38:program-language-v1/native-readonly-v1
+output_truncated=f
+is_error=t
+```
+
+So the stored result **does** contain `program_sdk`, `program_artifact` and `program_sha256`; the earlier E2437 reading ("no attachment staged", "the plugin emitted no fields") is wrong on both counts, and E2438's "attachment was staged" part is confirmed — this row's own `attach=1` was for the Program operation.
+
+What actually hides those fields from inspection is the error status. `inspectAttachedProgramEvidence` requires `ThreadItemContent.ToolResult(_, _, _, result, isError)` and then compares `program_sdk`, `program_artifact` and `program_sha256`; the value is present, but the operation settled `outcome=failed`, and `completedToolInputAttachmentEvidence` requires `receipt.outcome='completed'`, so the attachment-evidence path is skipped and the qualified tool name fails the `run_program` fallback.
+
+The substantive failure is `tool_program.subcall_failed`, i.e. a Program sub-call returned an error. The read-view receipts recorded elsewhere in this contract report `read_view.output_capacity`, and `host.process.readview` and `plugin.axyndra:workspace.grep` are the two failed child rows in the same Run, but this payload does not name which sub-call failed. Attributing the Receipt failure to the read-view capacity refusal therefore stays an inference, not decoded evidence.
+
+No production accounting, quota, inspection projection, or test assertion was changed. The aggregate Core contract still fails.

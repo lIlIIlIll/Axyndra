@@ -5468,3 +5468,6 @@ The failing Run persists `plugin.axyndra:program.run` with a full arguments dige
 ### E2438 — Correction: Program attachment staged, Receipt failed
 
 The failing Run's own rows show the Program operation `committed` with a `tool_input_attached` audit event and `outcome=failed`. `completedToolInputAttachmentEvidence` requires a completed Receipt, so it returns `None` and the fallback ignores the qualified tool name. The child read-view refusal is confirmed in this run; staging worked.
+### E2439 — Stored Program result has the SDK fields; it is an error result
+
+Decoding the exact reserved ToolResult shows `program_sdk`, `program_artifact` and `program_sha256` present with `status=partial`, `error_code=tool_program.subcall_failed` and `is_error=t`. E2437 is refuted; the missing projection comes from the failed Receipt, not from absent fields. Which sub-call failed is not named by this payload, so the read-view attribution stays an inference.
