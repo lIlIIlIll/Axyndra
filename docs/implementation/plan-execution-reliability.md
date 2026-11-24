@@ -12771,3 +12771,12 @@ The continuous `--core-and-recovery-contract` still fails at run inspection, but
 The three Direct Native cases initially exited 1 with `NoneValueException` at `NativeReadonlyShellContractBinding::init`. That was a missing `AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE` input, not a behaviour failure; the rerun with the packaged `shell_readonly` plugin present passed without any source change. The installed `shell_readonly` package supplies the binding, and the Direct Native capacity traces still show the expected `0:0 → 1:16777216 → 1:16777216 → 0:0` shape.
 
 This is real gate credit for the five named sub-contracts only. It is not a Core pass: the aggregate contract still fails at `Run inspection explains Program SDK…`, and no Product/RPC/app-wide or release acceptance follows from it. Evidence: `evidence/core-subgates/qualification.json` binds each log's SHA-256, exit status and pass line to the head and ELF above.
+### E2436: correction — the root slot does close, so E2434's mechanism was wrong
+
+E2434 reasoned that the physical 16 MiB is `leases[0]` and therefore never returns. That contradicts the code. `PluginRegistryMetadataCustody.finishLocked` sets `released` **and** calls `allocation.close()` as soon as `rootClosed` and `costs` empties. `LogicalJsonOwnerReservation.close` then closes lease 0 through `LogicalJsonSharedCustody.close`, which releases the physical charge when the lease map becomes empty. So a `released=true` custody with live bytes means surviving *descendants*, not an unclosable root slot.
+
+The 5/5 scoped-return measurement in E2434 only sampled the global bank count and charge, which cannot reveal how many descendants of that specific registry allocation remain. It showed those five loans were not enough to empty the map, and nothing more.
+
+Consequently the "genuine saturation, not a leak" conclusion in E2433 also stays provisional: identifying which descendants keep that allocation alive is still open work, and no evidence yet distinguishes a legitimate long-lived consumer from an unreturned one.
+
+E2431's arithmetic (charged 140,676,576 of 150,994,944, short 6,458,816) and the per-origin split are unaffected.

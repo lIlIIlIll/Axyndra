@@ -5459,3 +5459,6 @@ Measured: the failing scope held 5 derived loans; closing all 5 left the bank at
 ### E2435 — Five Core sub-gates pass on final source
 
 Clean rebuild of `abd3d88665`, ELF `e9c53861…`: `--direct-native-positive`, `--direct-native-failed-child`, `--direct-native-broker-configuration`, `--program-budget` and `--program-cancellation-recovery` each exited 0 with their own pass line. The three Direct Native cases first failed on a missing `AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE` fixture input, not behaviour. The aggregate `--core-and-recovery-contract` still fails; no Product or release credit.
+### E2436 — Correction: registry root does close
+
+`finishLocked` closes the allocation when `costs` empties, so a released custody with live bytes means surviving descendants, not an unclosable root slot. E2434's 5/5 measurement only sampled the global bank, so the saturation conclusion stays provisional.
