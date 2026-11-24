@@ -85,27 +85,34 @@ class RpcHostToolBridge {
         prepared: PreparedToolInvocation,
         definition: RpcHostToolDefinition
     ): Result<ToolResult> {
-        let call = ToolCall(
-            prepared.call.callId,
-            prepared.call.name,
-            prepared.operationPlan.canonicalArguments
-        )
+        // Copy the frozen identity and arguments under an independent payment.
+        // Neither the display ToolCall nor the normalized plan leaves the
+        // prepared invocation; the payment closes once the frame is emitted.
+        let paid = reserveProductControlMetadata113(4096)
         let requestId = nextId()
-        let item = PendingHostToolCall(
-            requestId,
-            context.runId,
-            call.callId,
-            definition.name
-        )
-        lock.lock()
-        try { pending.add(item) } finally { lock.unlock() }
-        output(encodeAgentValue(objectValue([
-            ValueField("type", textValue("host_tool_call")),
-            ValueField("id", textValue(requestId)),
-            ValueField("toolCallId", textValue(call.callId)),
-            ValueField("toolName", textValue(definition.name)),
-            ValueField("arguments", call.arguments)
-        ])))
+        var callIdText = ""
+        try {
+            callIdText = prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })
+            let argumentsText = prepared.copyCanonicalArgumentsText(paid)
+            let arguments = try { parseUnifiedJson(argumentsText, maxBytes: 4194304) }
+                catch (_: Exception) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Protocol,
+                        "rpc.host_tool_arguments_invalid",
+                        "host tool arguments are not a bounded canonical document"
+                    ))
+                }
+            lock.lock()
+            try { pending.add(PendingHostToolCall(requestId, context.runId, callIdText, definition.name)) }
+            finally { lock.unlock() }
+            output(encodeAgentValue(objectValue([
+                ValueField("type", textValue("host_tool_call")),
+                ValueField("id", textValue(requestId)),
+                ValueField("toolCallId", textValue(callIdText)),
+                ValueField("toolName", textValue(definition.name)),
+                ValueField("arguments", arguments)
+            ])))
+        } finally { paid.close() }
         for (_ in 0..12000) {
             match (completion(requestId)) {
                 case Some(done) =>
@@ -117,7 +124,7 @@ class RpcHostToolBridge {
                         ))
                     }
                     return Result.Ok(ToolResult(
-                        call.callId,
+                        callIdText,
                         done.result,
                         isError: done.isError
                     ))

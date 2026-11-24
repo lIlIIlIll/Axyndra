@@ -317,6 +317,29 @@ public class PreparedToolInvocation {
                 }
         }
     }
+    // The caller funds an independent copy before this call. Only the encoded
+    // canonical arguments cross back, so no plan or call graph escapes. The
+    // returned String owns its own bytes.
+    public func copyCanonicalArgumentsText(payment: LogicalJsonOwnerReservation): String {
+        match (detachedMetadata204) {
+            case Some(owner) =>
+                owner.beginScopedRead204(this)
+                try { copyCanonicalArgumentsFrame(payment) } finally { owner.consumerReturned204() }
+            case None =>
+                requireMetadataBorrow204()
+                match (catalogConsumer204) {
+                    case Some(owner) =>
+                        let frame = owner.beginFrame204()
+                        try { copyCanonicalArgumentsFrame(payment) } finally { frame.returnedWholeAction204() }
+                    case None => copyCanonicalArgumentsFrame(payment)
+                }
+        }
+    }
+    private func copyCanonicalArgumentsFrame(payment: LogicalJsonOwnerReservation): String {
+        let encoded = encodeStoredValue204(operationPlanData204.getOrThrow().canonicalArguments)
+        payment.ensureRetainedPeak(1024 + encoded.size * 8)
+        copyTextData204(encoded)
+    }
     private func copyApprovalArgumentHashFrame(): String {
         match (approvalData204) {
             case Some(approval) => copyTextData204(approval.argumentHash)
