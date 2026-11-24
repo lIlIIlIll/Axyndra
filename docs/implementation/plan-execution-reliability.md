@@ -12756,3 +12756,18 @@ That invariance is the point: those loans are *derived* leases (`deriveCopiedDat
 So the 16 MiB attributed to the file-plan registry in E2431 is the root reservation, not the fixture's child leases. Returning every fixture loan is correct hygiene but cannot make that 16 MiB available. E2433's conclusion stands: the refusal is saturation by live owners, and the fixture loans are neither the cause nor a usable source of headroom.
 
 The remaining structural question is sequence, not refund: a Product's registry root plus a checkpoint slot plus a Native document reservation coexist while a read-view child wants its own 16 MiB floor. Whether the contract's ordering can legitimately avoid that overlap is a design question that this session has not answered, and no production or test behaviour was changed.
+### E2435: five independent Core sub-contracts pass on the final source
+
+The continuous `--core-and-recovery-contract` still fails at run inspection, but its independent sub-gates run in their own processes and do not depend on that capacity overlap. On the clean rebuild of published head `abd3d88665`, ELF `e9c53861a94704b3724085e205d3b858d6ed3c0c79b17056e1f14249b0a2c021` (byte-identical to the earlier final-source build), each of these exited 0 with its own pass line:
+
+| Sub-contract | Pass line |
+|---|---|
+| `--direct-native-positive-contract` | `actual Direct Native positive contract passed` |
+| `--direct-native-failed-child-contract` | `actual Direct Native failed-child contract passed` |
+| `--direct-native-broker-configuration-contract` | `actual direct-native broker configuration contract passed` |
+| `--program-budget-contract` | `Native Program budget, durable refusal and both request DATA returns passed` |
+| `--program-cancellation-recovery-contract` | `independent Program cancellation/recovery contract passed` |
+
+The three Direct Native cases initially exited 1 with `NoneValueException` at `NativeReadonlyShellContractBinding::init`. That was a missing `AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE` input, not a behaviour failure; the rerun with the packaged `shell_readonly` plugin present passed without any source change. The installed `shell_readonly` package supplies the binding, and the Direct Native capacity traces still show the expected `0:0 → 1:16777216 → 1:16777216 → 0:0` shape.
+
+This is real gate credit for the five named sub-contracts only. It is not a Core pass: the aggregate contract still fails at `Run inspection explains Program SDK…`, and no Product/RPC/app-wide or release acceptance follows from it. Evidence: `evidence/core-subgates/qualification.json` binds each log's SHA-256, exit status and pass line to the head and ELF above.

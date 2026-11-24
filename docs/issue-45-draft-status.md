@@ -5456,3 +5456,6 @@ The fixture's registry-derived leases back `package_digest` values embedded in t
 ### E2434 — Fixture lease return cannot free the registry root
 
 Measured: the failing scope held 5 derived loans; closing all 5 left the bank at 31/56,700,280 unchanged. Derived leases only reduce the custody sum; the physical 16 MiB is `leases[0]`, which closes with the root only. Refusal remains genuine saturation.
+### E2435 — Five Core sub-gates pass on final source
+
+Clean rebuild of `abd3d88665`, ELF `e9c53861…`: `--direct-native-positive`, `--direct-native-failed-child`, `--direct-native-broker-configuration`, `--program-budget` and `--program-cancellation-recovery` each exited 0 with their own pass line. The three Direct Native cases first failed on a missing `AXYNDRA_SHELL_READONLY_PLUGIN_PACKAGE` fixture input, not behaviour. The aggregate `--core-and-recovery-contract` still fails; no Product or release credit.
