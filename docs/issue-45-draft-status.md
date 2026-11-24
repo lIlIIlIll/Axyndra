@@ -5447,3 +5447,6 @@ A custody-transition trace shows the second Product's registry reaching `release
 ### E2431 — Correction: second Core registry root is not released
 
 Same-run evidence contradicts E2430: the file-plan registry reports `released=true live=0` yet keeps 58 allocation leases and its full 16,777,216-byte charge. `finishLocked` only checks its own `costs` map, so inventory-derived leases keep the reservation charged. Fixture retention (E2428) is likewise refuted.
+### E2432 — Surviving registry leases are native-fixture retention
+
+`program_native_contract/fixture.cj` keeps its own `supportRegistryCopies96` list and never closes it; `FixtureRegistryText` derives a lease per descriptor copy and per `publish()`, held for the whole contract by `NativeProgramContractBinding`. Those child leases keep the registry root charged after the custody reports `released`. Earlier return attempt cleared the other package's (empty) list. No change made.

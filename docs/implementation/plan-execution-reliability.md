@@ -12718,3 +12718,17 @@ At that same refusal the bank still billed that root 16,777,216 bytes. So the ea
 This refutes the fixture-retention reading of E2428 as well: the surviving charge belongs to registry-derived allocation leases, not to the contract's `SupportRegistryCopyDebt96` list, which measured empty on this path (E2429).
 
 Whether those 58 leases are legitimately live consumers or a leaked chain is still unproven; identifying their producer is the next step. Nothing was changed in production accounting, quota, or the test.
+### E2432: the surviving registry leases come from the native contract fixture
+
+Static tracing now names the producer of the 58 live allocation leases behind the file-plan registry root. `support_tests/program_native_contract/src/fixture.cj` declares its own `supportRegistryCopies96` list, separate from the same-named list in `product_thread_runtime_contract`. It is appended by `supportRegistryRetain96` from two places only:
+
+- `FixtureRegistryText.init`, which calls `source.deriveCopiedDataPayment(...)` on a real `ProductPluginRecord` descriptor copy;
+- `FixtureRegistryText.publish`, which derives another lease per published occurrence.
+
+Nothing in that package ever walks `supportRegistryCopies96.payments` or sets it back to `None`; there is no close or clear path at all. `NativeProgramContractBinding` holds three such `FixtureRegistryText` values for the whole contract (`workspaceDigest`, `programDigest`, `programVersion`), and each `publish()` adds a further lease. Each derived lease is a child of the registry allocation, so `PluginRegistryMetadataCustody.finishLocked` sees its own `costs` map empty and marks the custody `released`, while the underlying 16 MiB reservation stays charged.
+
+This is why the earlier attempt to return loans from `product_thread_runtime_contract` measured `before == after`: it cleared the other package's list, which was empty on that path.
+
+The surviving charge is therefore fixture retention of the same kind the code comment already documents ("Original configuration/public fixture text has no retirement protocol, so those independent loans remain paid"), applied to text derived from registry copies. Returning it requires the fixture to drop every `FixtureRegistryText` value and every published string before closing those leases; a refund while a binding field or a published occurrence is still reachable would under-count the peak the contract asserts. No such change has been made, and the continuous Core contract still fails.
+
+Evidence: source reading of `fixture.cj:382-430` and `main.cj:4900-4990`; the lease counts are from the single run recorded in E2431 (`core-ledger.log`).
