@@ -5453,3 +5453,6 @@ Same-run evidence contradicts E2430: the file-plan registry reports `released=tr
 ### E2433 — Core refusal is genuine saturation
 
 The fixture's registry-derived leases back `package_digest` values embedded in the frozen plan and reachable for the whole Run, so holding them is correct and closing early would under-count. The 144 MiB refusal is real saturation by live owners; E2428/E2430 are superseded.
+### E2434 — Fixture lease return cannot free the registry root
+
+Measured: the failing scope held 5 derived loans; closing all 5 left the bank at 31/56,700,280 unchanged. Derived leases only reduce the custody sum; the physical 16 MiB is `leases[0]`, which closes with the root only. Refusal remains genuine saturation.

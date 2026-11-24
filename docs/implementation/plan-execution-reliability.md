@@ -12747,3 +12747,12 @@ Three conclusions follow, and the earlier readings are corrected:
 A further reason not to drain that list: both `NativeProgramContractBinding` instances in the contract (`main.cj:2286` for the primary Run and `:4822` for the failure Product) append to the same package-global `supportRegistryCopies96`, so a blanket refund at the end of the file-plan segment would release fixture DATA that the primary binding still reaches.
 
 E2427's arithmetic stands; E2428 and E2430 are superseded by E2431 and this entry. What remains open is the product-level question the contract is actually testing — the read-view child needs its 16 MiB floor while a checkpoint slot and two registry allocations are live — and that is a capacity or sequencing decision, not a missing refund.
+### E2434: returning the fixture leases cannot free the file-plan registry root
+
+Scoping the native fixture's loans per binding and returning them after the failing Product closed was measured directly (temporary build, reverted before this record). At that point the failing scope held 5 loans; `supportRegistryReturnScope96` closed all 5, and the shared bank still read `count/charged` = 31/56,700,280 before and after.
+
+That invariance is the point: those loans are *derived* leases (`deriveCopiedDataPayment` → `LogicalJsonSharedCustody.derive`). Closing a child lease subtracts only from the custody's own `sum`; `LogicalJsonSharedCustody.close` releases the physical charge only when `leases` is empty, and `leases[0]` — the root's own slot created in its constructor — never closes until the registry root reservation itself closes.
+
+So the 16 MiB attributed to the file-plan registry in E2431 is the root reservation, not the fixture's child leases. Returning every fixture loan is correct hygiene but cannot make that 16 MiB available. E2433's conclusion stands: the refusal is saturation by live owners, and the fixture loans are neither the cause nor a usable source of headroom.
+
+The remaining structural question is sequence, not refund: a Product's registry root plus a checkpoint slot plus a Native document reservation coexist while a read-view child wants its own 16 MiB floor. Whether the contract's ordering can legitimately avoid that overlap is a design question that this session has not answered, and no production or test behaviour was changed.
