@@ -93,25 +93,28 @@ class RpcHostToolBridge {
         var callIdText = ""
         try {
             callIdText = prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })
-            let argumentsText = prepared.copyCanonicalArgumentsText(paid)
-            let arguments = try { parseUnifiedJson(argumentsText, maxBytes: 4194304) }
-                catch (_: Exception) {
-                    return Result.Err(AgentError(
-                        AgentErrorKind.Protocol,
-                        "rpc.host_tool_arguments_invalid",
-                        "host tool arguments are not a bounded canonical document"
-                    ))
-                }
-            lock.lock()
-            try { pending.add(PendingHostToolCall(requestId, context.runId, callIdText, definition.name)) }
-            finally { lock.unlock() }
-            output(encodeAgentValue(objectValue([
-                ValueField("type", textValue("host_tool_call")),
-                ValueField("id", textValue(requestId)),
-                ValueField("toolCallId", textValue(callIdText)),
-                ValueField("toolName", textValue(definition.name)),
-                ValueField("arguments", arguments)
-            ])))
+            let invalid = prepared.withCanonicalArgumentsText(paid, { argumentsText =>
+                let arguments = try { parseUnifiedJson(argumentsText, maxBytes: 4194304) }
+                    catch (_: Exception) { return true }
+                lock.lock()
+                try { pending.add(PendingHostToolCall(requestId, context.runId, callIdText, definition.name)) }
+                finally { lock.unlock() }
+                output(encodeAgentValue(objectValue([
+                    ValueField("type", textValue("host_tool_call")),
+                    ValueField("id", textValue(requestId)),
+                    ValueField("toolCallId", textValue(callIdText)),
+                    ValueField("toolName", textValue(definition.name)),
+                    ValueField("arguments", arguments)
+                ])))
+                false
+            })
+            if (invalid) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Protocol,
+                    "rpc.host_tool_arguments_invalid",
+                    "host tool arguments are not a bounded canonical document"
+                ))
+            }
         } finally { paid.close() }
         for (_ in 0..12000) {
             match (completion(requestId)) {

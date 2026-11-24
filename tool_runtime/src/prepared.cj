@@ -317,28 +317,37 @@ public class PreparedToolInvocation {
                 }
         }
     }
-    // The caller funds an independent copy before this call. Only the encoded
-    // canonical arguments cross back, so no plan or call graph escapes. The
-    // returned String owns its own bytes.
-    public func copyCanonicalArgumentsText(payment: LogicalJsonOwnerReservation): String {
+    // The caller funds the copy and consumes it inside this callback. Only the
+    // JSON wire text crosses the boundary; neither the plan nor its call graph
+    // escapes, and the payment is still live for the whole use.
+    public func withCanonicalArgumentsText<T>(payment: LogicalJsonOwnerReservation,
+        body: (String) -> T): T {
         match (detachedMetadata204) {
             case Some(owner) =>
                 owner.beginScopedRead204(this)
-                try { copyCanonicalArgumentsFrame(payment) } finally { owner.consumerReturned204() }
+                try { copyCanonicalArgumentsFrame(payment, body) } finally { owner.consumerReturned204() }
             case None =>
                 requireMetadataBorrow204()
                 match (catalogConsumer204) {
                     case Some(owner) =>
                         let frame = owner.beginFrame204()
-                        try { copyCanonicalArgumentsFrame(payment) } finally { frame.returnedWholeAction204() }
-                    case None => copyCanonicalArgumentsFrame(payment)
+                        try { copyCanonicalArgumentsFrame(payment, body) } finally { frame.returnedWholeAction204() }
+                    case None => copyCanonicalArgumentsFrame(payment, body)
                 }
         }
     }
-    private func copyCanonicalArgumentsFrame(payment: LogicalJsonOwnerReservation): String {
-        let encoded = encodeStoredValue204(operationPlanData204.getOrThrow().canonicalArguments)
-        payment.ensureRetainedPeak(1024 + encoded.size * 8)
-        copyTextData204(encoded)
+    private func copyCanonicalArgumentsFrame<T>(payment: LogicalJsonOwnerReservation,
+        body: (String) -> T): T {
+        let arguments = operationPlanData204.getOrThrow().canonicalArguments
+        // Measure the JSON wire form without allocating it, pay the complete
+        // retained peak, and only then materialize the independent copy.
+        let counted = CanonicalArgumentsSink204(0)
+        arguments.writeJson(counted)
+        // The measured length is now a fixed bound: pay before allocating.
+        payment.ensureRetainedPeak(1024 + counted.size * 16)
+        let exact = CanonicalArgumentsSink204(counted.size)
+        arguments.writeJson(exact)
+        body(copyTextData204(String.fromUtf8(exact.bytes.toArray())))
     }
     private func copyApprovalArgumentHashFrame(): String {
         match (approvalData204) {

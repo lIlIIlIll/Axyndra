@@ -5,6 +5,7 @@ import agent_runtime.*
 import yjson.*
 import yjson_support.*
 import std.collection.*
+import std.io.*
 import std.sync.*
 
 private let preparedMetadataDebts204 = PreparedMetadataDebts204()
@@ -227,6 +228,22 @@ public class PreparedMetadataConsumer204 {
     }
 }
 
+// Exact JSON wire length. A zero-sized destination measures only; otherwise
+// the write must fit the caller's exact buffer.
+class CanonicalArgumentsSink204 <: OutputStream {
+    private let capacity: Int64
+    var size: Int64 = 0
+    let bytes = ArrayList<Byte>()
+    init(capacity: Int64) { this.capacity = capacity }
+    public func write(part: Array<Byte>): Unit {
+        if (capacity > 0) {
+            if (part.size > capacity - size) { throw IllegalStateException("canonical arguments exceed their measured bound") }
+            bytes.add(all: part)
+        }
+        size += part.size
+    }
+    public func flush(): Unit {}
+}
 func copyTextData204(value: String): String { String.fromUtf8(value.toArray()) }
 func copyTextsData204(values: Array<String>): Array<String> { values.map { value => copyTextData204(value) } }
 func copyJsonData204(value: AgentValue): AgentValue {

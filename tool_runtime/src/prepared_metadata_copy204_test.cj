@@ -322,6 +322,29 @@ class PreparedMetadataCopy204Tests {
     }
 
     @TestCase
+    func canonicalArgumentsCopyIsJsonAndPaysBeforeItAllocates(): Unit {
+        let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
+        let context = ToolInvocationContext(RunId("canonical-run"), SessionId("session"), CapabilitySet())
+        let arguments = objectValue([ValueField("path", textValue("src/雪.cj")), ValueField("count", integerValue(7))])
+        let expected = stringifyUnifiedJson(arguments)
+        let prepared = metadataFixture204(context, arguments)
+        let owner = installMetadataFixtureFrame204(root, MetadataCopyConsumer204(root), prepared)
+        // The root already prepaid 131072, which covers this invoice; the
+        // contract is coverage of the peaked copy, not a forced increase. The
+        // text is used only while the payment is live.
+        let coverage = root.retainedCustodyUsage113()
+        let observed = prepared.withCanonicalArgumentsText(root, { text =>
+            @Expect(text, expected)
+            @Expect(parseUnifiedJson(text, maxBytes: 4096).field("path").getOrThrow().text, "src/雪.cj")
+            text
+        })
+        @Expect(observed, expected)
+        @Expect(coverage[1] >= 1024 + expected.size * 16)
+        owner.producerReturned204(); root.close()
+        @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)
+    }
+
+    @TestCase
     func saturatedMetadataCanAnswerClosedQueriesButStillRefusesAnotherExternalReader(): Unit {
         let bank = LogicalJsonOwnerBudget(maximumCharged: 16777216); let root = bank.acquire(131072)
         let context = ToolInvocationContext(RunId("read-run"), SessionId("read-session"), CapabilitySet())
