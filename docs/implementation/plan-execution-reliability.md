@@ -12656,3 +12656,21 @@ Every charged owner is live at that instant: nothing was observed to have return
 Each `PluginRegistry` instance holds one root custody reservation, and `PluginRegistry.close` releases it only through `metadataCustody.close` after every payment is closed. Two roots are therefore two live registries, not a duplicate allocation inside one. The continuous contract opens a single Product registry for this scenario, so the pairing needs a separate lifecycle check before it is called a defect.
 
 Evidence: `evidence/core-final/qualification.json` (per-callsite table, diagnostic and final ELF hashes, exit status). No production accounting, quota, floor, or owner lifetime was changed.
+### E2428: the second registry root is test-fixture retention, not a production leak
+
+Tagging each registry root with its own `settingsRoot` (temporary diagnostic build, reverted before this record) identified both surviving roots at the same refusal on final source `aeddce7217`:
+
+| Origin | Slots | Billed |
+|---|---:|---:|
+| registry root, `…/settings` | 1 | 39,685,632 |
+| registry root, `…/file-plan-artifact-failure-settings` | 1 | 16,777,216 |
+| checkpoint slot | 1 | 16,777,216 |
+| Native document | 1 | 67,108,864 |
+
+Charged 140,676,608 of 150,994,944.
+
+The second root sits exactly on the 16 MiB per-reservation floor, so its own registry metadata has already been released; only derived leases keep the floor alive. Those leases come from the contract's own `SupportRegistryCopyDebt96` chain: `supportRegistryRetain96` pushes every copied-text loan onto a process-global list, and no function in the file closes or clears that list. `runProductPlanArtifactStoreFailureContract` does close its Product in a `finally`, so the residual charge is retained test-fixture debt, not an unclosed production registry.
+
+Two consequences follow. The read-view refusal is caused by the fixture keeping copies paid after their readers returned, so the contract cannot pass while that retention is unconditional. Returning those copies is a fixture change, not a quota change, and it must drop every strong reference before closing each loan; a refund while a `SupportRegistryRecordData96` row or its parsed graph is still reachable would under-count the peak the contract intends to assert.
+
+Evidence: `evidence/core-final/qualification.json` (per-root table). No production accounting, quota, floor, owner lifetime, or test assertion was changed in this recording.

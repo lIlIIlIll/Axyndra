@@ -5435,3 +5435,6 @@ On final source `aeddce7217` (Core ELF `e9c53861…`), the read-view child is re
 ### E2427 — Core refusal is real saturation
 
 Per-origin tagging shows the 128 KiB read-view child refused against live owners only: 2 registry roots (56,462,784), 1 checkpoint slot (16,777,216), 1 Native document at its ceiling (67,108,864), short 6,458,816. No late refund was observed, so raising the quota or releasing an owner early is unsupported.
+### E2428 — Second Core registry root is fixture retention
+
+Per-root tagging: `…/settings` bills 39,685,632 and `…/file-plan-artifact-failure-settings` bills exactly the 16 MiB floor, meaning that registry released its metadata and only derived leases remain. Those leases are the contract's own `SupportRegistryCopyDebt96` list, which is never closed. The Core refusal is therefore fixture retention; returning it is a fixture fix, not a quota change.
