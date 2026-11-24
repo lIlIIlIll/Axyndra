@@ -12749,9 +12749,9 @@ A further reason not to drain that list: both `NativeProgramContractBinding` ins
 E2427's arithmetic stands; E2428 and E2430 are superseded by E2431 and this entry. What remains open is the product-level question the contract is actually testing — the read-view child needs its 16 MiB floor while a checkpoint slot and two registry allocations are live — and that is a capacity or sequencing decision, not a missing refund.
 ### E2434: returning the fixture leases cannot free the file-plan registry root
 
-Scoping the native fixture's loans per binding and returning them after the failing Product closed was measured directly (temporary build, reverted before this record). At that point the failing scope held 5 loans; `supportRegistryReturnScope96` closed all 5, and the shared bank still read `count/charged` = 31/56,700,280 before and after.
+Scoping the native fixture's loans per binding and returning them after the failing Product closed was measured directly (temporary build, reverted). The failing scope held 5 loans; `supportRegistryReturnScope96` closed all 5, and the shared bank still read `count/charged` = 31/56,700,280 before and after.
 
-That invariance is the point: those loans are *derived* leases (`deriveCopiedDataPayment` → `LogicalJsonSharedCustody.derive`). Closing a child lease subtracts only from the custody's own `sum`; `LogicalJsonSharedCustody.close` releases the physical charge only when `leases` is empty, and `leases[0]` — the root's own slot created in its constructor — never closes until the registry root reservation itself closes.
+Those loans are *derived* leases (`deriveCopiedDataPayment` → `LogicalJsonSharedCustody.derive`). Closing a child lease subtracts only from the custody's own `sum`; `LogicalJsonSharedCustody.close` releases the physical charge only when `leases` is empty, and `leases[0]` — the root's own slot created in its constructor — never closes until the registry root reservation itself closes.
 
 **Correction (E2436).** `finishLocked` does call `allocation.close()` once `costs` empties, and that close does release the physical charge when the custody's lease map becomes empty. A `released` custody that still bills bytes therefore has surviving descendant leases, not an unclosable root slot. Returning the fixture's five loans only reduced that custody's `sum`; it did not empty the map. So the 16 MiB is held by descendants of the registry allocation, and identifying them is still open. The saturation reading in E2433 stays provisional.
 
@@ -12791,10 +12791,10 @@ tool=plugin.axyndra:program.run         sdk= artifact= argsDigest=674ea946…
 count=3
 ```
 
-So the Program operation *is* persisted with a complete arguments digest, and the `RunState.Completed` assertion that precedes it is satisfied. What is absent is only the Program SDK and artifact projection.
+The Program operation is therefore persisted with a complete arguments digest, and the preceding `RunState.Completed` assertion is satisfied. Only the SDK and artifact projection are absent.
 
 The plugin explains why. `programWithInputAttachment` appends `program_sdk`, `program_artifact` and `program_sha256` only when `programInputAttachment` returned `Some`, and that requires the invocation to carry an `input_attachment` field with a matching frozen profile and artifact. When no attachment was staged the plugin emits its normal result with none of those fields. `inspectAttachedProgramEvidence` therefore finds nothing, and the fallback `inspectProgramEvidence` only reports `tool-program-sdk-v1/worker-protocol-v1` for a tool literally named `run_program`, which this contribution is not.
 
-The chain is thus: the shared bank is saturated, so the Program input attachment is not staged, so the Program runs without attachment evidence, so the inspection projection is empty. That is consistent with the earlier `input_attachment.capacity` refusals recorded for this contract, and it is a consequence of the same saturation, not an inspection defect.
+The chain is: the shared bank is saturated, so the Program input attachment is not staged, so the Program runs without attachment evidence, so the projection is empty. That matches the earlier `input_attachment.capacity` refusals recorded for this contract: both are consequences of the same saturation, not an inspection defect.
 
-This remains a diagnostic conclusion: no production accounting, quota, floor, inspection projection, or test assertion was changed, and the aggregate Core contract still fails. Evidence: the run's rows in `core-inspect.log`.
+This is a diagnostic conclusion only. No production accounting, quota, floor, inspection projection, or test assertion changed, and the aggregate Core contract still fails. Evidence: the run's rows in `core-inspect.log`.
