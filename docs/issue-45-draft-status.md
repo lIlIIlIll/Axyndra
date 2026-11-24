@@ -5421,10 +5421,13 @@ E2422 — RPC host-tool collision checking is now a thread-scoped membership que
 
 [Full FixtureModelPort (11/11) and the public continuous Prompt evidence](implementation/plan-execution-reliability.md#e2423-observe-the-real-model-prompt-without-exporting-the-request): explicit Skill activation now reaches the model; the declared lazy reference completed and the inactive reference was rejected. The later `$late` Run failed before its first model attempt with `extension.payload_capacity`. No full Prompt, Product or release pass; GC stays deferred.
 
+
 ### E2424 — Exact Prompt bank growth; separate continuous Core refusal
 
 [Prompt growth and Core export evidence](implementation/plan-execution-reliability.md#e2424-separate-prompt-high-water-growth-from-core-export-observations) identifies Lane-copy prepayment as a large contributor to the shared high-water mark. It does not prove an outstanding DATA reference has returned. The continuous Prompt and Core cases both still failed under the original capacity.
-
 ### E2425 — Registry GC fault and capacity refusals remain separate
 
 The deferred `RegistrySessionCliRetirement161Tests` SIGSEGV keeps its historical `.08` ASan boundary; no `.09` sanitizer result exists. The Prompt and Core capacity refusals recorded in E2424 are independent actual-admission evidence and are not credited as a GC fix.
+### E2426 — Exact Core read-view refusal arithmetic
+
+On final source `aeddce7217` (Core ELF `e9c53861…`), the read-view child is refused 128 KiB against a bank charged 140,676,488 of 150,994,944, short 6,458,760. At refusal: 3 `NativeControlMetadata` slots billing 73,239,944, one `NativeDocument` slot billing 67,108,864, and about 327,680 bytes of fixed buffers. Live high-water charges only; no leak is established. Continuous Core still fails.
