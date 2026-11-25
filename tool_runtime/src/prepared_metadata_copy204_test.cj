@@ -333,12 +333,12 @@ class PreparedMetadataCopy204Tests {
         // contract is coverage of the peaked copy, not a forced increase. The
         // text is used only while the payment is live.
         let coverage = root.retainedCustodyUsage113()
-        let observed = prepared.withCanonicalArgumentsText(root, { text =>
+        // The callback returns no DATA: the text must not outlive the payment.
+        let parsedPath = prepared.withCanonicalArgumentsText(root, { text =>
             @Expect(text, expected)
-            @Expect(parseUnifiedJson(text, maxBytes: 4096).field("path").getOrThrow().text, "src/雪.cj")
-            text
+            parseUnifiedJson(text, maxBytes: 4096).field("path").getOrThrow().text
         })
-        @Expect(observed, expected)
+        @Expect(parsedPath, "src/雪.cj")
         @Expect(coverage[1] >= 1024 + expected.size * 16)
         owner.producerReturned204(); root.close()
         @Expect(bank.usage()[0], 0); @Expect(bank.usage()[1], 0)

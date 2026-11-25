@@ -5474,3 +5474,6 @@ Decoding the exact reserved ToolResult shows `program_sdk`, `program_artifact` a
 ### E2440 — Failing child decoded: grep read view refused for output capacity
 
 Following `derived_operation_admissions.parent_operation_id` from the Program operation: its single derived child is `plugin.axyndra:workspace.grep`, Receipt `failed`, detail naming `read_view.output_capacity` / "shared logical JSON output capacity is exhausted". The capacity attribution is now decoded, not inferred; the chain runs from live bank owners to the Program `partial` result to the blank inspection projection.
+### E2441 — RPC host-tool bridge migrated off the plan export
+
+`RpcHostToolBridge` now reads the call ID through `withCallInput` and the arguments through the new funded `withCanonicalArgumentsText`, which measures JSON length, pays the peak, then exposes the text only inside its callback. Two encoding defects (storage framing instead of JSON; measure-mode capacity check) were fixed before landing. `tool_runtime` 113/113; migration documented in `docs/compatibility.md`.

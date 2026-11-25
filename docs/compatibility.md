@@ -196,10 +196,10 @@ When an executor needs the frozen arguments as JSON for a non-Host consumer
 such as the RPC host-tool bridge, do not read `prepared.operationPlan`. Fund a
 reservation from the same shared bank and use
 `prepared.withCanonicalArgumentsText(payment, { text => … })`: it measures the
-JSON length, pays that peak, then materialises an independent copy whose text
-is readable only inside the callback. The callback's result must not retain the
-text; anything the recipient needs later has to be copied into its own paid
-owner. The same call replaces `prepared.call` for the call ID: read it with
+JSON length, pays that peak, then materialises an independent copy for use inside the callback. The
+callback must not return or capture that text; anything the recipient needs
+later has to be copied into its own paid owner. This is a documented contract,
+not an enforced one: the generic result type still accepts the `String`. The same call replaces `prepared.call` for the call ID: read it with
 `prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })`.
 `agent_rpc`'s `RpcHostToolBridge` already uses this shape and closes its payment
 after the frame is emitted.

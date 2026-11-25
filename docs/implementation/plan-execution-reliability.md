@@ -12861,3 +12861,16 @@ The complete chain, each step backed by a stored row rather than a source readin
 5. Because the Receipt is not `completed`, the attachment-evidence query returns nothing, so inspection projects empty SDK and artifact fields (E2439).
 
 Nothing in this chain is a projection bug, a missing refund, or a fixture-retention mistake. It is the documented 16 MiB per-reservation floor meeting a bank already holding legitimate live owners. Closing it needs a capacity or sequencing decision that this session has not been authorised to take, and no production accounting, quota, floor, or test assertion was changed.
+### E2441: the RPC host-tool bridge no longer exports the prepared plan
+
+`agent_rpc`'s `RpcHostToolBridge.execute` was the last non-Host consumer that read both `prepared.call` and `prepared.operationPlan`. It now takes the call ID from a scoped reader and the arguments from a caller-funded copy:
+
+- `prepared.withCallInput({ input => input.copyText(ToolResolverText.CallId) })` supplies the display identity as an independent string;
+- `prepared.withCanonicalArgumentsText(payment, body)` measures the JSON wire length with a non-allocating sink, pays `1024 + length * 16` through `ensureRetainedPeak`, then materialises an independent copy that the callback must consume before it returns. The generic return type `T` is not a guarantee: a caller can still write `{ text => text }`, so the scoped lifetime is a documented contract, not an enforced one;
+- the payment closes in a `finally` after the frame is emitted, and a malformed document returns `rpc.host_tool_arguments_invalid`.
+
+Two defects were caught and fixed during the work rather than shipped. The first version encoded with `encodeStoredValue204`, whose output is the repository's `o1:…/sN:…` storage framing, not JSON; `parseUnifiedJson` in the bridge would have rejected every real call. The second measured with a sink that threw on any non-empty chunk because its capacity check ran even in measure mode; a zero-capacity pass now records length only. A third pass moved the text out of a returned `String` into the callback so no caller can hold it past the payment.
+
+The new regression `canonicalArgumentsCopyIsJsonAndPaysBeforeItAllocates` asserts the copy parses as JSON, covers the measured peak, and is read only while the payment is live. `tool_runtime` runs 113/113, up from 112 with that case added. `docs/compatibility.md` documents the replacement shape.
+
+Remaining `prepared.call` / `operationPlan` readers in Host and Core are authorisation and lifecycle paths, which the migration is not meant to remove; no legacy raw-execution fallback was added or removed. Continuous Core and the RPC product contract still fail for reasons recorded elsewhere (E2440 capacity saturation; stale RPC command inventory and a missing eval fixture).
