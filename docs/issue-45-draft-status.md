@@ -5477,3 +5477,6 @@ Following `derived_operation_admissions.parent_operation_id` from the Program op
 ### E2441 — RPC host-tool bridge migrated off the plan export
 
 `RpcHostToolBridge` now reads the call ID through `withCallInput` and the arguments through the new funded `withCanonicalArgumentsText`, which measures JSON length, pays the peak, then exposes the text only inside its callback. Two encoding defects (storage framing instead of JSON; measure-mode capacity check) were fixed before landing. `tool_runtime` 113/113; migration documented in `docs/compatibility.md`.
+### E2442 — Product suite needs per-case isolation
+
+Whole-inventory `agent_product` run: 261 passed / 844 error / 5 failed out of 1,110. Isolated re-runs show the 619 `logical payload aggregate capacity is exhausted` errors are an artefact of one shared bank across 1,110 cases (both sampled cases pass alone). One sampled case still crashes with signal 11 in isolation, matching the deferred GC family. Not Product acceptance; filter syntax is `Suite.case`.

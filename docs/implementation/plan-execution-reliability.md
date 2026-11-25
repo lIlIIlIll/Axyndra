@@ -12874,3 +12874,20 @@ Two defects were caught and fixed during the work rather than shipped. The first
 The new regression `canonicalArgumentsCopyIsJsonAndPaysBeforeItAllocates` asserts the copy parses as JSON, covers the measured peak, and is read only while the payment is live. `tool_runtime` runs 113/113, up from 112 with that case added. `docs/compatibility.md` documents the replacement shape.
 
 Remaining `prepared.call` / `operationPlan` readers in Host and Core are authorisation and lifecycle paths, which the migration is not meant to remove; no legacy raw-execution fallback was added or removed. Continuous Core and the RPC product contract still fail for reasons recorded elsewhere (E2440 capacity saturation; stale RPC command inventory and a missing eval fixture).
+### E2442: Product suite isolation determines which failures are real
+
+`agent_product` builds an inventory of 1,110 cases (225 test files). Running the whole inventory in one process, with every plugin package, the native fixture and `TMPDIR` supplied, gives 261 passed, 844 errors, 5 failures. That single number is not the gate, because the process reuses one shared payload bank.
+
+Isolating representative cases by their `Suite.case` name changes the picture:
+
+| Case | Whole-run | Isolated |
+|---|---|---|
+| `ProductPluginChannelServiceTests.previousInvocationObserverCannotWriteIntoNextRealRun` | ERROR: `logical payload aggregate capacity is exhausted` | PASSED |
+| `ProductPluginChannelServiceTests.startupAndLaterWritesShareOneCumulativeInputLimit` | ERROR: same | PASSED |
+| `NativePlanReviewBindingPressureTests.currentBindingIsMetadataOnlyAndDoesNotLaunchUnusedGuidanceUnderOriginalAggregatePressure` | ERROR: same | ERROR: `Crashed with exit code 11` |
+
+So the 619 capacity errors in the whole run are an isolation artefact of running 1,110 cases against one bank, not product behaviour; the project's own gate runs each case in a fresh process for exactly this reason. The third case is different: it still crashes with signal 11 in isolation, which places it with the deferred GC-family crashes rather than with the capacity refusals.
+
+Filter syntax matters and cost two false starts: `--filter` takes the `Suite.case` names from the `--dry-run` inventory, not `Class.case`, and a wrong filter silently reports 1,110 skipped with zero passed.
+
+This is not Product acceptance. The remaining 819 whole-run errors were not individually re-run, so no per-case verdict exists for them beyond the environment causes already identified (missing `AXYNDRA_MODEL_PROVIDER_PEER`, missing `profiles` directory, unavailable local HTTP origin, missing trusted probe helper, and the exit-11 crashes). Evidence: `evidence/product-gate-{run3,inventory}.log` and `evidence/product-gate/iso-*.log`.
