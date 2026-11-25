@@ -1,0 +1,20 @@
+docs/compatibility.md
+  h_e6f490028321ea 199-202
+docs/implementation/plan-execution-reliability.md
+  h_e6f490028321ea 12864-12876
+docs/issue-45-draft-status.md
+  h_e6f490028321ea 5477-5479
+tool_runtime/src/prepared_metadata_copy204_test.cj
+  h_e6f490028321ea 336-337,339,341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "886b5bcb49bdc1a7bfd5439b235449915bb0e463",
+  "prompts": {},
+  "humans": {
+    "h_e6f490028321ea": {
+      "author": "lIlIIlIll <180488944+lIlIIlIll@users.noreply.github.com>"
+    }
+  }
+}
